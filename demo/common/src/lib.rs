@@ -22,7 +22,7 @@ use crate::device::{GroundProgram, GroundVertexArray};
 use crate::ui::{DemoUIModel, DemoUIPresenter, ScreenshotInfo, ScreenshotType, UIAction};
 use crate::window::{Event, Keycode, SVGPath, Window, WindowSize};
 use clap::{App, Arg};
-use pathfinder_color::ColorU;
+use pathfinder_color::{ColorF, ColorU};
 use pathfinder_export::{Export, FileFormat};
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::transform2d::Transform2F;
@@ -32,9 +32,9 @@ use pathfinder_gpu::resources::ResourceLoader;
 use pathfinder_gpu::Device;
 use pathfinder_renderer::concurrent::scene_proxy::{RenderCommandStream, SceneProxy};
 use pathfinder_renderer::gpu::options::{DestFramebuffer, RendererOptions};
-use pathfinder_renderer::gpu::renderer::{RenderStats, RenderTime, Renderer};
+use pathfinder_renderer::gpu::renderer::{PostprocessOptions, RenderStats, RenderTime, Renderer};
 use pathfinder_renderer::options::{BuildOptions, RenderTransform};
-use pathfinder_renderer::post::STEM_DARKENING_FACTORS;
+use pathfinder_renderer::post::{DEFRINGING_KERNEL_CORE_GRAPHICS, STEM_DARKENING_FACTORS};
 use pathfinder_renderer::scene::Scene;
 use pathfinder_svg::BuiltSVG;
 use pathfinder_ui::{MousePosition, UIEvent};
@@ -151,7 +151,10 @@ impl<W> DemoApp<W> where W: Window {
         // Set up the executor.
         let executor = DemoExecutor::new(options.jobs);
 
-        let mut built_svg = load_scene(resources, &options.input_path);
+        let mut ui_model = DemoUIModel::new(&options);
+
+        let effects = build_effects();
+        let mut built_svg = load_scene(resources, &options.input_path, effects);
         let message = get_svg_building_message(&built_svg);
 
         let viewport = window.viewport(options.mode.view(0));
@@ -176,8 +179,6 @@ impl<W> DemoApp<W> where W: Window {
                                                          &ground_program,
                                                          &renderer.quad_vertex_positions_buffer(),
                                                          &renderer.quad_vertex_indices_buffer());
-
-        let mut ui_model = DemoUIModel::new(&options);
 
         let mut message_epoch = 0;
         emit_message::<W>(
@@ -445,7 +446,11 @@ impl<W> DemoApp<W> where W: Window {
                 }
 
                 Event::OpenSVG(ref svg_path) => {
-                    let mut built_svg = load_scene(self.window.resource_loader(), svg_path);
+                    let effects = build_effects();
+                    let mut built_svg = load_scene(self.window.resource_loader(),
+                                                   svg_path,
+                                                   effects);
+
                     self.ui_model.message = get_svg_building_message(&built_svg);
 
                     let viewport_size = self.window.viewport(self.ui_model.mode.view(0)).size();
@@ -756,7 +761,10 @@ pub enum UIVisibility {
     All,
 }
 
-fn load_scene(resource_loader: &dyn ResourceLoader, input_path: &SVGPath) -> BuiltSVG {
+fn load_scene(resource_loader: &dyn ResourceLoader,
+              input_path: &SVGPath,
+              effects: Option<PostprocessOptions>)
+              -> BuiltSVG {
     let mut data;
     match *input_path {
         SVGPath::Default => data = resource_loader.slurp(DEFAULT_SVG_VIRTUAL_PATH).unwrap(),
@@ -767,7 +775,19 @@ fn load_scene(resource_loader: &dyn ResourceLoader, input_path: &SVGPath) -> Bui
         }
     };
 
-    BuiltSVG::from_tree(Tree::from_data(&data, &UsvgOptions::default()).unwrap())
+    let mut scene = Scene::new();
+    if let Some(effects) = effects {
+        scene.push_layer(effects);
+    }
+
+    let tree = Tree::from_data(&data, &UsvgOptions::default()).expect("Failed to parse the SVG!");
+    let mut built_svg = BuiltSVG::from_tree_and_scene(tree, scene);
+
+    if effects.is_some() {
+        built_svg.scene.pop_layer();
+    }
+
+    built_svg
 }
 
 fn center_of_window(window_size: &WindowSize) -> Vector2F {
@@ -854,4 +874,41 @@ impl SceneMetadata {
         scene.set_view_box(RectF::new(Vector2F::default(), viewport_size.to_f32()));
         SceneMetadata { view_box, monochrome_color }
     }
+}
+
+fn build_effects() -> Option<PostprocessOptions> {
+    /*
+            self.renderer.set_postprocess_options(Some(PostprocessOptions {
+                fg_color: fg_color.to_f32(),
+                bg_color: self.background_color().to_f32(),
+                gamma_correction: self.ui_model.gamma_correction_effect_enabled,
+                defringing_kernel: if self.ui_model.subpixel_aa_effect_enabled {
+                    // TODO(pcwalton): Select FreeType defringing kernel as necessary.
+                    Some(DEFRINGING_KERNEL_CORE_GRAPHICS)
+                } else {
+                    None
+                },
+            }
+            */
+
+            /*
+            self.renderer.set_postprocess_options(Some(PostprocessOptions {
+                fg_color: fg_color.to_f32(),
+                bg_color: self.background_color().to_f32(),
+                gamma_correction: self.ui_model.gamma_correction_effect_enabled,
+                defringing_kernel: if self.ui_model.subpixel_aa_effect_enabled {
+                    // TODO(pcwalton): Select FreeType defringing kernel as necessary.
+                    Some(DEFRINGING_KERNEL_CORE_GRAPHICS)
+                } else {
+                    None
+                },
+            }
+            */
+
+    Some(PostprocessOptions {
+        fg_color: ColorF::black(),
+        bg_color: ColorF::white(),
+        gamma_correction: true,
+        defringing_kernel: Some(DEFRINGING_KERNEL_CORE_GRAPHICS),
+    })
 }

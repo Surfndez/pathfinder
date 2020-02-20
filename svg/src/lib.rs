@@ -65,11 +65,17 @@ bitflags! {
 
 impl BuiltSVG {
     // TODO(pcwalton): Allow a global transform to be set.
+    #[inline]
     pub fn from_tree(tree: Tree) -> BuiltSVG {
+        BuiltSVG::from_tree_and_scene(tree, Scene::new())
+    }
+
+    // TODO(pcwalton): Allow a global transform to be set.
+    pub fn from_tree_and_scene(tree: Tree, scene: Scene) -> BuiltSVG {
         // TODO(pcwalton): Maybe have a `SVGBuilder` type to hold the clip path IDs and other
         // transient data separate from `BuiltSVG`?
         let mut built_svg = BuiltSVG {
-            scene: Scene::new(),
+            scene,
             result_flags: BuildResultFlags::empty(),
             clip_paths: HashMap::new(),
         };

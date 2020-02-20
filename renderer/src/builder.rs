@@ -11,12 +11,12 @@
 //! Packs data onto the GPU.
 
 use crate::concurrent::executor::Executor;
-use crate::gpu::renderer::MASK_TILES_ACROSS;
+use crate::gpu::renderer::{MASK_TILES_ACROSS, PostprocessOptions};
 use crate::gpu_data::{AlphaTile, AlphaTileVertex, FillBatchPrimitive, MaskTile, MaskTileVertex};
 use crate::gpu_data::{RenderCommand, TileObjectPrimitive};
 use crate::options::{PreparedBuildOptions, RenderCommandListener};
 use crate::paint::{PaintInfo, PaintMetadata};
-use crate::scene::Scene;
+use crate::scene::{DisplayItem, Scene};
 use crate::tile_map::DenseTileMap;
 use crate::tiles::{self, TILE_HEIGHT, TILE_WIDTH, Tiler, TilingPathInfo};
 use crate::z_buffer::ZBuffer;
@@ -167,26 +167,58 @@ impl<'a> SceneBuilder<'a> {
         tiler.object_builder.built_path
     }
 
-    fn cull_tiles(&self, built_clip_paths: Vec<BuiltPath>, built_draw_paths: Vec<BuiltPath>)
+    fn cull_tiles(&self,
+                  built_clip_paths: Vec<BuiltPath>,
+                  built_draw_paths: Vec<BuiltPath>)
                   -> CulledTiles {
         let mut culled_tiles = CulledTiles {
             mask_winding_tiles: vec![],
             mask_evenodd_tiles: vec![],
-            alpha_tiles: vec![],
+            display_list: vec![],
         };
 
         for built_clip_path in built_clip_paths {
             culled_tiles.push_mask_tiles(&built_clip_path);
         }
 
-        for built_draw_path in built_draw_paths {
-            culled_tiles.push_mask_tiles(&built_draw_path);
+        for display_item in &self.scene.display_list {
+            // Just pass through `PushLayer` and `PopLayer` commands.
+            let (start_draw_path_index, end_draw_path_index) = match *display_item {
+                DisplayItem::PushLayer { effects } => {
+                    culled_tiles.display_list.push(CulledDisplayItem::PushLayer { effects });
+                    continue;
+                }
+                DisplayItem::PopLayer => {
+                    culled_tiles.display_list.push(CulledDisplayItem::PopLayer);
+                    continue;
+                }
+                DisplayItem::DrawPaths { start_index, end_index } => (start_index, end_index),
+            };
 
-            for alpha_tile in built_draw_path.alpha_tiles {
-                let alpha_tile_coords = alpha_tile.upper_left.tile_position();
-                if self.z_buffer.test(alpha_tile_coords,
-                                      alpha_tile.upper_left.object_index as u32) {
-                    culled_tiles.alpha_tiles.push(alpha_tile);
+            for draw_path_index in start_draw_path_index..end_draw_path_index {
+                let built_draw_path = &built_draw_paths[draw_path_index as usize];
+                culled_tiles.push_mask_tiles(built_draw_path);
+
+                // Create a `DrawAlphaTiles` display item if necessary.
+                match culled_tiles.display_list.last() {
+                    Some(&CulledDisplayItem::DrawAlphaTiles(_)) => {}
+                    _ => culled_tiles.display_list.push(CulledDisplayItem::DrawAlphaTiles(vec![])),
+                }
+
+                // Fetch the destination alpha tiles buffer.
+                let mut culled_alpha_tiles = match *culled_tiles.display_list.last_mut().unwrap() {
+                    CulledDisplayItem::DrawAlphaTiles(ref mut culled_alpha_tiles) => {
+                        culled_alpha_tiles
+                    }
+                    _ => unreachable!(),
+                };
+
+                for alpha_tile in &built_draw_path.alpha_tiles {
+                    let alpha_tile_coords = alpha_tile.upper_left.tile_position();
+                    if self.z_buffer.test(alpha_tile_coords,
+                                        alpha_tile.upper_left.object_index as u32) {
+                        culled_alpha_tiles.push(*alpha_tile);
+                    }
                 }
             }
         }
@@ -216,8 +248,17 @@ impl<'a> SceneBuilder<'a> {
         if !solid_tiles.is_empty() {
             self.listener.send(RenderCommand::DrawSolidTiles(solid_tiles));
         }
-        if !culled_tiles.alpha_tiles.is_empty() {
-            self.listener.send(RenderCommand::DrawAlphaTiles(culled_tiles.alpha_tiles));
+
+        for display_item in culled_tiles.display_list {
+            match display_item {
+                CulledDisplayItem::DrawAlphaTiles(tiles) => {
+                    self.listener.send(RenderCommand::DrawAlphaTiles(tiles))
+                }
+                CulledDisplayItem::PushLayer { effects } => {
+                    self.listener.send(RenderCommand::PushLayer { effects })
+                }
+                CulledDisplayItem::PopLayer => self.listener.send(RenderCommand::PopLayer),
+            }
         }
     }
 
@@ -239,7 +280,13 @@ impl<'a> SceneBuilder<'a> {
 struct CulledTiles {
     mask_winding_tiles: Vec<MaskTile>,
     mask_evenodd_tiles: Vec<MaskTile>,
-    alpha_tiles: Vec<AlphaTile>,
+    display_list: Vec<CulledDisplayItem>,
+}
+
+enum CulledDisplayItem {
+    DrawAlphaTiles(Vec<AlphaTile>),
+    PushLayer { effects: PostprocessOptions },
+    PopLayer,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
