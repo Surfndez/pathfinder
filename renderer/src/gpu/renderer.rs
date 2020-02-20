@@ -831,8 +831,9 @@ where
         });
 
         self.preserve_draw_framebuffer();
-    }
 
+        self.framebuffer_cache.release_framebuffer(layer_framebuffer_info.framebuffer);
+    }
 
     fn stencil_state(&self) -> Option<StencilState> {
         if !self.use_depth {
@@ -1037,7 +1038,7 @@ impl<D> FramebufferCache<D> where D: Device {
         device.create_framebuffer(texture)
     }
 
-    fn release_framebuffer(&mut self, device: &mut D, framebuffer: D::Framebuffer) {
+    fn release_framebuffer(&mut self, framebuffer: D::Framebuffer) {
         if self.framebuffers.len() == FRAMEBUFFER_CACHE_SIZE {
             self.framebuffers.pop();
         }
