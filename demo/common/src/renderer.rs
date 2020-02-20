@@ -86,7 +86,7 @@ impl<W> DemoApp<W> where W: Window {
 
         // Clear to the appropriate color.
         let clear_color = match mode {
-            Mode::TwoD => Some(self.background_color().to_f32()),
+            Mode::TwoD => Some(self.ui_model.background_color().to_f32()),
             Mode::ThreeD => None,
             Mode::VR => Some(ColorF::transparent_black()),
         };
@@ -219,7 +219,7 @@ impl<W> DemoApp<W> where W: Window {
 
         // Don't clear the first scene after drawing it.
         let clear_color = if render_scene_index == 0 {
-            Some(self.background_color().to_f32())
+            Some(self.ui_model.background_color().to_f32())
         } else {
             None
         };

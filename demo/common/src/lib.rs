@@ -63,25 +63,6 @@ const CAMERA_ZOOM_AMOUNT_2D: f32 = 0.1;
 // Half of the eye separation distance.
 const DEFAULT_EYE_OFFSET: f32 = 0.025;
 
-const LIGHT_BG_COLOR: ColorU = ColorU {
-    r: 248,
-    g: 248,
-    b: 248,
-    a: 255,
-};
-const DARK_BG_COLOR: ColorU = ColorU {
-    r: 32,
-    g: 32,
-    b: 32,
-    a: 255,
-};
-const TRANSPARENT_BG_COLOR: ColorU = ColorU {
-    r: 0,
-    g: 0,
-    b: 0,
-    a: 0,
-};
-
 const APPROX_FONT_SIZE: f32 = 16.0;
 
 const MESSAGE_TIMEOUT_SECS: u64 = 5;
@@ -152,8 +133,10 @@ impl<W> DemoApp<W> where W: Window {
         let executor = DemoExecutor::new(options.jobs);
 
         let mut ui_model = DemoUIModel::new(&options);
+        let render_options = RendererOptions { background_color: None };
 
-        let effects = build_effects();
+        let effects = build_effects(&ui_model);
+
         let mut built_svg = load_scene(resources, &options.input_path, effects);
         let message = get_svg_building_message(&built_svg);
 
@@ -162,12 +145,9 @@ impl<W> DemoApp<W> where W: Window {
             viewport,
             window_size: window_size.device_size(),
         };
-        // FIXME(pcwalton)
-        let render_options = RendererOptions {
-            background_color: None,
-        };
 
         let renderer = Renderer::new(device, resources, dest_framebuffer, render_options);
+
         let scene_metadata = SceneMetadata::new_clipping_view_box(&mut built_svg.scene,
                                                                   viewport.size());
         let camera = Camera::new(options.mode, scene_metadata.view_box, viewport.size());
@@ -446,7 +426,7 @@ impl<W> DemoApp<W> where W: Window {
                 }
 
                 Event::OpenSVG(ref svg_path) => {
-                    let effects = build_effects();
+                    let effects = build_effects(&self.ui_model);
                     let mut built_svg = load_scene(self.window.resource_loader(),
                                                    svg_path,
                                                    effects);
@@ -639,14 +619,6 @@ impl<W> DemoApp<W> where W: Window {
                                           .translate(center);
                 }
             }
-        }
-    }
-
-    fn background_color(&self) -> ColorU {
-        match self.ui_model.background_color {
-            BackgroundColor::Light => LIGHT_BG_COLOR,
-            BackgroundColor::Dark => DARK_BG_COLOR,
-            BackgroundColor::Transparent => TRANSPARENT_BG_COLOR,
         }
     }
 }
@@ -876,39 +848,21 @@ impl SceneMetadata {
     }
 }
 
-fn build_effects() -> Option<PostprocessOptions> {
-    /*
-            self.renderer.set_postprocess_options(Some(PostprocessOptions {
-                fg_color: fg_color.to_f32(),
-                bg_color: self.background_color().to_f32(),
-                gamma_correction: self.ui_model.gamma_correction_effect_enabled,
-                defringing_kernel: if self.ui_model.subpixel_aa_effect_enabled {
-                    // TODO(pcwalton): Select FreeType defringing kernel as necessary.
-                    Some(DEFRINGING_KERNEL_CORE_GRAPHICS)
-                } else {
-                    None
-                },
-            }
-            */
-
-            /*
-            self.renderer.set_postprocess_options(Some(PostprocessOptions {
-                fg_color: fg_color.to_f32(),
-                bg_color: self.background_color().to_f32(),
-                gamma_correction: self.ui_model.gamma_correction_effect_enabled,
-                defringing_kernel: if self.ui_model.subpixel_aa_effect_enabled {
-                    // TODO(pcwalton): Select FreeType defringing kernel as necessary.
-                    Some(DEFRINGING_KERNEL_CORE_GRAPHICS)
-                } else {
-                    None
-                },
-            }
-            */
+fn build_effects(ui_model: &DemoUIModel) -> Option<PostprocessOptions> {
+    if !ui_model.gamma_correction_effect_enabled && !ui_model.subpixel_aa_effect_enabled {
+        return None;
+    }
 
     Some(PostprocessOptions {
+        // TODO(pcwalton): Allow the foreground color to be selected.
         fg_color: ColorF::black(),
-        bg_color: ColorF::white(),
-        gamma_correction: true,
-        defringing_kernel: Some(DEFRINGING_KERNEL_CORE_GRAPHICS),
+        bg_color: ui_model.background_color().to_f32(),
+        gamma_correction: ui_model.gamma_correction_effect_enabled,
+        defringing_kernel: if ui_model.subpixel_aa_effect_enabled {
+            // TODO(pcwalton): Select FreeType defringing kernel as necessary.
+            Some(DEFRINGING_KERNEL_CORE_GRAPHICS)
+        } else {
+            None
+        },
     })
 }

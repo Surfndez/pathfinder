@@ -11,8 +11,9 @@
 use crate::camera::Mode;
 use crate::window::Window;
 use crate::{BackgroundColor, Options};
-use pathfinder_geometry::vector::Vector2I;
+use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectI;
+use pathfinder_geometry::vector::Vector2I;
 use pathfinder_gpu::resources::ResourceLoader;
 use pathfinder_gpu::Device;
 use pathfinder_renderer::gpu::debug::DebugUIPresenter;
@@ -38,6 +39,10 @@ const SCREENSHOT_PANEL_HEIGHT: i32 = BUTTON_HEIGHT * 2;
 
 const ROTATE_PANEL_WIDTH: i32 = SLIDER_WIDTH + PADDING * 2;
 const ROTATE_PANEL_HEIGHT: i32 = PADDING * 2 + SLIDER_HEIGHT;
+
+const LIGHT_BG_COLOR:       ColorU = ColorU { r: 248, g: 248, b: 248, a: 255, };
+const DARK_BG_COLOR:        ColorU = ColorU { r: 32,  g: 32,  b: 32,  a: 255, };
+const TRANSPARENT_BG_COLOR: ColorU = ColorU { r: 0,   g: 0,   b: 0,   a: 0,   };
 
 static EFFECTS_PNG_NAME: &'static str = "demo-effects";
 static OPEN_PNG_NAME: &'static str = "demo-open";
@@ -73,6 +78,14 @@ impl DemoUIModel {
 
     fn rotation(&self) -> f32 {
         (self.rotation as f32 / SLIDER_WIDTH as f32 * 2.0 - 1.0) * PI
+    }
+
+    pub fn background_color(&self) -> ColorU {
+        match self.background_color {
+            BackgroundColor::Light => LIGHT_BG_COLOR,
+            BackgroundColor::Dark => DARK_BG_COLOR,
+            BackgroundColor::Transparent => TRANSPARENT_BG_COLOR,
+        }
     }
 }
 
