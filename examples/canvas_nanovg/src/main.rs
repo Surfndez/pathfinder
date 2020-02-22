@@ -9,11 +9,14 @@
 // except according to those terms.
 
 use arrayvec::ArrayVec;
-use pathfinder_canvas::{CanvasFontContext, CanvasRenderingContext2D, FillStyle, LineJoin, Path2D};
+use pathfinder_canvas::{CanvasFontContext, CanvasRenderingContext2D, CompositeOperation};
+use pathfinder_canvas::{FillStyle, LineJoin, Path2D};
 use pathfinder_color::{ColorF, ColorU};
+use pathfinder_content::effects::BlendMode;
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::gradient::{ColorStop, Gradient};
-use pathfinder_content::outline::ArcDirection;
+use pathfinder_content::outline::{ArcDirection, Contour, Outline};
+use pathfinder_content::pattern::{Pattern, PatternSource, Repeat};
 use pathfinder_content::stroke::LineCap;
 use pathfinder_geometry::angle;
 use pathfinder_geometry::line_segment::LineSegment2F;
@@ -28,6 +31,8 @@ use pathfinder_renderer::concurrent::scene_proxy::SceneProxy;
 use pathfinder_renderer::gpu::options::{DestFramebuffer, RendererOptions};
 use pathfinder_renderer::gpu::renderer::Renderer;
 use pathfinder_renderer::options::BuildOptions;
+use pathfinder_renderer::paint::Paint;
+use pathfinder_renderer::scene::{DrawPath, RenderTarget, Scene};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::video::GLProfile;
@@ -538,14 +543,36 @@ fn main() {
     // Enter the main loop.
     loop {
         // Make a canvas.
-        let mut canvas = CanvasRenderingContext2D::new(font_context.clone(), window_size.to_f32());
+        let mut scene = Scene::new();
+        scene.set_view_box(RectF::new(Vector2F::default(), window_size.to_f32()));
+        let render_target =
+            scene.push_render_target(RenderTarget::new(window_size, String::new()));
+        let mut canvas = CanvasRenderingContext2D::from_scene(font_context.clone(), scene);
 
         // Render the demo.
         let time = (Instant::now() - start_time).as_secs_f32();
         render_demo(&mut canvas, mouse_position, window_size.to_f32(), time);
 
+        canvas.set_global_composite_operation(CompositeOperation::Hue);
+        canvas.set_fill_style(FillStyle::Color(ColorU::new(255, 0, 0, 255)));
+        canvas.fill_rect(RectF::new(Vector2F::splat(100.0), Vector2F::splat(200.0)));
+
+        let mut scene = canvas.into_scene();
+        scene.pop_render_target();
+        let render_target_paint_id = scene.push_paint(&Paint::Pattern(Pattern::new(
+            PatternSource::RenderTarget(render_target),
+            Repeat::empty())));
+        let outline = rect_outline(RectF::new(Vector2F::default(), window_size.to_f32()));
+        let draw_path = DrawPath::new(outline,
+                                      render_target_paint_id,
+                                      None,
+                                      FillRule::Winding,
+                                      BlendMode::SrcOver,
+                                      String::new());
+        scene.push_path(draw_path);
+
         // Render the canvas to screen.
-        let scene = SceneProxy::from_scene(canvas.into_scene(), RayonExecutor);
+        let scene = SceneProxy::from_scene(scene, RayonExecutor);
         scene.build_and_render(&mut renderer, BuildOptions::default());
         window.gl_swap_window();
 
@@ -559,4 +586,16 @@ fn main() {
             }
         }
     }
+}
+
+fn rect_outline(rect: RectF) -> Outline {
+    let mut outline = Outline::new();
+    let mut contour = Contour::new();
+    contour.push_endpoint(rect.origin());
+    contour.push_endpoint(rect.upper_right());
+    contour.push_endpoint(rect.lower_right());
+    contour.push_endpoint(rect.lower_left());
+    contour.close();
+    outline.push_contour(contour);
+    outline
 }

@@ -15,7 +15,6 @@
 precision highp float;
 
 uniform sampler2D uPaintTexture;
-uniform vec2 uPaintTextureSize;
 
 in vec2 vColorTexCoord;
 

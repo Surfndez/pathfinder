@@ -10,12 +10,12 @@
 
 use crate::gpu::debug::DebugUIPresenter;
 use crate::gpu::options::{DestFramebuffer, RendererOptions};
-use crate::gpu::shaders::{AlphaTileProgram, AlphaTileVertexArray, FillProgram, FillVertexArray};
-use crate::gpu::shaders::{FilterBasicProgram, FilterBasicVertexArray, FilterTextProgram};
-use crate::gpu::shaders::{FilterTextVertexArray, MAX_FILLS_PER_BATCH, MaskTileProgram};
-use crate::gpu::shaders::{MaskTileVertexArray, ReprojectionProgram, ReprojectionVertexArray};
-use crate::gpu::shaders::{SolidTileProgram, SolidTileVertexArray};
-use crate::gpu::shaders::{StencilProgram, StencilVertexArray};
+use crate::gpu::shaders::{AlphaTileCopyProgram, AlphaTileHSLProgram, AlphaTileProgram};
+use crate::gpu::shaders::{AlphaTileVertexArray, FillProgram, FillVertexArray, FilterBasicProgram};
+use crate::gpu::shaders::{FilterBasicVertexArray, FilterTextProgram, FilterTextVertexArray};
+use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, MaskTileProgram, MaskTileVertexArray};
+use crate::gpu::shaders::{ReprojectionProgram, ReprojectionVertexArray, SolidTileProgram};
+use crate::gpu::shaders::{SolidTileVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu_data::{AlphaTile, FillBatchPrimitive, MaskTile, PaintData, PaintPageContents};
 use crate::gpu_data::{PaintPageId, RenderCommand, SolidTileVertex};
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
@@ -66,11 +66,16 @@ where
     mask_evenodd_tile_program: MaskTileProgram<D>,
     solid_tile_program: SolidTileProgram<D>,
     alpha_tile_program: AlphaTileProgram<D>,
+    alpha_tile_copy_program: AlphaTileCopyProgram<D>,
+    alpha_tile_hsl_program: AlphaTileHSLProgram<D>,
     mask_winding_tile_vertex_array: MaskTileVertexArray<D>,
     mask_evenodd_tile_vertex_array: MaskTileVertexArray<D>,
     solid_tile_vertex_array: SolidTileVertexArray<D>,
     alpha_tile_vertex_array: AlphaTileVertexArray<D>,
+    alpha_tile_copy_vertex_array: AlphaTileVertexArray<D>,
+    alpha_tile_hsl_vertex_array: AlphaTileVertexArray<D>,
     area_lut_texture: D::Texture,
+    alpha_tile_vertex_buffer: D::Buffer,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_buffer: D::Buffer,
@@ -78,6 +83,7 @@ where
     fill_vertex_array: FillVertexArray<D>,
     fill_framebuffer: D::Framebuffer,
     mask_framebuffer: D::Framebuffer,
+    dest_blend_framebuffer: D::Framebuffer,
     paint_textures: Vec<PaintTexture<D>>,
     render_targets: Vec<RenderTargetInfo<D>>,
     render_target_stack: Vec<RenderTargetId>,
@@ -136,6 +142,8 @@ where
                                                              resources);
         let solid_tile_program = SolidTileProgram::new(&device, resources);
         let alpha_tile_program = AlphaTileProgram::new(&device, resources);
+        let alpha_tile_copy_program = AlphaTileCopyProgram::new(&device, resources);
+        let alpha_tile_hsl_program = AlphaTileHSLProgram::new(&device, resources);
         let filter_basic_program = FilterBasicProgram::new(&device, resources);
         let filter_text_program = FilterTextProgram::new(&device, resources);
         let stencil_program = StencilProgram::new(&device, resources);
@@ -144,6 +152,7 @@ where
         let area_lut_texture = device.create_texture_from_png(resources, "area-lut");
         let gamma_lut_texture = device.create_texture_from_png(resources, "gamma-lut");
 
+        let alpha_tile_vertex_buffer = device.create_buffer();
         let quad_vertex_positions_buffer = device.create_buffer();
         device.allocate_buffer(
             &quad_vertex_positions_buffer,
@@ -179,6 +188,19 @@ where
         let alpha_tile_vertex_array = AlphaTileVertexArray::new(
             &device,
             &alpha_tile_program,
+            &alpha_tile_vertex_buffer,
+            &quads_vertex_indices_buffer,
+        );
+        let alpha_tile_copy_vertex_array = AlphaTileVertexArray::new(
+            &device,
+            &alpha_tile_copy_program.alpha_tile_program,
+            &alpha_tile_vertex_buffer,
+            &quads_vertex_indices_buffer,
+        );
+        let alpha_tile_hsl_vertex_array = AlphaTileVertexArray::new(
+            &device,
+            &alpha_tile_hsl_program.alpha_tile_program,
+            &alpha_tile_vertex_buffer,
             &quads_vertex_indices_buffer,
         );
         let solid_tile_vertex_array = SolidTileVertexArray::new(
@@ -218,12 +240,15 @@ where
             device.create_texture(TextureFormat::R8, mask_framebuffer_size);
         let mask_framebuffer = device.create_framebuffer(mask_framebuffer_texture);
 
+        let window_size = dest_framebuffer.window_size(&device);
+        let dest_blend_texture = device.create_texture(TextureFormat::RGBA8, window_size);
+        let dest_blend_framebuffer = device.create_framebuffer(dest_blend_texture);
+
         let clear_paint_texture =
             device.create_texture_from_data(TextureFormat::RGBA8,
                                             Vector2I::splat(1),
                                             TextureDataRef::U8(&[0, 0, 0, 255]));
 
-        let window_size = dest_framebuffer.window_size(&device);
         let debug_ui_presenter = DebugUIPresenter::new(&device, resources, window_size);
 
         Renderer {
@@ -236,11 +261,16 @@ where
             mask_evenodd_tile_program,
             solid_tile_program,
             alpha_tile_program,
+            alpha_tile_copy_program,
+            alpha_tile_hsl_program,
             mask_winding_tile_vertex_array,
             mask_evenodd_tile_vertex_array,
             solid_tile_vertex_array,
             alpha_tile_vertex_array,
+            alpha_tile_copy_vertex_array,
+            alpha_tile_hsl_vertex_array,
             area_lut_texture,
+            alpha_tile_vertex_buffer,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             quads_vertex_indices_buffer,
@@ -248,6 +278,7 @@ where
             fill_vertex_array,
             fill_framebuffer,
             mask_framebuffer,
+            dest_blend_framebuffer,
             paint_textures: vec![],
             render_targets: vec![],
             render_target_stack: vec![],
@@ -481,12 +512,10 @@ where
     }
 
     fn upload_alpha_tiles(&mut self, alpha_tiles: &[AlphaTile]) {
-        self.device.allocate_buffer(
-            &self.alpha_tile_vertex_array.vertex_buffer,
-            BufferData::Memory(&alpha_tiles),
-            BufferTarget::Vertex,
-            BufferUploadMode::Dynamic,
-        );
+        self.device.allocate_buffer(&self.alpha_tile_vertex_buffer,
+                                    BufferData::Memory(&alpha_tiles),
+                                    BufferTarget::Vertex,
+                                    BufferUploadMode::Dynamic);
         self.ensure_index_buffer(alpha_tiles.len());
     }
 
@@ -645,18 +674,28 @@ where
                         tile_count: u32,
                         paint_page: PaintPageId,
                         blend_mode: BlendMode) {
+        let blend_mode_program = BlendModeProgram::from_blend_mode(blend_mode);
+        if blend_mode_program.requires_dest_texture() {
+            self.copy_alpha_tiles_to_dest_blend_texture(tile_count);
+        }
+
         let clear_color = self.clear_color_for_draw_operation();
+
+        let (alpha_tile_program, alpha_tile_vertex_array) = match blend_mode_program {
+            BlendModeProgram::Regular => (&self.alpha_tile_program, &self.alpha_tile_vertex_array),
+            BlendModeProgram::HSL => {
+                (&self.alpha_tile_hsl_program.alpha_tile_program,
+                 &self.alpha_tile_hsl_vertex_array)
+            }
+        };
 
         let mut textures = vec![self.device.framebuffer_texture(&self.mask_framebuffer)];
         let mut uniforms = vec![
-            (&self.alpha_tile_program.transform_uniform,
+            (&alpha_tile_program.transform_uniform,
              UniformData::Mat4(self.tile_transform().to_columns())),
-            (&self.alpha_tile_program.tile_size_uniform,
+            (&alpha_tile_program.tile_size_uniform,
              UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
-            (&self.alpha_tile_program.stencil_texture_uniform, UniformData::TextureUnit(0)),
-            (&self.alpha_tile_program.stencil_texture_size_uniform,
-             UniformData::Vec2(F32x2::new(MASK_FRAMEBUFFER_WIDTH as f32,
-                                          MASK_FRAMEBUFFER_HEIGHT as f32))),
+            (&alpha_tile_program.stencil_texture_uniform, UniformData::TextureUnit(0)),
         ];
 
         let paint_texture = match blend_mode {
@@ -670,17 +709,21 @@ where
 
         textures.push(paint_texture);
         uniforms.push((&self.alpha_tile_program.paint_texture_uniform,
-                        UniformData::TextureUnit(1)));
-        uniforms.push((&self.alpha_tile_program.paint_texture_size_uniform,
-                        UniformData::Vec2(self.device
-                                              .texture_size(paint_texture)
-                                              .0
-                                              .to_f32x2())));
+                       UniformData::TextureUnit(1)));
+
+        match blend_mode_program {
+            BlendModeProgram::Regular => {}
+            BlendModeProgram::HSL => {
+                textures.push(self.device.framebuffer_texture(&self.dest_blend_framebuffer));
+                uniforms.push((&self.alpha_tile_hsl_program.dest_uniform,
+                               UniformData::TextureUnit(2)));
+            }
+        }
 
         self.device.draw_elements(tile_count * 6, &RenderState {
             target: &self.draw_render_target(),
-            program: &self.alpha_tile_program.program,
-            vertex_array: &self.alpha_tile_vertex_array.vertex_array,
+            program: &alpha_tile_program.program,
+            vertex_array: &alpha_tile_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &textures,
             uniforms: &uniforms,
@@ -694,6 +737,45 @@ where
         });
 
         self.preserve_draw_framebuffer();
+    }
+
+    fn copy_alpha_tiles_to_dest_blend_texture(&mut self, tile_count: u32) {
+        let mut textures = vec![];
+        let mut uniforms = vec![
+            (&self.alpha_tile_copy_program.alpha_tile_program.transform_uniform,
+             UniformData::Mat4(self.tile_transform().to_columns())),
+            (&self.alpha_tile_copy_program.alpha_tile_program.tile_size_uniform,
+             UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
+        ];
+
+        let draw_framebuffer = match self.draw_render_target() {
+            RenderTarget::Framebuffer(framebuffer) => framebuffer,
+            RenderTarget::Default => {
+                // FIXME(pcwalton): This should never happen!
+                panic!("Can't copy alpha tiles from default framebuffer!")
+            }
+        };
+        let draw_texture = self.device.framebuffer_texture(&draw_framebuffer);
+
+        textures.push(draw_texture);
+        uniforms.push((&self.alpha_tile_copy_program.src_uniform, UniformData::TextureUnit(0)));
+
+        self.device.draw_elements(tile_count * 6, &RenderState {
+            target: &RenderTarget::Framebuffer(&self.dest_blend_framebuffer),
+            program: &self.alpha_tile_copy_program.alpha_tile_program.program,
+            vertex_array: &self.alpha_tile_copy_vertex_array.vertex_array,
+            primitive: Primitive::Triangles,
+            textures: &textures,
+            uniforms: &uniforms,
+            viewport: self.draw_viewport(),
+            options: RenderOptions {
+                clear_ops: ClearOps {
+                    color: Some(ColorF::transparent_black()),
+                    ..ClearOps::default()
+                },
+                ..RenderOptions::default()
+            },
+        });
     }
 
     fn draw_solid_tiles(&mut self, tile_count: u32, paint_page: PaintPageId) {
@@ -711,8 +793,6 @@ where
         textures.push(paint_texture);
         uniforms.push((&self.solid_tile_program.paint_texture_uniform,
                         UniformData::TextureUnit(0)));
-        uniforms.push((&self.solid_tile_program.paint_texture_size_uniform,
-                        UniformData::Vec2(self.device.texture_size(paint_texture).0.to_f32x2())));
 
         self.device.draw_elements(6 * tile_count, &RenderState {
             target: &self.draw_render_target(),
@@ -1178,7 +1258,11 @@ impl BlendModeExt for BlendMode {
                     ..BlendState::default()
                 }
             }
-            BlendMode::SrcOver => {
+            BlendMode::SrcOver |
+            BlendMode::Hue |
+            BlendMode::Saturation |
+            BlendMode::Color |
+            BlendMode::Luminosity => {
                 BlendState {
                     src_rgb_factor: BlendFactor::One,
                     dest_rgb_factor: BlendFactor::OneMinusSrcAlpha,
@@ -1250,6 +1334,39 @@ impl BlendModeExt for BlendMode {
                     op: BlendOp::Min,
                 }
             }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BlendModeProgram {
+    Regular,
+    HSL,
+}
+
+impl BlendModeProgram {
+    fn from_blend_mode(blend_mode: BlendMode) -> BlendModeProgram {
+        match blend_mode {
+            BlendMode::Clear |
+            BlendMode::SrcOver |
+            BlendMode::DestOver |
+            BlendMode::DestOut |
+            BlendMode::SrcAtop |
+            BlendMode::Xor |
+            BlendMode::Lighter |
+            BlendMode::Lighten |
+            BlendMode::Darken => BlendModeProgram::Regular,
+            BlendMode::Hue |
+            BlendMode::Saturation |
+            BlendMode::Color |
+            BlendMode::Luminosity => BlendModeProgram::HSL,
+        }
+    }
+
+    fn requires_dest_texture(self) -> bool {
+        match self {
+            BlendModeProgram::Regular => false,
+            BlendModeProgram::HSL => true,
         }
     }
 }
