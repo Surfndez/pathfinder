@@ -10,15 +10,13 @@
 
 use crate::gpu::debug::DebugUIPresenter;
 use crate::gpu::options::{DestFramebuffer, RendererOptions};
-use crate::gpu::shaders::{AlphaTileBlendModeProgram, AlphaTileDodgeBurnProgram};
-use crate::gpu::shaders::{AlphaTileHSLProgram, AlphaTileOverlayProgram};
-use crate::gpu::shaders::{AlphaTileProgram, AlphaTileVertexArray, BlitProgram, BlitVertexArray};
-use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
-use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, MaskTileProgram, MaskTileVertexArray};
-use crate::gpu::shaders::{ReprojectionProgram, ReprojectionVertexArray, SolidTileBlurFilterProgram, SolidTileProgram, SolidTileTextFilterProgram};
-use crate::gpu::shaders::{SolidTileVertexArray, StencilProgram, StencilVertexArray};
-use crate::gpu_data::{AlphaTile, FillBatchPrimitive, MaskTile, RenderCommand, SolidTile};
-use crate::gpu_data::{TextureLocation, TexturePageDescriptor, TexturePageId};
+use crate::gpu::shaders::{BlitProgram, BlitVertexArray};
+use crate::gpu::shaders::{FillProgram, FillVertexArray};
+use crate::gpu::shaders::{MAX_FILLS_PER_BATCH};
+use crate::gpu::shaders::{ReprojectionProgram, ReprojectionVertexArray};
+use crate::gpu::shaders::{StencilProgram, StencilVertexArray, TileProgram, TileVertexArray};
+use crate::gpu_data::{FillBatchPrimitive, RenderCommand, TextureLocation};
+use crate::gpu_data::{TexturePageDescriptor, TexturePageId, Tile, TileBatch, TileBatchTexture};
 use crate::options::BoundingQuad;
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
 use pathfinder_color::{self as color, ColorF, ColorU};
@@ -66,6 +64,54 @@ const OVERLAY_BLEND_MODE_SCREEN:     i32 = 1;
 const OVERLAY_BLEND_MODE_HARD_LIGHT: i32 = 2;
 const OVERLAY_BLEND_MODE_OVERLAY:    i32 = 3;
 
+const COMBINER_CTRL_MASK_0_MASK: i32 =            0x003;
+const COMBINER_CTRL_MASK_1_MASK: i32 =            0x004;
+const COMBINER_CTRL_COLOR_0_FILTER_MASK: i32 =    0x038;
+const COMBINER_CTRL_COLOR_1_MULTIPLY: i32 =       0x040;
+const COMBINER_CTRL_COMPOSITE_MASK: i32 =         0xf80;
+
+const COMBINER_CTRL_MASK_WINDING: i32 =           0x1;
+const COMBINER_CTRL_MASK_EVEN_ODD: i32 =          0x2;
+
+const COMBINER_CTRL_FILTER_RADIAL_GRADIENT: i32 = 0x1;
+const COMBINER_CTRL_FILTER_TEXT_NO_GAMMA: i32 =   0x2;
+const COMBINER_CTRL_FILTER_TEXT_GAMMA: i32 =      0x3;
+const COMBINER_CTRL_FILTER_BLUR_X: i32 =          0x4;
+const COMBINER_CTRL_FILTER_BLUR_Y: i32 =          0x5;
+
+const COMBINER_CTRL_COMPOSITE_SRC_OVER: i32 =     0x01;
+const COMBINER_CTRL_COMPOSITE_SRC_IN: i32 =       0x02;
+const COMBINER_CTRL_COMPOSITE_SRC_OUT: i32 =      0x03;
+const COMBINER_CTRL_COMPOSITE_SRC_ATOP: i32 =     0x04;
+const COMBINER_CTRL_COMPOSITE_DEST_OVER: i32 =    0x05;
+const COMBINER_CTRL_COMPOSITE_DEST_IN: i32 =      0x06;
+const COMBINER_CTRL_COMPOSITE_DEST_OUT: i32 =     0x07;
+const COMBINER_CTRL_COMPOSITE_DEST_ATOP: i32 =    0x08;
+const COMBINER_CTRL_COMPOSITE_LIGHTER: i32 =      0x09;
+const COMBINER_CTRL_COMPOSITE_COPY: i32 =         0x0a;
+const COMBINER_CTRL_COMPOSITE_XOR: i32 =          0x0b;
+const COMBINER_CTRL_COMPOSITE_MULTIPLY: i32 =     0x0c;
+const COMBINER_CTRL_COMPOSITE_SCREEN: i32 =       0x0d;
+const COMBINER_CTRL_COMPOSITE_OVERLAY: i32 =      0x0e;
+const COMBINER_CTRL_COMPOSITE_DARKEN: i32 =       0x0f;
+const COMBINER_CTRL_COMPOSITE_LIGHTEN: i32 =      0x10;
+const COMBINER_CTRL_COMPOSITE_COLOR_DODGE: i32 =  0x11;
+const COMBINER_CTRL_COMPOSITE_COLOR_BURN: i32 =   0x12;
+const COMBINER_CTRL_COMPOSITE_HARD_LIGHT: i32 =   0x13;
+const COMBINER_CTRL_COMPOSITE_SOFT_LIGHT: i32 =   0x14;
+const COMBINER_CTRL_COMPOSITE_DIFFERENCE: i32 =   0x15;
+const COMBINER_CTRL_COMPOSITE_EXCLUSION: i32 =    0x16;
+const COMBINER_CTRL_COMPOSITE_HUE: i32 =          0x17;
+const COMBINER_CTRL_COMPOSITE_SATURATION: i32 =   0x18;
+const COMBINER_CTRL_COMPOSITE_COLOR: i32 =        0x19;
+const COMBINER_CTRL_COMPOSITE_LUMINOSITY: i32 =   0x1a;
+
+const COMBINER_CTRL_MASK_0_SHIFT: i32 =           0;
+const COMBINER_CTRL_MASK_1_SHIFT: i32 =           2;
+const COMBINER_CTRL_COLOR_0_FILTER_SHIFT: i32 =   3;
+const COMBINER_CTRL_COLOR_1_MULTIPLY_SHIFT: i32 = 6;
+const COMBINER_CTRL_COMPOSITE_SHIFT: i32 =        7;
+
 pub struct Renderer<D>
 where
     D: Device,
@@ -78,6 +124,8 @@ where
     options: RendererOptions,
     blit_program: BlitProgram<D>,
     fill_program: FillProgram<D>,
+    tile_program: TileProgram<D>,
+    /*
     mask_winding_tile_program: MaskTileProgram<D>,
     mask_evenodd_tile_program: MaskTileProgram<D>,
     copy_tile_program: CopyTileProgram<D>,
@@ -88,7 +136,10 @@ where
     alpha_tile_difference_program: AlphaTileBlendModeProgram<D>,
     alpha_tile_exclusion_program: AlphaTileBlendModeProgram<D>,
     alpha_tile_hsl_program: AlphaTileHSLProgram<D>,
+    */
     blit_vertex_array: BlitVertexArray<D>,
+    tile_vertex_array: TileVertexArray<D>,
+    /*
     mask_winding_tile_vertex_array: MaskTileVertexArray<D>,
     mask_evenodd_tile_vertex_array: MaskTileVertexArray<D>,
     copy_tile_vertex_array: CopyTileVertexArray<D>,
@@ -99,15 +150,16 @@ where
     alpha_tile_difference_vertex_array: AlphaTileVertexArray<D>,
     alpha_tile_exclusion_vertex_array: AlphaTileVertexArray<D>,
     alpha_tile_hsl_vertex_array: AlphaTileVertexArray<D>,
+    */
     area_lut_texture: D::Texture,
-    alpha_tile_vertex_buffer: D::Buffer,
+    //alpha_tile_vertex_buffer: D::Buffer,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_length: usize,
     fill_vertex_array: FillVertexArray<D>,
     fill_framebuffer: D::Framebuffer,
-    mask_framebuffer: D::Framebuffer,
+    //mask_framebuffer: D::Framebuffer,
     dest_blend_framebuffer: D::Framebuffer,
     intermediate_dest_framebuffer: D::Framebuffer,
     texture_pages: Vec<TexturePage<D>>,
@@ -120,6 +172,7 @@ where
     clear_paint_texture: D::Texture,
 
     // Solid tiles
+    /*
     solid_tile_program: SolidTileProgram<D>,
     solid_tile_blur_filter_program: SolidTileBlurFilterProgram<D>,
     solid_tile_text_filter_program: SolidTileTextFilterProgram<D>,
@@ -127,6 +180,7 @@ where
     solid_tile_blur_filter_vertex_array: SolidTileVertexArray<D>,
     solid_tile_text_filter_vertex_array: SolidTileVertexArray<D>,
     solid_tile_vertex_buffer: D::Buffer,
+    */
     gamma_lut_texture: D::Texture,
 
     // Stencil shader
@@ -164,6 +218,8 @@ where
                -> Renderer<D> {
         let blit_program = BlitProgram::new(&device, resources);
         let fill_program = FillProgram::new(&device, resources);
+        let tile_program = TileProgram::new(&device, resources);
+        /*
         let mask_winding_tile_program = MaskTileProgram::new(FillRule::Winding,
                                                              &device,
                                                              resources);
@@ -186,14 +242,15 @@ where
         let alpha_tile_hsl_program = AlphaTileHSLProgram::new(&device, resources);
         let solid_tile_blur_filter_program = SolidTileBlurFilterProgram::new(&device, resources);
         let solid_tile_text_filter_program = SolidTileTextFilterProgram::new(&device, resources);
+        */
         let stencil_program = StencilProgram::new(&device, resources);
         let reprojection_program = ReprojectionProgram::new(&device, resources);
 
         let area_lut_texture = device.create_texture_from_png(resources, "area-lut");
         let gamma_lut_texture = device.create_texture_from_png(resources, "gamma-lut");
 
-        let alpha_tile_vertex_buffer = device.create_buffer();
-        let solid_tile_vertex_buffer = device.create_buffer();
+        //let alpha_tile_vertex_buffer = device.create_buffer();
+        //let solid_tile_vertex_buffer = device.create_buffer();
         let quad_vertex_positions_buffer = device.create_buffer();
         device.allocate_buffer(
             &quad_vertex_positions_buffer,
@@ -222,6 +279,12 @@ where
             &quad_vertex_positions_buffer,
             &quad_vertex_indices_buffer,
         );
+        let tile_vertex_array = TileVertexArray::new(
+            &device,
+            &tile_program,
+            &quads_vertex_indices_buffer,
+        );
+        /*
         let mask_winding_tile_vertex_array = MaskTileVertexArray::new(
             &device,
             &mask_winding_tile_program,
@@ -298,6 +361,7 @@ where
             &solid_tile_vertex_buffer,
             &quads_vertex_indices_buffer,
         );
+        */
         let stencil_vertex_array = StencilVertexArray::new(&device, &stencil_program);
         let reprojection_vertex_array = ReprojectionVertexArray::new(
             &device,
@@ -312,11 +376,13 @@ where
             device.create_texture(TextureFormat::R16F, fill_framebuffer_size);
         let fill_framebuffer = device.create_framebuffer(fill_framebuffer_texture);
 
+        /*
         let mask_framebuffer_size =
             Vector2I::new(MASK_FRAMEBUFFER_WIDTH, MASK_FRAMEBUFFER_HEIGHT);
         let mask_framebuffer_texture =
             device.create_texture(TextureFormat::R8, mask_framebuffer_size);
         let mask_framebuffer = device.create_framebuffer(mask_framebuffer_texture);
+        */
 
         let window_size = dest_framebuffer.window_size(&device);
         let dest_blend_texture = device.create_texture(TextureFormat::RGBA8, window_size);
@@ -338,6 +404,8 @@ where
             options,
             blit_program,
             fill_program,
+            tile_program,
+            /*
             mask_winding_tile_program,
             mask_evenodd_tile_program,
             copy_tile_program,
@@ -349,7 +417,10 @@ where
             alpha_tile_difference_program,
             alpha_tile_exclusion_program,
             alpha_tile_hsl_program,
+            */
             blit_vertex_array,
+            tile_vertex_array,
+            /*
             mask_winding_tile_vertex_array,
             mask_evenodd_tile_vertex_array,
             copy_tile_vertex_array,
@@ -360,15 +431,16 @@ where
             alpha_tile_difference_vertex_array,
             alpha_tile_exclusion_vertex_array,
             alpha_tile_hsl_vertex_array,
+            */
             area_lut_texture,
-            alpha_tile_vertex_buffer,
+            //alpha_tile_vertex_buffer,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             quads_vertex_indices_buffer,
             quads_vertex_indices_length: 0,
             fill_vertex_array,
             fill_framebuffer,
-            mask_framebuffer,
+            //mask_framebuffer,
             dest_blend_framebuffer,
             intermediate_dest_framebuffer,
             texture_pages: vec![],
@@ -376,12 +448,14 @@ where
             render_target_stack: vec![],
             clear_paint_texture,
 
+            /*
             solid_tile_vertex_array,
             solid_tile_blur_filter_program,
             solid_tile_blur_filter_vertex_array,
             solid_tile_text_filter_program,
             solid_tile_text_filter_vertex_array,
             solid_tile_vertex_buffer,
+            */
             gamma_lut_texture,
 
             stencil_program,
@@ -411,6 +485,7 @@ where
     }
 
     pub fn render_command(&mut self, command: &RenderCommand) {
+        println!("{:?}", command);
         match *command {
             RenderCommand::Start { bounding_quad, path_count, needs_readable_framebuffer } => {
                 self.start_rendering(bounding_quad, path_count, needs_readable_framebuffer);
@@ -429,15 +504,18 @@ where
                 self.draw_buffered_fills();
                 self.begin_composite_timer_query();
             }
+            /*
             RenderCommand::RenderMaskTiles { tiles: ref mask_tiles, fill_rule } => {
                 let count = mask_tiles.len();
                 self.upload_mask_tiles(mask_tiles, fill_rule);
                 self.draw_mask_tiles(count as u32, fill_rule);
             }
+            */
             RenderCommand::PushRenderTarget(render_target_id) => {
                 self.push_render_target(render_target_id)
             }
             RenderCommand::PopRenderTarget => self.pop_render_target(),
+            /*
             RenderCommand::DrawSolidTiles(ref batch) => {
                 let count = batch.tiles.len();
                 self.stats.solid_tile_count += count;
@@ -455,6 +533,18 @@ where
                                       batch.color_texture_page,
                                       batch.sampling_flags,
                                       batch.blend_mode)
+            }
+            */
+            RenderCommand::DrawTiles(ref batch) => {
+                let count = batch.tiles.len();
+                self.stats.alpha_tile_count += count;
+                self.upload_tiles(&batch.tiles);
+                self.draw_tiles(count as u32,
+                                batch.color_texture_0,
+                                batch.color_texture_1,
+                                batch.mask_0_fill_rule,
+                                batch.blend_mode,
+                                batch.effects)
             }
             RenderCommand::Finish { .. } => {}
         }
@@ -604,6 +694,7 @@ where
         render_target.location = location;
     }
 
+    /*
     fn upload_mask_tiles(&mut self, mask_tiles: &[MaskTile], fill_rule: FillRule) {
         let vertex_array = match fill_rule {
             FillRule::Winding => &self.mask_winding_tile_vertex_array,
@@ -635,6 +726,15 @@ where
                                     BufferTarget::Vertex,
                                     BufferUploadMode::Dynamic);
         self.ensure_index_buffer(alpha_tiles.len());
+    }
+    */
+
+    fn upload_tiles(&mut self, tiles: &[Tile]) {
+        self.device.allocate_buffer(&self.tile_vertex_array.vertex_buffer,
+                                    BufferData::Memory(&tiles),
+                                    BufferTarget::Vertex,
+                                    BufferUploadMode::Dynamic);
+        self.ensure_index_buffer(tiles.len());
     }
 
     fn ensure_index_buffer(&mut self, mut length: usize) {
@@ -742,6 +842,7 @@ where
         Transform4F::from_scale(scale).translate(Vector4F::new(-1.0, 1.0, 0.0, 1.0))
     }
 
+    /*
     fn draw_mask_tiles(&mut self, tile_count: u32, fill_rule: FillRule) {
         let clear_color =
             if self.framebuffer_flags
@@ -905,7 +1006,134 @@ where
 
         self.preserve_draw_framebuffer();
     }
+    */
 
+    fn draw_tiles(&mut self,
+                  tile_count: u32,
+                  color_texture_0: Option<TileBatchTexture>,
+                  color_texture_1: Option<TileBatchTexture>,
+                  mask_0_fill_rule: Option<FillRule>,
+                  blend_mode: BlendMode,
+                  effects: Effects) {
+        // TODO(pcwalton): Disable blend for solid tiles.
+
+        let blend_mode_program = BlendModeProgram::from_blend_mode(blend_mode);
+        if blend_mode_program.needs_readable_framebuffer() {
+            self.copy_alpha_tiles_to_dest_blend_texture(tile_count);
+        }
+
+        let clear_color = self.clear_color_for_draw_operation();
+
+        let draw_viewport = self.draw_viewport();
+
+        let mut ctrl = COMBINER_CTRL_COMPOSITE_SRC_OVER << COMBINER_CTRL_COMPOSITE_SHIFT;
+        match mask_0_fill_rule {
+            None => {}
+            Some(FillRule::Winding) => {
+                ctrl |= COMBINER_CTRL_MASK_WINDING << COMBINER_CTRL_MASK_0_SHIFT
+            }
+            Some(FillRule::EvenOdd) => {
+                ctrl |= COMBINER_CTRL_MASK_EVEN_ODD << COMBINER_CTRL_MASK_0_SHIFT
+            }
+        }
+
+        let mut textures = vec![];
+        let mut uniforms = vec![
+            (&self.tile_program.transform_uniform,
+             UniformData::Mat4(self.tile_transform().to_columns())),
+            (&self.tile_program.tile_size_uniform,
+             UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
+            (&self.tile_program.ctrl_uniform, UniformData::Int(ctrl)),
+        ];
+
+        if mask_0_fill_rule.is_some() {
+            uniforms.push((&self.tile_program.mask_texture_0_uniform,
+                           UniformData::TextureUnit(textures.len() as u32)));
+            textures.push(self.device.framebuffer_texture(&self.fill_framebuffer));
+        }
+
+        // TODO(pcwalton): Refactor.
+        if let Some(color_texture) = color_texture_0 {
+            let color_texture_page = self.texture_page(color_texture.page);
+            self.device.set_texture_sampling_mode(color_texture_page,
+                                                  color_texture.sampling_flags);
+            uniforms.push((&self.tile_program.color_texture_0_uniform,
+                           UniformData::TextureUnit(textures.len() as u32)));
+            textures.push(color_texture_page);
+        }
+        if let Some(color_texture) = color_texture_1 {
+            let color_texture_page = self.texture_page(color_texture.page);
+            self.device.set_texture_sampling_mode(color_texture_page,
+                                                  color_texture.sampling_flags);
+            uniforms.push((&self.tile_program.color_texture_1_uniform,
+                           UniformData::TextureUnit(textures.len() as u32)));
+            textures.push(color_texture_page);
+        }
+
+        /*
+        let paint_texture = match blend_mode {
+            BlendMode::Clear => {
+                // Use a special dummy paint texture containing `rgba(0, 0, 0, 255)` so that the
+                // transparent black paint color doesn't zero out the mask.
+                &self.clear_paint_texture
+            }
+            _ => self.texture_page(color_texture_page),
+        };
+        */
+
+
+        /*
+        match blend_mode_program {
+            BlendModeProgram::Regular => {}
+            BlendModeProgram::Overlay => {
+                self.set_uniforms_for_overlay_blend_mode(&mut textures, &mut uniforms, blend_mode);
+            }
+            BlendModeProgram::DodgeBurn => {
+                self.set_uniforms_for_dodge_burn_blend_mode(&mut textures,
+                                                            &mut uniforms,
+                                                            blend_mode);
+            }
+            BlendModeProgram::SoftLight => {
+                self.set_uniforms_for_blend_mode(&mut textures,
+                                                 &mut uniforms,
+                                                 &self.alpha_tile_softlight_program);
+            }
+            BlendModeProgram::Difference => {
+                self.set_uniforms_for_blend_mode(&mut textures,
+                                                 &mut uniforms,
+                                                 &self.alpha_tile_difference_program);
+            }
+            BlendModeProgram::Exclusion => {
+                self.set_uniforms_for_blend_mode(&mut textures,
+                                                 &mut uniforms,
+                                                 &self.alpha_tile_exclusion_program);
+            }
+            BlendModeProgram::HSL => {
+                self.set_uniforms_for_hsl_blend_mode(&mut textures, &mut uniforms, blend_mode);
+            }
+        }
+        */
+
+        self.device.draw_elements(tile_count * 6, &RenderState {
+            target: &self.draw_render_target(),
+            program: &self.tile_program.program,
+            vertex_array: &self.tile_vertex_array.vertex_array,
+            primitive: Primitive::Triangles,
+            textures: &textures,
+            uniforms: &uniforms,
+            viewport: draw_viewport,
+            options: RenderOptions {
+                blend: blend_mode.to_blend_state(),
+                stencil: self.stencil_state(),
+                clear_ops: ClearOps { color: clear_color, ..ClearOps::default() },
+                ..RenderOptions::default()
+            },
+        });
+
+        self.preserve_draw_framebuffer();
+    }
+
+    /*
     fn set_uniforms_for_blend_mode<'a>(
             &'a self,
             textures: &mut Vec<&'a D::Texture>,
@@ -972,7 +1200,10 @@ where
                                               .alpha_tile_blend_mode_program);
     }
 
+    */
     fn copy_alpha_tiles_to_dest_blend_texture(&mut self, tile_count: u32) {
+        // TODO(pcwalton)
+        /*
         let draw_viewport = self.draw_viewport();
 
         let mut textures = vec![];
@@ -1010,8 +1241,10 @@ where
                 ..RenderOptions::default()
             },
         });
+        */
     }
 
+    /*
     fn draw_solid_tiles(&mut self,
                         tile_count: u32,
                         color_texture_page: TexturePageId,
@@ -1085,6 +1318,8 @@ where
 
         self.preserve_draw_framebuffer();
     }
+
+    */
 
     fn draw_stencil(&mut self, quad_positions: &[Vector4F]) {
         self.device.allocate_buffer(
@@ -1194,6 +1429,7 @@ where
         self.render_target_stack.pop().expect("Render target stack underflow!");
     }
 
+    /*
     fn set_uniforms_for_text_filter<'a>(&'a self,
                                         textures: &mut Vec<&'a D::Texture>,
                                         uniforms: &mut Vec<(&'a D::Uniform, UniformData)>,
@@ -1250,6 +1486,7 @@ where
              UniformData::Int(f32::ceil(1.5 * sigma) as i32 * 2)),
         ]);
     }
+    */
 
     fn blit_intermediate_dest_framebuffer_if_necessary(&mut self) {
         if !self.flags.contains(RendererFlags::INTERMEDIATE_DEST_FRAMEBUFFER_NEEDED) {

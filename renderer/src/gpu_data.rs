@@ -55,8 +55,10 @@ pub enum RenderCommand {
     // Flushes the queue of fills.
     FlushFills,
 
+    /*
     // Render fills to a set of mask tiles.
     RenderMaskTiles { tiles: Vec<MaskTile>, fill_rule: FillRule },
+    */
 
     // Pushes a render target onto the stack. Draw commands go to the render target on top of the
     // stack.
@@ -65,11 +67,16 @@ pub enum RenderCommand {
     // Pops a render target from the stack.
     PopRenderTarget,
 
+    /*
     // Draws a batch of alpha tiles to the render target on top of the stack.
     DrawAlphaTiles(AlphaTileBatch),
 
     // Draws a batch of solid tiles to the render target on top of the stack.
     DrawSolidTiles(SolidTileBatch),
+    */
+
+    // Draws a batch of tiles to the render target on top of the stack.
+    DrawTiles(TileBatch),
 
     // Presents a rendered frame.
     Finish { build_time: Duration },
@@ -89,6 +96,7 @@ pub struct TextureLocation {
     pub rect: RectI,
 }
 
+/*
 #[derive(Clone, Debug)]
 pub struct AlphaTileBatch {
     pub tiles: Vec<AlphaTile>,
@@ -103,6 +111,23 @@ pub struct SolidTileBatch {
     pub color_texture_page: TexturePageId,
     pub sampling_flags: TextureSamplingFlags,
     pub effects: Effects,
+}
+*/
+
+#[derive(Clone, Debug)]
+pub struct TileBatch {
+    pub tiles: Vec<Tile>,
+    pub color_texture_0: Option<TileBatchTexture>,
+    pub color_texture_1: Option<TileBatchTexture>,
+    pub mask_0_fill_rule: Option<FillRule>,
+    pub blend_mode: BlendMode,
+    pub effects: Effects,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TileBatchTexture {
+    pub page: TexturePageId,
+    pub sampling_flags: TextureSamplingFlags,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -130,6 +155,7 @@ pub struct FillBatchPrimitive {
     pub alpha_tile_index: u16,
 }
 
+/*
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct SolidTileVertex {
@@ -165,7 +191,18 @@ pub struct SolidTile {
     pub lower_left: SolidTileVertex,
     pub lower_right: SolidTileVertex,
 }
+*/
 
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub struct Tile {
+    pub upper_left: TileVertex,
+    pub upper_right: TileVertex,
+    pub lower_left: TileVertex,
+    pub lower_right: TileVertex,
+}
+
+/*
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct MaskTileVertex {
@@ -190,6 +227,24 @@ pub struct AlphaTileVertex {
     pub opacity: u8,
     pub pad: u8,
 }
+*/
+
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub struct TileVertex {
+    pub tile_x: i16,
+    pub tile_y: i16,
+    pub color_0_u: f32,
+    pub color_0_v: f32,
+    pub color_1_u: f32,
+    pub color_1_v: f32,
+    pub mask_0_u: f32,
+    pub mask_0_v: f32,
+    pub mask_1_u: f32,
+    pub mask_1_v: f32,
+    pub mask_0_backdrop: i16,
+    pub mask_1_backdrop: i16,
+}
 
 impl Debug for RenderCommand {
     fn fmt(&self, formatter: &mut Formatter) -> DebugResult {
@@ -199,20 +254,23 @@ impl Debug for RenderCommand {
                 write!(formatter, "AllocateTexturePages(x{})", pages.len())
             }
             RenderCommand::UploadTexelData { ref texels, location } => {
-                write!(formatter, "UploadTexelData({:?}, {:?})", texels, location)
+                write!(formatter, "UploadTexelData(x{:?}, {:?})", texels.len(), location)
             }
             RenderCommand::DeclareRenderTarget { id, location } => {
                 write!(formatter, "DeclareRenderTarget({:?}, {:?})", id, location)
             }
             RenderCommand::AddFills(ref fills) => write!(formatter, "AddFills(x{})", fills.len()),
             RenderCommand::FlushFills => write!(formatter, "FlushFills"),
+            /*
             RenderCommand::RenderMaskTiles { ref tiles, fill_rule } => {
                 write!(formatter, "RenderMaskTiles(x{}, {:?})", tiles.len(), fill_rule)
             }
+            */
             RenderCommand::PushRenderTarget(render_target_id) => {
                 write!(formatter, "PushRenderTarget({:?})", render_target_id)
             }
             RenderCommand::PopRenderTarget => write!(formatter, "PopRenderTarget"),
+            /*
             RenderCommand::DrawAlphaTiles(ref batch) => {
                 write!(formatter,
                        "DrawAlphaTiles(x{}, {:?}, {:?}, {:?})",
@@ -227,6 +285,15 @@ impl Debug for RenderCommand {
                        batch.tiles.len(),
                        batch.color_texture_page,
                        batch.sampling_flags)
+            }
+            */
+            RenderCommand::DrawTiles(ref batch) => {
+                write!(formatter,
+                       "DrawTiles(x{}, C0 {:?}, C1 {:?}, M0 {:?})",
+                       batch.tiles.len(),
+                       batch.color_texture_0,
+                       batch.color_texture_1,
+                       batch.mask_0_fill_rule)
             }
             RenderCommand::Finish { .. } => write!(formatter, "Finish"),
         }

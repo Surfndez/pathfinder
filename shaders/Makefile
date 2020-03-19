@@ -20,6 +20,8 @@ SHADERS=\
 	reproject.vs.glsl \
 	stencil.fs.glsl \
 	stencil.vs.glsl \
+	tile.fs.glsl \
+	tile.vs.glsl \
 	tile_alpha.fs.glsl \
 	tile_alpha.vs.glsl \
 	tile_alpha_difference.fs.glsl \

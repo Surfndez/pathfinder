@@ -194,6 +194,7 @@ impl<'a> Tiler<'a> {
                 }
             }
 
+            /*
             // Allocate a mask tile.
             let mask_tile_index = self.scene_builder.allocate_mask_tile_index();
 
@@ -210,12 +211,13 @@ impl<'a> Tiler<'a> {
                                           draw_tile,
                                           mask_tile_index,
                                           self.object_index);
+            */
 
             // Add the primitive to draw the mask.
             ObjectBuilder::push_alpha_tile(&mut self.object_builder.built_path.alpha_tiles,
-                                           mask_tile_index,
+                                           draw_tile,
+                                           clip_tile,
                                            tile_coords,
-                                           self.object_index,
                                            &draw_tiling_path_info);
 
         }
