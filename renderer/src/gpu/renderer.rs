@@ -64,53 +64,50 @@ const OVERLAY_BLEND_MODE_SCREEN:     i32 = 1;
 const OVERLAY_BLEND_MODE_HARD_LIGHT: i32 = 2;
 const OVERLAY_BLEND_MODE_OVERLAY:    i32 = 3;
 
-const COMBINER_CTRL_MASK_0_MASK: i32 =            0x003;
-const COMBINER_CTRL_MASK_1_MASK: i32 =            0x004;
-const COMBINER_CTRL_COLOR_0_FILTER_MASK: i32 =    0x038;
-const COMBINER_CTRL_COLOR_1_MULTIPLY: i32 =       0x040;
-const COMBINER_CTRL_COMPOSITE_MASK: i32 =         0xf80;
+const COMBINER_CTRL_MASK_MASK: i32 =               0x3;
+const COMBINER_CTRL_MASK_WINDING: i32 =            0x1;
+const COMBINER_CTRL_MASK_EVEN_ODD: i32 =           0x2;
 
-const COMBINER_CTRL_MASK_WINDING: i32 =           0x1;
-const COMBINER_CTRL_MASK_EVEN_ODD: i32 =          0x2;
+const COMBINER_CTRL_COLOR_1_MULTIPLY_MASK: i32 =   0x1;
 
-const COMBINER_CTRL_FILTER_RADIAL_GRADIENT: i32 = 0x1;
-const COMBINER_CTRL_FILTER_TEXT_NO_GAMMA: i32 =   0x2;
-const COMBINER_CTRL_FILTER_TEXT_GAMMA: i32 =      0x3;
-const COMBINER_CTRL_FILTER_BLUR_X: i32 =          0x4;
-const COMBINER_CTRL_FILTER_BLUR_Y: i32 =          0x5;
+const COMBINER_CTRL_FILTER_MASK: i32 =             0x3;
+const COMBINER_CTRL_FILTER_RADIAL_GRADIENT: i32 =  0x1;
+const COMBINER_CTRL_FILTER_TEXT: i32 =             0x2;
+const COMBINER_CTRL_FILTER_BLUR: i32 =             0x3;
 
-const COMBINER_CTRL_COMPOSITE_SRC_OVER: i32 =     0x01;
-const COMBINER_CTRL_COMPOSITE_SRC_IN: i32 =       0x02;
-const COMBINER_CTRL_COMPOSITE_SRC_OUT: i32 =      0x03;
-const COMBINER_CTRL_COMPOSITE_SRC_ATOP: i32 =     0x04;
-const COMBINER_CTRL_COMPOSITE_DEST_OVER: i32 =    0x05;
-const COMBINER_CTRL_COMPOSITE_DEST_IN: i32 =      0x06;
-const COMBINER_CTRL_COMPOSITE_DEST_OUT: i32 =     0x07;
-const COMBINER_CTRL_COMPOSITE_DEST_ATOP: i32 =    0x08;
-const COMBINER_CTRL_COMPOSITE_LIGHTER: i32 =      0x09;
-const COMBINER_CTRL_COMPOSITE_COPY: i32 =         0x0a;
-const COMBINER_CTRL_COMPOSITE_XOR: i32 =          0x0b;
-const COMBINER_CTRL_COMPOSITE_MULTIPLY: i32 =     0x0c;
-const COMBINER_CTRL_COMPOSITE_SCREEN: i32 =       0x0d;
-const COMBINER_CTRL_COMPOSITE_OVERLAY: i32 =      0x0e;
-const COMBINER_CTRL_COMPOSITE_DARKEN: i32 =       0x0f;
-const COMBINER_CTRL_COMPOSITE_LIGHTEN: i32 =      0x10;
-const COMBINER_CTRL_COMPOSITE_COLOR_DODGE: i32 =  0x11;
-const COMBINER_CTRL_COMPOSITE_COLOR_BURN: i32 =   0x12;
-const COMBINER_CTRL_COMPOSITE_HARD_LIGHT: i32 =   0x13;
-const COMBINER_CTRL_COMPOSITE_SOFT_LIGHT: i32 =   0x14;
-const COMBINER_CTRL_COMPOSITE_DIFFERENCE: i32 =   0x15;
-const COMBINER_CTRL_COMPOSITE_EXCLUSION: i32 =    0x16;
-const COMBINER_CTRL_COMPOSITE_HUE: i32 =          0x17;
-const COMBINER_CTRL_COMPOSITE_SATURATION: i32 =   0x18;
-const COMBINER_CTRL_COMPOSITE_COLOR: i32 =        0x19;
-const COMBINER_CTRL_COMPOSITE_LUMINOSITY: i32 =   0x1a;
+const COMBINER_CTRL_COMPOSITE_MASK: i32 =          0x1f;
+const COMBINER_CTRL_COMPOSITE_SRC_OVER: i32 =      0x01;
+const COMBINER_CTRL_COMPOSITE_SRC_IN: i32 =        0x02;
+const COMBINER_CTRL_COMPOSITE_SRC_OUT: i32 =       0x03;
+const COMBINER_CTRL_COMPOSITE_SRC_ATOP: i32 =      0x04;
+const COMBINER_CTRL_COMPOSITE_DEST_OVER: i32 =     0x05;
+const COMBINER_CTRL_COMPOSITE_DEST_IN: i32 =       0x06;
+const COMBINER_CTRL_COMPOSITE_DEST_OUT: i32 =      0x07;
+const COMBINER_CTRL_COMPOSITE_DEST_ATOP: i32 =     0x08;
+const COMBINER_CTRL_COMPOSITE_LIGHTER: i32 =       0x09;
+const COMBINER_CTRL_COMPOSITE_COPY: i32 =          0x0a;
+const COMBINER_CTRL_COMPOSITE_XOR: i32 =           0x0b;
+const COMBINER_CTRL_COMPOSITE_MULTIPLY: i32 =      0x0c;
+const COMBINER_CTRL_COMPOSITE_SCREEN: i32 =        0x0d;
+const COMBINER_CTRL_COMPOSITE_OVERLAY: i32 =       0x0e;
+const COMBINER_CTRL_COMPOSITE_DARKEN: i32 =        0x0f;
+const COMBINER_CTRL_COMPOSITE_LIGHTEN: i32 =       0x10;
+const COMBINER_CTRL_COMPOSITE_COLOR_DODGE: i32 =   0x11;
+const COMBINER_CTRL_COMPOSITE_COLOR_BURN: i32 =    0x12;
+const COMBINER_CTRL_COMPOSITE_HARD_LIGHT: i32 =    0x13;
+const COMBINER_CTRL_COMPOSITE_SOFT_LIGHT: i32 =    0x14;
+const COMBINER_CTRL_COMPOSITE_DIFFERENCE: i32 =    0x15;
+const COMBINER_CTRL_COMPOSITE_EXCLUSION: i32 =     0x16;
+const COMBINER_CTRL_COMPOSITE_HUE: i32 =           0x17;
+const COMBINER_CTRL_COMPOSITE_SATURATION: i32 =    0x18;
+const COMBINER_CTRL_COMPOSITE_COLOR: i32 =         0x19;
+const COMBINER_CTRL_COMPOSITE_LUMINOSITY: i32 =    0x1a;
 
-const COMBINER_CTRL_MASK_0_SHIFT: i32 =           0;
-const COMBINER_CTRL_MASK_1_SHIFT: i32 =           2;
-const COMBINER_CTRL_COLOR_0_FILTER_SHIFT: i32 =   3;
-const COMBINER_CTRL_COLOR_1_MULTIPLY_SHIFT: i32 = 6;
-const COMBINER_CTRL_COMPOSITE_SHIFT: i32 =        7;
+const COMBINER_CTRL_MASK_0_SHIFT: i32 =              0;
+const COMBINER_CTRL_MASK_1_SHIFT: i32 =              2;
+const COMBINER_CTRL_COLOR_0_FILTER_SHIFT: i32 =      4;
+const COMBINER_CTRL_COLOR_1_MULTIPLY_SHIFT: i32 =    6;
+const COMBINER_CTRL_COMPOSITE_SHIFT: i32 =           7;
 
 pub struct Renderer<D>
 where
@@ -1043,7 +1040,6 @@ where
              UniformData::Mat4(self.tile_transform().to_columns())),
             (&self.tile_program.tile_size_uniform,
              UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
-            (&self.tile_program.ctrl_uniform, UniformData::Int(ctrl)),
         ];
 
         if mask_0_fill_rule.is_some() {
@@ -1055,10 +1051,13 @@ where
         // TODO(pcwalton): Refactor.
         if let Some(color_texture) = color_texture_0 {
             let color_texture_page = self.texture_page(color_texture.page);
+            let color_texture_size = self.device.texture_size(color_texture_page).to_f32();
             self.device.set_texture_sampling_mode(color_texture_page,
                                                   color_texture.sampling_flags);
             uniforms.push((&self.tile_program.color_texture_0_uniform,
                            UniformData::TextureUnit(textures.len() as u32)));
+            uniforms.push((&self.tile_program.color_texture_0_size_uniform,
+                           UniformData::Vec2(color_texture_size.0)));
             textures.push(color_texture_page);
         }
         if let Some(color_texture) = color_texture_1 {
@@ -1081,6 +1080,22 @@ where
         };
         */
 
+        match effects.filter {
+            Filter::Composite(_) => {}
+            Filter::Text { fg_color, bg_color, defringing_kernel, gamma_correction } => {
+                ctrl |= COMBINER_CTRL_FILTER_TEXT << COMBINER_CTRL_COLOR_0_FILTER_SHIFT;
+                self.set_uniforms_for_text_filter(&mut textures,
+                                                  &mut uniforms,
+                                                  fg_color,
+                                                  bg_color,
+                                                  defringing_kernel,
+                                                  gamma_correction);
+            }
+            Filter::Blur { direction, sigma } => {
+                ctrl |= COMBINER_CTRL_FILTER_BLUR << COMBINER_CTRL_COLOR_0_FILTER_SHIFT;
+                self.set_uniforms_for_blur_filter(&mut uniforms, direction, sigma);
+            }
+        }
 
         /*
         match blend_mode_program {
@@ -1113,6 +1128,8 @@ where
             }
         }
         */
+
+        uniforms.push((&self.tile_program.ctrl_uniform, UniformData::Int(ctrl)));
 
         self.device.draw_elements(tile_count * 6, &RenderState {
             target: &self.draw_render_target(),
@@ -1429,7 +1446,6 @@ where
         self.render_target_stack.pop().expect("Render target stack underflow!");
     }
 
-    /*
     fn set_uniforms_for_text_filter<'a>(&'a self,
                                         textures: &mut Vec<&'a D::Texture>,
                                         uniforms: &mut Vec<(&'a D::Uniform, UniformData)>,
@@ -1440,30 +1456,31 @@ where
         let gamma_lut_texture_unit = textures.len() as u32;
         textures.push(&self.gamma_lut_texture);
 
-        uniforms.extend_from_slice(&[
-            (&self.solid_tile_text_filter_program.gamma_lut_uniform,
-             UniformData::TextureUnit(gamma_lut_texture_unit)),
-            (&self.solid_tile_text_filter_program.fg_color_uniform, UniformData::Vec4(fg_color.0)),
-            (&self.solid_tile_text_filter_program.bg_color_uniform, UniformData::Vec4(bg_color.0)),
-            (&self.solid_tile_text_filter_program.gamma_correction_enabled_uniform,
-             UniformData::Int(gamma_correction as i32)),
-        ]);
-
         match defringing_kernel {
             Some(ref kernel) => {
-                uniforms.push((&self.solid_tile_text_filter_program.kernel_uniform,
+                uniforms.push((&self.tile_program.filter_params_0_uniform,
                                UniformData::Vec4(F32x4::from_slice(&kernel.0))));
             }
             None => {
-                uniforms.push((&self.solid_tile_text_filter_program.kernel_uniform,
+                uniforms.push((&self.tile_program.filter_params_0_uniform,
                                UniformData::Vec4(F32x4::default())));
             }
         }
+
+        let mut params_2 = fg_color.0;
+        params_2.set_w(gamma_correction as i32 as f32);
+
+        uniforms.extend_from_slice(&[
+            (&self.tile_program.gamma_lut_uniform,
+             UniformData::TextureUnit(gamma_lut_texture_unit)),
+            (&self.tile_program.filter_params_1_uniform, UniformData::Vec4(bg_color.0)),
+            (&self.tile_program.filter_params_2_uniform, UniformData::Vec4(params_2)),
+        ]);
+
     }
 
     fn set_uniforms_for_blur_filter<'a>(&'a self,
                                         uniforms: &mut Vec<(&'a D::Uniform, UniformData)>,
-                                        src_texture_size: Vector2I,
                                         direction: BlurDirection,
                                         sigma: f32) {
         let sigma_inv = 1.0 / sigma;
@@ -1475,18 +1492,16 @@ where
             BlurDirection::X => Vector2F::new(1.0, 0.0),
             BlurDirection::Y => Vector2F::new(0.0, 1.0),
         };
-        let src_offset_scale = src_offset / src_texture_size.to_f32();
+
+        let support = f32::ceil(1.5 * sigma) * 2.0;
 
         uniforms.extend_from_slice(&[
-            (&self.solid_tile_blur_filter_program.src_offset_scale_uniform,
-             UniformData::Vec2(src_offset_scale.0)),
-            (&self.solid_tile_blur_filter_program.initial_gauss_coeff_uniform,
-             UniformData::Vec3([gauss_coeff_x, gauss_coeff_y, gauss_coeff_z])),
-            (&self.solid_tile_blur_filter_program.support_uniform,
-             UniformData::Int(f32::ceil(1.5 * sigma) as i32 * 2)),
+            (&self.tile_program.filter_params_0_uniform,
+             UniformData::Vec4(src_offset.0.concat_xy_xy(F32x2::new(support, 0.0)))),
+            (&self.tile_program.filter_params_1_uniform,
+             UniformData::Vec4(F32x4::new(gauss_coeff_x, gauss_coeff_y, gauss_coeff_z, 0.0))),
         ]);
     }
-    */
 
     fn blit_intermediate_dest_framebuffer_if_necessary(&mut self) {
         if !self.flags.contains(RendererFlags::INTERMEDIATE_DEST_FRAMEBUFFER_NEEDED) {

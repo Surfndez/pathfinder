@@ -495,8 +495,10 @@ pub struct TileProgram<D> where D: Device {
     pub mask_texture_0_uniform: D::Uniform,
     pub mask_texture_1_uniform: D::Uniform,
     pub gamma_lut_uniform: D::Uniform,
+    pub color_texture_0_size_uniform: D::Uniform,
     pub filter_params_0_uniform: D::Uniform,
     pub filter_params_1_uniform: D::Uniform,
+    pub filter_params_2_uniform: D::Uniform,
     pub dest_texture_size_uniform: D::Uniform,
     pub ctrl_uniform: D::Uniform,
 }
@@ -512,8 +514,10 @@ impl<D> TileProgram<D> where D: Device {
         let mask_texture_0_uniform = device.get_uniform(&program, "MaskTexture0");
         let mask_texture_1_uniform = device.get_uniform(&program, "MaskTexture1");
         let gamma_lut_uniform = device.get_uniform(&program, "GammaLUT");
+        let color_texture_0_size_uniform = device.get_uniform(&program, "ColorTexture0Size");
         let filter_params_0_uniform = device.get_uniform(&program, "FilterParams0");
         let filter_params_1_uniform = device.get_uniform(&program, "FilterParams1");
+        let filter_params_2_uniform = device.get_uniform(&program, "FilterParams2");
         let dest_texture_size_uniform = device.get_uniform(&program, "DestTextureSize");
         let ctrl_uniform = device.get_uniform(&program, "Ctrl");
         TileProgram {
@@ -526,8 +530,10 @@ impl<D> TileProgram<D> where D: Device {
             mask_texture_0_uniform,
             mask_texture_1_uniform,
             gamma_lut_uniform,
+            color_texture_0_size_uniform,
             filter_params_0_uniform,
             filter_params_1_uniform,
+            filter_params_2_uniform,
             dest_texture_size_uniform,
             ctrl_uniform,
         }
