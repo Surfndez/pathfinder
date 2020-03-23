@@ -35,6 +35,9 @@
 
 precision highp float;
 
+#define FRAC_6_PI   1.9098593171027443
+#define FRAC_PI_3   1.0471975511965976
+
 #define COMBINER_CTRL_MASK_MASK                 0x3
 #define COMBINER_CTRL_MASK_WINDING              0x1
 #define COMBINER_CTRL_MASK_EVEN_ODD             0x2
@@ -46,33 +49,34 @@ precision highp float;
 #define COMBINER_CTRL_FILTER_TEXT               0x2
 #define COMBINER_CTRL_FILTER_BLUR               0x3
 
-#define COMBINER_CTRL_COMPOSITE_MASK            0x1f
-#define COMBINER_CTRL_COMPOSITE_SRC_OVER        0x01
-#define COMBINER_CTRL_COMPOSITE_SRC_IN          0x02
-#define COMBINER_CTRL_COMPOSITE_SRC_OUT         0x03
-#define COMBINER_CTRL_COMPOSITE_SRC_ATOP        0x04
-#define COMBINER_CTRL_COMPOSITE_DEST_OVER       0x05
-#define COMBINER_CTRL_COMPOSITE_DEST_IN         0x06
-#define COMBINER_CTRL_COMPOSITE_DEST_OUT        0x07
-#define COMBINER_CTRL_COMPOSITE_DEST_ATOP       0x08
-#define COMBINER_CTRL_COMPOSITE_LIGHTER         0x09
-#define COMBINER_CTRL_COMPOSITE_COPY            0x0a
-#define COMBINER_CTRL_COMPOSITE_XOR             0x0b
-#define COMBINER_CTRL_COMPOSITE_MULTIPLY        0x0c
-#define COMBINER_CTRL_COMPOSITE_SCREEN          0x0d
-#define COMBINER_CTRL_COMPOSITE_OVERLAY         0x0e
-#define COMBINER_CTRL_COMPOSITE_DARKEN          0x0f
-#define COMBINER_CTRL_COMPOSITE_LIGHTEN         0x10
-#define COMBINER_CTRL_COMPOSITE_COLOR_DODGE     0x11
-#define COMBINER_CTRL_COMPOSITE_COLOR_BURN      0x12
-#define COMBINER_CTRL_COMPOSITE_HARD_LIGHT      0x13
-#define COMBINER_CTRL_COMPOSITE_SOFT_LIGHT      0x14
-#define COMBINER_CTRL_COMPOSITE_DIFFERENCE      0x15
-#define COMBINER_CTRL_COMPOSITE_EXCLUSION       0x16
-#define COMBINER_CTRL_COMPOSITE_HUE             0x17
-#define COMBINER_CTRL_COMPOSITE_SATURATION      0x18
-#define COMBINER_CTRL_COMPOSITE_COLOR           0x19
-#define COMBINER_CTRL_COMPOSITE_LUMINOSITY      0x1a
+#define COMBINER_CTRL_COMPOSITE_MASK                0x1f
+#define COMBINER_CTRL_COMPOSITE_LAST_GPU_BLENDABLE  0x08
+#define COMBINER_CTRL_COMPOSITE_SRC_OVER            0x01
+#define COMBINER_CTRL_COMPOSITE_SRC_IN              0x02
+#define COMBINER_CTRL_COMPOSITE_SRC_OUT             0x03
+#define COMBINER_CTRL_COMPOSITE_SRC_ATOP            0x04
+#define COMBINER_CTRL_COMPOSITE_DEST_OVER           0x05
+#define COMBINER_CTRL_COMPOSITE_DEST_IN             0x06
+#define COMBINER_CTRL_COMPOSITE_DEST_OUT            0x07
+#define COMBINER_CTRL_COMPOSITE_DEST_ATOP           0x08
+#define COMBINER_CTRL_COMPOSITE_LIGHTER             0x09
+#define COMBINER_CTRL_COMPOSITE_COPY                0x0a
+#define COMBINER_CTRL_COMPOSITE_XOR                 0x0b
+#define COMBINER_CTRL_COMPOSITE_MULTIPLY            0x0c
+#define COMBINER_CTRL_COMPOSITE_SCREEN              0x0d
+#define COMBINER_CTRL_COMPOSITE_OVERLAY             0x0e
+#define COMBINER_CTRL_COMPOSITE_DARKEN              0x0f
+#define COMBINER_CTRL_COMPOSITE_LIGHTEN             0x10
+#define COMBINER_CTRL_COMPOSITE_COLOR_DODGE         0x11
+#define COMBINER_CTRL_COMPOSITE_COLOR_BURN          0x12
+#define COMBINER_CTRL_COMPOSITE_HARD_LIGHT          0x13
+#define COMBINER_CTRL_COMPOSITE_SOFT_LIGHT          0x14
+#define COMBINER_CTRL_COMPOSITE_DIFFERENCE          0x15
+#define COMBINER_CTRL_COMPOSITE_EXCLUSION           0x16
+#define COMBINER_CTRL_COMPOSITE_HUE                 0x17
+#define COMBINER_CTRL_COMPOSITE_SATURATION          0x18
+#define COMBINER_CTRL_COMPOSITE_COLOR               0x19
+#define COMBINER_CTRL_COMPOSITE_LUMINOSITY          0x1a
 
 #define COMBINER_CTRL_MASK_0_SHIFT              0
 #define COMBINER_CTRL_MASK_1_SHIFT              2
@@ -249,7 +253,9 @@ vec4 filterBlur(vec2 colorTexCoord,
 }
 
 vec4 filterNone(vec2 colorTexCoord, sampler2D colorTexture) {
-    return sampleColor(colorTexture, colorTexCoord);
+    vec4 color = sampleColor(colorTexture, colorTexCoord);
+    color.rgb *= color.a;
+    return color;
 }
 
 vec4 filterColor(vec2 colorTexCoord,
@@ -281,9 +287,126 @@ vec4 filterColor(vec2 colorTexCoord,
 
 // Compositing
 
-vec4 composite(vec4 color, sampler2D destTexture, vec2 fragCoord) {
-    // TODO(pcwalton)
-    return color;
+vec3 compositeSelect(bvec3 cond, vec3 ifTrue, vec3 ifFalse) {
+    return vec3(cond.x ? ifTrue.x : ifFalse.x,
+                cond.y ? ifTrue.y : ifFalse.y,
+                cond.z ? ifTrue.z : ifFalse.z);
+}
+
+float compositeDivide(float num, float denom) {
+    return denom != 0.0 ? num / denom : 0.0;
+}
+
+vec3 compositeColorDodge(vec3 destColor, vec3 srcColor) {
+    bvec3 destZero = equal(destColor, vec3(0.0)), srcOne = equal(srcColor, vec3(1.0));
+    return compositeSelect(destZero,
+                           vec3(0.0),
+                           compositeSelect(srcOne, vec3(1.0), destColor / (vec3(1.0) - srcColor)));
+}
+
+// https://en.wikipedia.org/wiki/HSL_and_HSV#HSL_to_RGB_alternative
+vec3 compositeHSLToRGB(vec3 hsl) {
+    float a = hsl.y * min(hsl.z, 1.0 - hsl.z);
+    vec3 ks = mod(vec3(0.0, 8.0, 4.0) + vec3(hsl.x * FRAC_6_PI), 12.0);
+    return hsl.zzz - clamp(min(ks - vec3(3.0), vec3(9.0) - ks), -1.0, 1.0) * a;
+}
+
+// https://en.wikipedia.org/wiki/HSL_and_HSV#From_RGB
+vec3 compositeRGBToHSL(vec3 rgb) {
+    float v = max(max(rgb.r, rgb.g), rgb.b), xMin = min(min(rgb.r, rgb.g), rgb.b);
+    float c = v - xMin, l = mix(xMin, v, 0.5);
+    vec3 terms = rgb.r == v ? vec3(0.0, rgb.gb) :
+                 rgb.g == v ? vec3(2.0, rgb.br) :
+                              vec3(4.0, rgb.rg);
+    float h = FRAC_PI_3 * compositeDivide(terms.x * c + terms.y - terms.z, c);
+    float s = compositeDivide(c, v);
+    return vec3(h, s, l);
+}
+
+vec3 compositeScreen(vec3 destColor, vec3 srcColor) {
+    return destColor + srcColor - destColor * srcColor;
+}
+
+vec3 compositeHardLight(vec3 destColor, vec3 srcColor) {
+    return compositeSelect(lessThanEqual(srcColor, vec3(0.5)),
+                           destColor * vec3(2.0) * srcColor,
+                           compositeScreen(destColor, vec3(2.0) * srcColor - vec3(1.0)));
+}
+
+vec3 compositeSoftLight(vec3 destColor, vec3 srcColor) {
+    vec3 darkenedDestColor =
+        compositeSelect(lessThanEqual(destColor, vec3(0.25)),
+                        ((vec3(16.0) * destColor - 12.0) * destColor + 4.0) * destColor,
+                        sqrt(destColor));
+    vec3 factor = compositeSelect(lessThanEqual(srcColor, vec3(0.5)),
+                                  destColor * (vec3(1.0) - destColor),
+                                  darkenedDestColor - destColor);
+    return destColor + (srcColor * 2.0 - 1.0) * factor;
+}
+
+vec3 compositeHSL(vec3 destColor, vec3 srcColor, int op) {
+    switch (op) {
+    case COMBINER_CTRL_COMPOSITE_HUE:
+        return vec3(srcColor.x,  destColor.y, destColor.z);
+    case COMBINER_CTRL_COMPOSITE_SATURATION:
+        return vec3(destColor.x, srcColor.y,  destColor.z);
+    case COMBINER_CTRL_COMPOSITE_COLOR:
+        return vec3(srcColor.x,  srcColor.y,  destColor.z);
+    default:
+        return vec3(destColor.x, destColor.y, srcColor.z);
+    }
+}
+
+vec3 compositeRGB(vec3 destColor, vec3 srcColor, int op) {
+    switch (op) {
+    case COMBINER_CTRL_COMPOSITE_MULTIPLY:
+        return destColor * srcColor;
+    case COMBINER_CTRL_COMPOSITE_SCREEN:
+        return compositeScreen(destColor, srcColor);
+    case COMBINER_CTRL_COMPOSITE_OVERLAY:
+        return compositeHardLight(srcColor, destColor);
+    case COMBINER_CTRL_COMPOSITE_DARKEN:
+        return min(destColor, srcColor);
+    case COMBINER_CTRL_COMPOSITE_LIGHTEN:
+        return max(destColor, srcColor);
+    case COMBINER_CTRL_COMPOSITE_COLOR_DODGE:
+        return compositeColorDodge(destColor, srcColor);
+    case COMBINER_CTRL_COMPOSITE_COLOR_BURN:
+        return vec3(1.0) - compositeColorDodge(vec3(1.0) - destColor, vec3(1.0) - srcColor);
+    case COMBINER_CTRL_COMPOSITE_HARD_LIGHT:
+        return compositeHardLight(destColor, srcColor);
+    case COMBINER_CTRL_COMPOSITE_SOFT_LIGHT:
+        return compositeSoftLight(destColor, srcColor);
+    case COMBINER_CTRL_COMPOSITE_DIFFERENCE:
+        return abs(destColor - srcColor);
+    case COMBINER_CTRL_COMPOSITE_EXCLUSION:
+        return destColor + srcColor - vec3(2.0) * destColor * srcColor;
+    case COMBINER_CTRL_COMPOSITE_HUE:
+    case COMBINER_CTRL_COMPOSITE_SATURATION:
+    case COMBINER_CTRL_COMPOSITE_COLOR:
+    case COMBINER_CTRL_COMPOSITE_LUMINOSITY:
+        return compositeHSLToRGB(compositeHSL(compositeRGBToHSL(destColor),
+                                              compositeRGBToHSL(srcColor),
+                                              op));
+    }
+    return srcColor;
+}
+
+// FIXME(pcwalton): What should the output alpha be here?
+vec4 composite(vec4 srcColor,
+               sampler2D destTexture,
+               vec2 destTextureSize,
+               vec2 fragCoord,
+               int op) {
+    if (op <= COMBINER_CTRL_COMPOSITE_LAST_GPU_BLENDABLE)
+        return srcColor;
+
+    vec4 destColor = texture(destTexture, fragCoord / destTextureSize);
+    vec3 blendedRGB = compositeRGB(destColor.rgb, srcColor.rgb, op);
+    return vec4(srcColor.a * (1.0 - destColor.a) * srcColor.rgb +
+                srcColor.a * destColor.a * blendedRGB +
+                (1.0 - srcColor.a) * destColor.a * destColor.rgb,
+                1.0);
 }
 
 // Masks
@@ -302,18 +425,18 @@ float sampleMask(float maskAlpha,
     return min(maskAlpha, coverage);
 }
 
-// Entry point
+// Main function
 
-void main() {
+void calculateColor(int ctrl) {
     // Sample mask.
-    int maskCtrl0 = (uCtrl >> COMBINER_CTRL_MASK_0_SHIFT) & COMBINER_CTRL_MASK_MASK;
-    int maskCtrl1 = (uCtrl >> COMBINER_CTRL_MASK_1_SHIFT) & COMBINER_CTRL_MASK_MASK;
+    int maskCtrl0 = (ctrl >> COMBINER_CTRL_MASK_0_SHIFT) & COMBINER_CTRL_MASK_MASK;
+    int maskCtrl1 = (ctrl >> COMBINER_CTRL_MASK_1_SHIFT) & COMBINER_CTRL_MASK_MASK;
     float maskAlpha = 1.0;
     maskAlpha = sampleMask(maskAlpha, uMaskTexture0, vMaskTexCoord0, maskCtrl0);
     maskAlpha = sampleMask(maskAlpha, uMaskTexture1, vMaskTexCoord1, maskCtrl1);
 
     // Sample color.
-    int color0Filter = (uCtrl >> COMBINER_CTRL_COLOR_0_FILTER_SHIFT) & COMBINER_CTRL_FILTER_MASK;
+    int color0Filter = (ctrl >> COMBINER_CTRL_COLOR_0_FILTER_SHIFT) & COMBINER_CTRL_FILTER_MASK;
     vec4 color = filterColor(vColorTexCoord0,
                              uColorTexture0,
                              uGammaLUT,
@@ -322,7 +445,7 @@ void main() {
                              uFilterParams1,
                              uFilterParams2,
                              color0Filter);
-    if (((uCtrl >> COMBINER_CTRL_COLOR_1_MULTIPLY_SHIFT) &
+    if (((ctrl >> COMBINER_CTRL_COLOR_1_MULTIPLY_SHIFT) &
           COMBINER_CTRL_COLOR_1_MULTIPLY_MASK) != 0) {
         color *= sampleColor(uColorTexture1, vColorTexCoord1);
     }
@@ -331,5 +454,14 @@ void main() {
     color *= vec4(maskAlpha);
 
     // Apply composite.
-    oFragColor = composite(color, uDestTexture, gl_FragCoord.xy);
+    int compositeOp = (ctrl >> COMBINER_CTRL_COMPOSITE_SHIFT) & COMBINER_CTRL_COMPOSITE_MASK;
+    oFragColor = composite(color, uDestTexture, uDestTextureSize, gl_FragCoord.xy, compositeOp);
+}
+
+// Entry point
+//
+// TODO(pcwalton): Generate this dynamically.
+
+void main() {
+    calculateColor(uCtrl);
 }
