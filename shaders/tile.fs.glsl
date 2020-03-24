@@ -51,22 +51,24 @@ precision highp float;
 
 #define COMBINER_CTRL_COMPOSITE_MASK                0x1f
 #define COMBINER_CTRL_COMPOSITE_LAST_GPU_BLENDABLE  0x08
-#define COMBINER_CTRL_COMPOSITE_SRC_OVER            0x01
-#define COMBINER_CTRL_COMPOSITE_SRC_IN              0x02
-#define COMBINER_CTRL_COMPOSITE_SRC_OUT             0x03
-#define COMBINER_CTRL_COMPOSITE_SRC_ATOP            0x04
-#define COMBINER_CTRL_COMPOSITE_DEST_OVER           0x05
-#define COMBINER_CTRL_COMPOSITE_DEST_IN             0x06
-#define COMBINER_CTRL_COMPOSITE_DEST_OUT            0x07
-#define COMBINER_CTRL_COMPOSITE_DEST_ATOP           0x08
-#define COMBINER_CTRL_COMPOSITE_LIGHTER             0x09
-#define COMBINER_CTRL_COMPOSITE_COPY                0x0a
-#define COMBINER_CTRL_COMPOSITE_XOR                 0x0b
-#define COMBINER_CTRL_COMPOSITE_MULTIPLY            0x0c
-#define COMBINER_CTRL_COMPOSITE_SCREEN              0x0d
-#define COMBINER_CTRL_COMPOSITE_OVERLAY             0x0e
-#define COMBINER_CTRL_COMPOSITE_DARKEN              0x0f
-#define COMBINER_CTRL_COMPOSITE_LIGHTEN             0x10
+#define COMBINER_CTRL_COMPOSITE_LAST_PORTER_DUFF    0x0d
+#define COMBINER_CTRL_COMPOSITE_SRC_OVER            0x00
+#define COMBINER_CTRL_COMPOSITE_SRC_ATOP            0x01
+#define COMBINER_CTRL_COMPOSITE_DEST_OVER           0x02
+#define COMBINER_CTRL_COMPOSITE_DEST_OUT            0x03
+#define COMBINER_CTRL_COMPOSITE_XOR                 0x04
+#define COMBINER_CTRL_COMPOSITE_LIGHTER             0x05
+#define COMBINER_CTRL_COMPOSITE_DARKEN              0x06
+#define COMBINER_CTRL_COMPOSITE_LIGHTEN             0x07
+#define COMBINER_CTRL_COMPOSITE_CLEAR               0x08
+#define COMBINER_CTRL_COMPOSITE_COPY                0x09
+#define COMBINER_CTRL_COMPOSITE_SRC_IN              0x0a
+#define COMBINER_CTRL_COMPOSITE_SRC_OUT             0x0b
+#define COMBINER_CTRL_COMPOSITE_DEST_IN             0x0c
+#define COMBINER_CTRL_COMPOSITE_DEST_ATOP           0x0d
+#define COMBINER_CTRL_COMPOSITE_MULTIPLY            0x0e
+#define COMBINER_CTRL_COMPOSITE_SCREEN              0x0f
+#define COMBINER_CTRL_COMPOSITE_OVERLAY             0x10
 #define COMBINER_CTRL_COMPOSITE_COLOR_DODGE         0x11
 #define COMBINER_CTRL_COMPOSITE_COLOR_BURN          0x12
 #define COMBINER_CTRL_COMPOSITE_HARD_LIGHT          0x13
@@ -247,15 +249,11 @@ vec4 filterBlur(vec2 colorTexCoord,
     }
 
     // Finish.
-    color /= gaussSum;
-    color.rgb *= color.a;
-    return color;
+    return color / gaussSum;
 }
 
 vec4 filterNone(vec2 colorTexCoord, sampler2D colorTexture) {
-    vec4 color = sampleColor(colorTexture, colorTexCoord);
-    color.rgb *= color.a;
-    return color;
+    return sampleColor(colorTexture, colorTexCoord);
 }
 
 vec4 filterColor(vec2 colorTexCoord,
@@ -392,7 +390,24 @@ vec3 compositeRGB(vec3 destColor, vec3 srcColor, int op) {
     return srcColor;
 }
 
-// FIXME(pcwalton): What should the output alpha be here?
+vec4 compositePorterDuff(vec4 destColor, vec4 srcColor, int op) {
+    vec4 color;
+    switch (op) {
+    case COMBINER_CTRL_COMPOSITE_CLEAR:
+        return vec4(0.0);
+    case COMBINER_CTRL_COMPOSITE_COPY:
+        return srcColor;
+    case COMBINER_CTRL_COMPOSITE_SRC_IN:
+        return srcColor * destColor.a;
+    case COMBINER_CTRL_COMPOSITE_SRC_OUT:
+        return srcColor * (1.0 - destColor.a);
+    case COMBINER_CTRL_COMPOSITE_DEST_IN:
+        return destColor * srcColor.a;
+    case COMBINER_CTRL_COMPOSITE_DEST_ATOP:
+        return srcColor * (1.0 - destColor.a) + destColor * srcColor.a;
+    }
+}
+
 vec4 composite(vec4 srcColor,
                sampler2D destTexture,
                vec2 destTextureSize,
@@ -401,11 +416,16 @@ vec4 composite(vec4 srcColor,
     if (op <= COMBINER_CTRL_COMPOSITE_LAST_GPU_BLENDABLE)
         return srcColor;
 
-    vec4 destColor = texture(destTexture, fragCoord / destTextureSize);
+    vec2 destTexCoord = fragCoord / destTextureSize;
+    vec4 destColor = texture(destTexture, destTexCoord);
+    if (op <= COMBINER_CTRL_COMPOSITE_LAST_PORTER_DUFF)
+        return compositePorterDuff(destColor, srcColor, op);
+
+    // FIXME(pcwalton): What should the output alpha be here?
     vec3 blendedRGB = compositeRGB(destColor.rgb, srcColor.rgb, op);
     return vec4(srcColor.a * (1.0 - destColor.a) * srcColor.rgb +
                 srcColor.a * destColor.a * blendedRGB +
-                (1.0 - srcColor.a) * destColor.a * destColor.rgb,
+                (1.0 - srcColor.a) * destColor.rgb,
                 1.0);
 }
 
@@ -445,17 +465,22 @@ void calculateColor(int ctrl) {
                              uFilterParams1,
                              uFilterParams2,
                              color0Filter);
+    //color.a = 1.0;
     if (((ctrl >> COMBINER_CTRL_COLOR_1_MULTIPLY_SHIFT) &
           COMBINER_CTRL_COLOR_1_MULTIPLY_MASK) != 0) {
         color *= sampleColor(uColorTexture1, vColorTexCoord1);
     }
 
     // Apply mask.
-    color *= vec4(maskAlpha);
+    color.a *= maskAlpha;
 
     // Apply composite.
     int compositeOp = (ctrl >> COMBINER_CTRL_COMPOSITE_SHIFT) & COMBINER_CTRL_COMPOSITE_MASK;
-    oFragColor = composite(color, uDestTexture, uDestTextureSize, gl_FragCoord.xy, compositeOp);
+    color = composite(color, uDestTexture, uDestTextureSize, gl_FragCoord.xy, compositeOp);
+
+    // Premultiply alpha.
+    color.rgb *= color.a;
+    oFragColor = color;
 }
 
 // Entry point

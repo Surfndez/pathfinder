@@ -289,11 +289,12 @@ impl Debug for RenderCommand {
             */
             RenderCommand::DrawTiles(ref batch) => {
                 write!(formatter,
-                       "DrawTiles(x{}, C0 {:?}, C1 {:?}, M0 {:?})",
+                       "DrawTiles(x{}, C0 {:?}, C1 {:?}, M0 {:?}, {:?})",
                        batch.tiles.len(),
                        batch.color_texture_0,
                        batch.color_texture_1,
-                       batch.mask_0_fill_rule)
+                       batch.mask_0_fill_rule,
+                       batch.blend_mode)
             }
             RenderCommand::Finish { .. } => write!(formatter, "Finish"),
         }

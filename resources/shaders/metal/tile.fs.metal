@@ -28,7 +28,8 @@ struct spvDescriptorSetBuffer0
     constant int* uCtrl [[id(17)]];
 };
 
-constant float3 _879 = {};
+constant float3 _868 = {};
+constant float4 _1006 = {};
 
 struct main0_out
 {
@@ -75,24 +76,21 @@ float4 filterBlur(thread const float2& colorTexCoord, thread const texture2d<flo
     float3 gaussCoeff = filterParams1.xyz;
     float gaussSum = gaussCoeff.x;
     float4 color = colorTexture.sample(colorTextureSmplr, colorTexCoord) * gaussCoeff.x;
-    float2 _435 = gaussCoeff.xy * gaussCoeff.yz;
-    gaussCoeff = float3(_435.x, _435.y, gaussCoeff.z);
+    float2 _441 = gaussCoeff.xy * gaussCoeff.yz;
+    gaussCoeff = float3(_441.x, _441.y, gaussCoeff.z);
     for (int i = 1; i <= support; i += 2)
     {
         float gaussPartialSum = gaussCoeff.x;
-        float2 _455 = gaussCoeff.xy * gaussCoeff.yz;
-        gaussCoeff = float3(_455.x, _455.y, gaussCoeff.z);
+        float2 _461 = gaussCoeff.xy * gaussCoeff.yz;
+        gaussCoeff = float3(_461.x, _461.y, gaussCoeff.z);
         gaussPartialSum += gaussCoeff.x;
         float2 srcOffset = srcOffsetScale * (float(i) + (gaussCoeff.x / gaussPartialSum));
         color += ((colorTexture.sample(colorTextureSmplr, (colorTexCoord - srcOffset)) + colorTexture.sample(colorTextureSmplr, (colorTexCoord + srcOffset))) * gaussPartialSum);
         gaussSum += (2.0 * gaussPartialSum);
-        float2 _495 = gaussCoeff.xy * gaussCoeff.yz;
-        gaussCoeff = float3(_495.x, _495.y, gaussCoeff.z);
+        float2 _501 = gaussCoeff.xy * gaussCoeff.yz;
+        gaussCoeff = float3(_501.x, _501.y, gaussCoeff.z);
     }
-    color /= float4(gaussSum);
-    float3 _509 = color.xyz * color.w;
-    color = float4(_509.x, _509.y, _509.z, color.w);
-    return color;
+    return color / float4(gaussSum);
 }
 
 float filterTextSample1Tap(thread const float& offset, thread const texture2d<float> colorTexture, thread const sampler colorTextureSmplr, thread const float2& colorTexCoord)
@@ -103,16 +101,16 @@ float filterTextSample1Tap(thread const float& offset, thread const texture2d<fl
 void filterTextSample9Tap(thread float4& outAlphaLeft, thread float& outAlphaCenter, thread float4& outAlphaRight, thread const texture2d<float> colorTexture, thread const sampler colorTextureSmplr, thread const float2& colorTexCoord, thread const float4& kernel0, thread const float& onePixel)
 {
     bool wide = kernel0.x > 0.0;
-    float _183;
+    float _189;
     if (wide)
     {
         float param = (-4.0) * onePixel;
         float2 param_1 = colorTexCoord;
-        _183 = filterTextSample1Tap(param, colorTexture, colorTextureSmplr, param_1);
+        _189 = filterTextSample1Tap(param, colorTexture, colorTextureSmplr, param_1);
     }
     else
     {
-        _183 = 0.0;
+        _189 = 0.0;
     }
     float param_2 = (-3.0) * onePixel;
     float2 param_3 = colorTexCoord;
@@ -120,7 +118,7 @@ void filterTextSample9Tap(thread float4& outAlphaLeft, thread float& outAlphaCen
     float2 param_5 = colorTexCoord;
     float param_6 = (-1.0) * onePixel;
     float2 param_7 = colorTexCoord;
-    outAlphaLeft = float4(_183, filterTextSample1Tap(param_2, colorTexture, colorTextureSmplr, param_3), filterTextSample1Tap(param_4, colorTexture, colorTextureSmplr, param_5), filterTextSample1Tap(param_6, colorTexture, colorTextureSmplr, param_7));
+    outAlphaLeft = float4(_189, filterTextSample1Tap(param_2, colorTexture, colorTextureSmplr, param_3), filterTextSample1Tap(param_4, colorTexture, colorTextureSmplr, param_5), filterTextSample1Tap(param_6, colorTexture, colorTextureSmplr, param_7));
     float param_8 = 0.0;
     float2 param_9 = colorTexCoord;
     outAlphaCenter = filterTextSample1Tap(param_8, colorTexture, colorTextureSmplr, param_9);
@@ -130,18 +128,18 @@ void filterTextSample9Tap(thread float4& outAlphaLeft, thread float& outAlphaCen
     float2 param_13 = colorTexCoord;
     float param_14 = 3.0 * onePixel;
     float2 param_15 = colorTexCoord;
-    float _243;
+    float _249;
     if (wide)
     {
         float param_16 = 4.0 * onePixel;
         float2 param_17 = colorTexCoord;
-        _243 = filterTextSample1Tap(param_16, colorTexture, colorTextureSmplr, param_17);
+        _249 = filterTextSample1Tap(param_16, colorTexture, colorTextureSmplr, param_17);
     }
     else
     {
-        _243 = 0.0;
+        _249 = 0.0;
     }
-    outAlphaRight = float4(filterTextSample1Tap(param_10, colorTexture, colorTextureSmplr, param_11), filterTextSample1Tap(param_12, colorTexture, colorTextureSmplr, param_13), filterTextSample1Tap(param_14, colorTexture, colorTextureSmplr, param_15), _243);
+    outAlphaRight = float4(filterTextSample1Tap(param_10, colorTexture, colorTextureSmplr, param_11), filterTextSample1Tap(param_12, colorTexture, colorTextureSmplr, param_13), filterTextSample1Tap(param_14, colorTexture, colorTextureSmplr, param_15), _249);
 }
 
 float filterTextConvolve7Tap(thread const float4& alpha0, thread const float3& alpha1, thread const float4& kernel0)
@@ -219,10 +217,7 @@ float4 sampleColor(thread const texture2d<float> colorTexture, thread const samp
 float4 filterNone(thread const float2& colorTexCoord, thread const texture2d<float> colorTexture, thread const sampler colorTextureSmplr)
 {
     float2 param = colorTexCoord;
-    float4 color = sampleColor(colorTexture, colorTextureSmplr, param);
-    float3 _523 = color.xyz * color.w;
-    color = float4(_523.x, _523.y, _523.z, color.w);
-    return color;
+    return sampleColor(colorTexture, colorTextureSmplr, param);
 }
 
 float4 filterColor(thread const float2& colorTexCoord, thread const texture2d<float> colorTexture, thread const sampler colorTextureSmplr, thread const texture2d<float> gammaLUT, thread const sampler gammaLUTSmplr, thread const float2& colorTextureSize, thread const float4& filterParams0, thread const float4& filterParams1, thread const float4& filterParams2, thread const int& colorFilter)
@@ -251,6 +246,37 @@ float4 filterColor(thread const float2& colorTexCoord, thread const texture2d<fl
     return filterNone(param_9, colorTexture, colorTextureSmplr);
 }
 
+float4 compositePorterDuff(thread const float4& destColor, thread const float4& srcColor, thread const int& op)
+{
+    switch (op)
+    {
+        case 8:
+        {
+            return float4(0.0);
+        }
+        case 9:
+        {
+            return srcColor;
+        }
+        case 10:
+        {
+            return srcColor * destColor.w;
+        }
+        case 11:
+        {
+            return srcColor * (1.0 - destColor.w);
+        }
+        case 12:
+        {
+            return destColor * srcColor.w;
+        }
+        case 13:
+        {
+            return (srcColor * (1.0 - destColor.w)) + (destColor * srcColor.w);
+        }
+    }
+}
+
 float3 compositeScreen(thread const float3& destColor, thread const float3& srcColor)
 {
     return (destColor + srcColor) - (destColor * srcColor);
@@ -258,34 +284,34 @@ float3 compositeScreen(thread const float3& destColor, thread const float3& srcC
 
 float3 compositeSelect(thread const bool3& cond, thread const float3& ifTrue, thread const float3& ifFalse)
 {
-    float _563;
+    float _552;
     if (cond.x)
     {
-        _563 = ifTrue.x;
+        _552 = ifTrue.x;
     }
     else
     {
-        _563 = ifFalse.x;
+        _552 = ifFalse.x;
     }
-    float _574;
+    float _563;
     if (cond.y)
     {
-        _574 = ifTrue.y;
+        _563 = ifTrue.y;
     }
     else
     {
-        _574 = ifFalse.y;
+        _563 = ifFalse.y;
     }
-    float _585;
+    float _574;
     if (cond.z)
     {
-        _585 = ifTrue.z;
+        _574 = ifTrue.z;
     }
     else
     {
-        _585 = ifFalse.z;
+        _574 = ifFalse.z;
     }
-    return float3(_563, _574, _585);
+    return float3(_552, _563, _574);
 }
 
 float3 compositeHardLight(thread const float3& destColor, thread const float3& srcColor)
@@ -326,16 +352,16 @@ float3 compositeSoftLight(thread const float3& destColor, thread const float3& s
 
 float compositeDivide(thread const float& num, thread const float& denom)
 {
-    float _599;
+    float _588;
     if (denom != 0.0)
     {
-        _599 = num / denom;
+        _588 = num / denom;
     }
     else
     {
-        _599 = 0.0;
+        _588 = 0.0;
     }
-    return _599;
+    return _588;
 }
 
 float3 compositeRGBToHSL(thread const float3& rgb)
@@ -344,25 +370,25 @@ float3 compositeRGBToHSL(thread const float3& rgb)
     float xMin = fast::min(fast::min(rgb.x, rgb.y), rgb.z);
     float c = v - xMin;
     float l = mix(xMin, v, 0.5);
-    float3 _705;
+    float3 _694;
     if (rgb.x == v)
     {
-        _705 = float3(0.0, rgb.yz);
+        _694 = float3(0.0, rgb.yz);
     }
     else
     {
-        float3 _718;
+        float3 _707;
         if (rgb.y == v)
         {
-            _718 = float3(2.0, rgb.zx);
+            _707 = float3(2.0, rgb.zx);
         }
         else
         {
-            _718 = float3(4.0, rgb.xy);
+            _707 = float3(4.0, rgb.xy);
         }
-        _705 = _718;
+        _694 = _707;
     }
-    float3 terms = _705;
+    float3 terms = _694;
     float param = ((terms.x * c) + terms.y) - terms.z;
     float param_1 = c;
     float h = 1.0471975803375244140625 * compositeDivide(param, param_1);
@@ -406,27 +432,27 @@ float3 compositeRGB(thread const float3& destColor, thread const float3& srcColo
 {
     switch (op)
     {
-        case 12:
+        case 14:
         {
             return destColor * srcColor;
         }
-        case 13:
+        case 15:
         {
             float3 param = destColor;
             float3 param_1 = srcColor;
             return compositeScreen(param, param_1);
         }
-        case 14:
+        case 16:
         {
             float3 param_2 = srcColor;
             float3 param_3 = destColor;
             return compositeHardLight(param_2, param_3);
         }
-        case 15:
+        case 6:
         {
             return fast::min(destColor, srcColor);
         }
-        case 16:
+        case 7:
         {
             return fast::max(destColor, srcColor);
         }
@@ -485,15 +511,23 @@ float4 composite(thread const float4& srcColor, thread const texture2d<float> de
     {
         return srcColor;
     }
-    float4 destColor = destTexture.sample(destTextureSmplr, (fragCoord / destTextureSize));
-    float3 param = destColor.xyz;
-    float3 param_1 = srcColor.xyz;
-    int param_2 = op;
-    float3 blendedRGB = compositeRGB(param, param_1, param_2);
-    return float4(((srcColor.xyz * (srcColor.w * (1.0 - destColor.w))) + (blendedRGB * (srcColor.w * destColor.w))) + (destColor.xyz * ((1.0 - srcColor.w) * destColor.w)), 1.0);
+    float2 destTexCoord = fragCoord / destTextureSize;
+    float4 destColor = destTexture.sample(destTextureSmplr, destTexCoord);
+    if (op <= 13)
+    {
+        float4 param = destColor;
+        float4 param_1 = srcColor;
+        int param_2 = op;
+        return compositePorterDuff(param, param_1, param_2);
+    }
+    float3 param_3 = destColor.xyz;
+    float3 param_4 = srcColor.xyz;
+    int param_5 = op;
+    float3 blendedRGB = compositeRGB(param_3, param_4, param_5);
+    return float4(((srcColor.xyz * (srcColor.w * (1.0 - destColor.w))) + (blendedRGB * (srcColor.w * destColor.w))) + (destColor.xyz * (1.0 - srcColor.w)), 1.0);
 }
 
-void calculateColor(thread const int& ctrl, thread texture2d<float> uMaskTexture0, thread const sampler uMaskTexture0Smplr, thread float3& vMaskTexCoord0, thread texture2d<float> uMaskTexture1, thread const sampler uMaskTexture1Smplr, thread float3& vMaskTexCoord1, thread float2& vColorTexCoord0, thread texture2d<float> uColorTexture0, thread const sampler uColorTexture0Smplr, thread texture2d<float> uGammaLUT, thread const sampler uGammaLUTSmplr, thread float2 uColorTexture0Size, thread float4 uFilterParams0, thread float4 uFilterParams1, thread float4 uFilterParams2, thread texture2d<float> uColorTexture1, thread const sampler uColorTexture1Smplr, thread float2& vColorTexCoord1, thread float4& oFragColor, thread texture2d<float> uDestTexture, thread const sampler uDestTextureSmplr, thread float2 uDestTextureSize, thread float4& gl_FragCoord)
+void calculateColor(thread const int& ctrl, thread texture2d<float> uMaskTexture0, thread const sampler uMaskTexture0Smplr, thread float3& vMaskTexCoord0, thread texture2d<float> uMaskTexture1, thread const sampler uMaskTexture1Smplr, thread float3& vMaskTexCoord1, thread float2& vColorTexCoord0, thread texture2d<float> uColorTexture0, thread const sampler uColorTexture0Smplr, thread texture2d<float> uGammaLUT, thread const sampler uGammaLUTSmplr, thread float2 uColorTexture0Size, thread float4 uFilterParams0, thread float4 uFilterParams1, thread float4 uFilterParams2, thread texture2d<float> uColorTexture1, thread const sampler uColorTexture1Smplr, thread float2& vColorTexCoord1, thread texture2d<float> uDestTexture, thread const sampler uDestTextureSmplr, thread float2 uDestTextureSize, thread float4& gl_FragCoord, thread float4& oFragColor)
 {
     int maskCtrl0 = (ctrl >> 0) & 3;
     int maskCtrl1 = (ctrl >> 2) & 3;
@@ -519,20 +553,23 @@ void calculateColor(thread const int& ctrl, thread texture2d<float> uMaskTexture
         float2 param_12 = vColorTexCoord1;
         color *= sampleColor(uColorTexture1, uColorTexture1Smplr, param_12);
     }
-    color *= float4(maskAlpha);
+    color.w *= maskAlpha;
     int compositeOp = (ctrl >> 7) & 31;
     float4 param_13 = color;
     float2 param_14 = uDestTextureSize;
     float2 param_15 = gl_FragCoord.xy;
     int param_16 = compositeOp;
-    oFragColor = composite(param_13, uDestTexture, uDestTextureSmplr, param_14, param_15, param_16);
+    color = composite(param_13, uDestTexture, uDestTextureSmplr, param_14, param_15, param_16);
+    float3 _1210 = color.xyz * color.w;
+    color = float4(_1210.x, _1210.y, _1210.z, color.w);
+    oFragColor = color;
 }
 
 fragment main0_out main0(main0_in in [[stage_in]], constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[buffer(0)]], float4 gl_FragCoord [[position]])
 {
     main0_out out = {};
     int param = (*spvDescriptorSet0.uCtrl);
-    calculateColor(param, spvDescriptorSet0.uMaskTexture0, spvDescriptorSet0.uMaskTexture0Smplr, in.vMaskTexCoord0, spvDescriptorSet0.uMaskTexture1, spvDescriptorSet0.uMaskTexture1Smplr, in.vMaskTexCoord1, in.vColorTexCoord0, spvDescriptorSet0.uColorTexture0, spvDescriptorSet0.uColorTexture0Smplr, spvDescriptorSet0.uGammaLUT, spvDescriptorSet0.uGammaLUTSmplr, (*spvDescriptorSet0.uColorTexture0Size), (*spvDescriptorSet0.uFilterParams0), (*spvDescriptorSet0.uFilterParams1), (*spvDescriptorSet0.uFilterParams2), spvDescriptorSet0.uColorTexture1, spvDescriptorSet0.uColorTexture1Smplr, in.vColorTexCoord1, out.oFragColor, spvDescriptorSet0.uDestTexture, spvDescriptorSet0.uDestTextureSmplr, (*spvDescriptorSet0.uDestTextureSize), gl_FragCoord);
+    calculateColor(param, spvDescriptorSet0.uMaskTexture0, spvDescriptorSet0.uMaskTexture0Smplr, in.vMaskTexCoord0, spvDescriptorSet0.uMaskTexture1, spvDescriptorSet0.uMaskTexture1Smplr, in.vMaskTexCoord1, in.vColorTexCoord0, spvDescriptorSet0.uColorTexture0, spvDescriptorSet0.uColorTexture0Smplr, spvDescriptorSet0.uGammaLUT, spvDescriptorSet0.uGammaLUTSmplr, (*spvDescriptorSet0.uColorTexture0Size), (*spvDescriptorSet0.uFilterParams0), (*spvDescriptorSet0.uFilterParams1), (*spvDescriptorSet0.uFilterParams2), spvDescriptorSet0.uColorTexture1, spvDescriptorSet0.uColorTexture1Smplr, in.vColorTexCoord1, spvDescriptorSet0.uDestTexture, spvDescriptorSet0.uDestTextureSmplr, (*spvDescriptorSet0.uDestTextureSize), gl_FragCoord, out.oFragColor);
     return out;
 }
 

@@ -183,6 +183,7 @@ impl<'a> Tiler<'a> {
 
                 // Next, if this is a solid tile that completely occludes the background, record
                 // that fact and stop here.
+                /*
                 if draw_tiling_path_info.paint_metadata.is_opaque &&
                         draw_tiling_path_info.blend_mode.occludes_backdrop() &&
                         draw_tiling_path_info.opacity == !0 {
@@ -192,6 +193,7 @@ impl<'a> Tiler<'a> {
                         .push(SolidTileInfo::new(tile_coords));
                     continue;
                 }
+                */
             }
 
             /*

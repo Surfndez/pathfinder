@@ -15,7 +15,7 @@ use crate::gpu_data::{Tile, TileBatch, TileBatchTexture, TileVertex};
 use crate::paint::{PaintId, PaintMetadata};
 use crate::tile_map::DenseTileMap;
 use crate::tiles;
-use pathfinder_content::effects::{BlendMode, CompositeOp, Effects, Filter};
+use pathfinder_content::effects::{BlendMode, Effects};
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{Vector2F, Vector2I};
 use vec_map::VecMap;
@@ -94,8 +94,8 @@ impl ZBuffer {
                         }),
                         color_texture_1: None,
                         tiles: vec![],
-                        effects: Effects::new(Filter::Composite(CompositeOp::SrcOver)),
-                        blend_mode: BlendMode::SrcOver,
+                        effects: Effects::default(),
+                        blend_mode: BlendMode::default(),
                         mask_0_fill_rule: None,
                     });
                 }

@@ -11,7 +11,7 @@
 //! Packs data onto the GPU.
 
 use crate::concurrent::executor::Executor;
-use crate::gpu::renderer::{BlendModeProgram, MASK_TILES_ACROSS, MASK_TILES_DOWN};
+use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
 use crate::gpu_data::{FillBatchPrimitive};
 use crate::gpu_data::{RenderCommand, TexturePageId};
 use crate::gpu_data::{Tile, TileBatch, TileBatchTexture, TileObjectPrimitive, TileVertex};
@@ -21,7 +21,7 @@ use crate::scene::{DisplayItem, Scene};
 use crate::tile_map::DenseTileMap;
 use crate::tiles::{self, DrawTilingPathInfo, TILE_HEIGHT, TILE_WIDTH, Tiler, TilingPathInfo};
 use crate::z_buffer::{DepthMetadata, ZBuffer};
-use pathfinder_content::effects::{BlendMode, CompositeOp, Effects, Filter};
+use pathfinder_content::effects::{BlendMode, Effects, Filter};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_geometry::line_segment::{LineSegment2F, LineSegmentU4, LineSegmentU8};
@@ -303,16 +303,13 @@ impl<'a> SceneBuilder<'a> {
                                 color_texture_0: Some(ref color_texture_0),
                                 blend_mode,
                                 color_texture_1: None,
-                                effects: Effects {
-                                    filter: Filter::Composite(CompositeOp::SrcOver),
-                                },
+                                effects: Effects { filter: Filter::None },
                                 mask_0_fill_rule: fill_rule
                             })) if color_texture_0.page == built_draw_path.color_texture_page &&
                                 blend_mode == built_draw_path.blend_mode &&
                                 color_texture_0.sampling_flags == built_draw_path.sampling_flags &&
                                 fill_rule == Some(built_draw_path.fill_rule) &&
-                                !BlendModeProgram::from_blend_mode(
-                                    blend_mode).needs_readable_framebuffer() => {}
+                                !blend_mode.needs_readable_framebuffer() => {}
                             _ => {
                                 let batch = TileBatch {
                                     tiles: vec![],
@@ -322,13 +319,10 @@ impl<'a> SceneBuilder<'a> {
                                     }),
                                     blend_mode: built_draw_path.blend_mode,
                                     color_texture_1: None,
-                                    effects: Effects {
-                                        filter: Filter::Composite(CompositeOp::SrcOver),
-                                    },
+                                    effects: Effects::default(),
                                     mask_0_fill_rule: Some(built_draw_path.fill_rule),
                                 };
-                                culled_tiles.display_list
-                                            .push(CulledDisplayItem::DrawTiles(batch))
+                                culled_tiles.display_list.push(CulledDisplayItem::DrawTiles(batch))
                             }
                         }
 
@@ -447,8 +441,7 @@ impl<'a> SceneBuilder<'a> {
                     }
                     for path_index in start_index..end_index {
                         let blend_mode = self.scene.paths[path_index as usize].blend_mode();
-                        let blend_mode_program = BlendModeProgram::from_blend_mode(blend_mode);
-                        if blend_mode_program.needs_readable_framebuffer() {
+                        if blend_mode.needs_readable_framebuffer() {
                             return true;
                         }
                     }

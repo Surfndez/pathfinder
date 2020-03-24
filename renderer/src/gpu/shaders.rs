@@ -149,13 +149,15 @@ where
 
 pub struct TileVertexArray<D> where D: Device {
     pub vertex_array: D::VertexArray,
-    pub vertex_buffer: D::Buffer,
 }
 
 impl<D> TileVertexArray<D> where D: Device {
-    pub fn new(device: &D, tile_program: &TileProgram<D>, quads_vertex_indices_buffer: &D::Buffer)
+    pub fn new(device: &D,
+               tile_program: &TileProgram<D>,
+               tile_vertex_buffer: &D::Buffer,
+               quads_vertex_indices_buffer: &D::Buffer)
                -> TileVertexArray<D> {
-        let (vertex_array, vertex_buffer) = (device.create_vertex_array(), device.create_buffer());
+        let vertex_array = device.create_vertex_array();
 
         let tile_position_attr =
             device.get_vertex_attr(&tile_program.program, "TilePosition").unwrap();
@@ -170,7 +172,7 @@ impl<D> TileVertexArray<D> where D: Device {
         let mask_backdrop_attr =
             device.get_vertex_attr(&tile_program.program, "MaskBackdrop").unwrap();
 
-        device.bind_buffer(&vertex_array, &vertex_buffer, BufferTarget::Vertex);
+        device.bind_buffer(&vertex_array, tile_vertex_buffer, BufferTarget::Vertex);
         device.configure_vertex_attr(&vertex_array, &tile_position_attr, &VertexAttrDescriptor {
             size: 2,
             class: VertexAttrClass::Int,
@@ -231,10 +233,7 @@ impl<D> TileVertexArray<D> where D: Device {
         });
         device.bind_buffer(&vertex_array, quads_vertex_indices_buffer, BufferTarget::Index);
 
-        TileVertexArray {
-            vertex_array,
-            vertex_buffer,
-        }
+        TileVertexArray { vertex_array }
     }
 }
 
@@ -409,6 +408,7 @@ where
         SolidTileVertexArray { vertex_array }
     }
 }
+*/
 
 pub struct CopyTileVertexArray<D> where D: Device {
     pub vertex_array: D::VertexArray,
@@ -431,7 +431,7 @@ impl<D> CopyTileVertexArray<D> where D: Device {
             size: 2,
             class: VertexAttrClass::Int,
             attr_type: VertexAttrType::I16,
-            stride: ALPHA_TILE_VERTEX_SIZE,
+            stride: TILE_VERTEX_SIZE,
             offset: 0,
             divisor: 0,
             buffer_index: 0,
@@ -441,8 +441,6 @@ impl<D> CopyTileVertexArray<D> where D: Device {
         CopyTileVertexArray { vertex_array }
     }
 }
-
-*/
 
 pub struct BlitProgram<D> where D: Device {
     pub program: D::Program,
@@ -628,6 +626,7 @@ impl<D> AlphaTileProgram<D> where D: Device {
         }
     }
 }
+*/
 
 pub struct CopyTileProgram<D> where D: Device {
     pub program: D::Program,
@@ -654,6 +653,7 @@ impl<D> CopyTileProgram<D> where D: Device {
     }
 }
 
+/*
 pub struct AlphaTileBlendModeProgram<D> where D: Device {
     pub alpha_tile_program: AlphaTileProgram<D>,
     pub dest_uniform: D::Uniform,
