@@ -12,8 +12,7 @@
 
 use crate::concurrent::executor::Executor;
 use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
-use crate::gpu_data::{FillBatchPrimitive};
-use crate::gpu_data::{RenderCommand, TexturePageId};
+use crate::gpu_data::{FillBatchPrimitive, RenderCommand, TextureLocation, TexturePageId};
 use crate::gpu_data::{Tile, TileBatch, TileBatchTexture, TileObjectPrimitive, TileVertex};
 use crate::options::{PreparedBuildOptions, RenderCommandListener};
 use crate::paint::{PaintInfo, PaintMetadata, RenderTargetMetadata};
@@ -26,6 +25,7 @@ use pathfinder_content::fill::FillRule;
 use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_geometry::line_segment::{LineSegment2F, LineSegmentU4, LineSegmentU8};
 use pathfinder_geometry::rect::{RectF, RectI};
+use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::util;
 use pathfinder_geometry::vector::{Vector2F, Vector2I};
 use pathfinder_gpu::TextureSamplingFlags;
@@ -55,8 +55,10 @@ pub(crate) struct ObjectBuilder {
 struct BuiltDrawPath {
     path: BuiltPath,
     blend_mode: BlendMode,
-    sampling_flags: TextureSamplingFlags,
-    color_texture_page: TexturePageId,
+    color_texture_page_0: TexturePageId,
+    color_texture_page_1: TexturePageId,
+    sampling_flags_0: TextureSamplingFlags,
+    sampling_flags_1: TextureSamplingFlags,
     fill_rule: FillRule,
 }
 
@@ -114,6 +116,8 @@ impl<'a> SceneBuilder<'a> {
             render_commands,
             paint_metadata,
             render_target_metadata,
+            opacity_tile_page,
+            opacity_tile_transform,
         } = self.scene.build_paint_info();
         for render_command in render_commands {
             self.listener.send(render_command);
@@ -122,16 +126,27 @@ impl<'a> SceneBuilder<'a> {
         let effective_view_box = self.scene.effective_view_box(self.built_options);
 
         let built_clip_paths = executor.build_vector(clip_path_count, |path_index| {
-            self.build_clip_path(path_index, effective_view_box, &self.built_options, &self.scene)
+            self.build_clip_path(PathBuildParams {
+                path_index,
+                view_box: effective_view_box,
+                built_options: &self.built_options,
+                scene: &self.scene,
+            })
         });
 
         let built_draw_paths = executor.build_vector(draw_path_count, |path_index| {
-            self.build_draw_path(path_index,
-                                 effective_view_box,
-                                 &self.built_options,
-                                 &self.scene,
-                                 &paint_metadata,
-                                 &built_clip_paths)
+            self.build_draw_path(DrawPathBuildParams {
+                path_build_params: PathBuildParams {
+                    path_index,
+                    view_box: effective_view_box,
+                    built_options: &self.built_options,
+                    scene: &self.scene,
+                },
+                paint_metadata: &paint_metadata,
+                opacity_tile_page,
+                opacity_tile_transform,
+                built_clip_paths: &built_clip_paths
+            })
         });
 
         self.finish_building(&paint_metadata,
@@ -143,13 +158,8 @@ impl<'a> SceneBuilder<'a> {
         self.listener.send(RenderCommand::Finish { build_time });
     }
 
-    fn build_clip_path(
-        &self,
-        path_index: usize,
-        view_box: RectF,
-        built_options: &PreparedBuildOptions,
-        scene: &Scene,
-    ) -> BuiltPath {
+    fn build_clip_path(&self, params: PathBuildParams) -> BuiltPath {
+        let PathBuildParams { path_index, view_box, built_options, scene } = params;
         let path_object = &scene.clip_paths[path_index];
         let outline = scene.apply_render_options(path_object.outline(), built_options);
 
@@ -166,15 +176,15 @@ impl<'a> SceneBuilder<'a> {
         tiler.object_builder.built_path
     }
 
-    fn build_draw_path(
-        &self,
-        path_index: usize,
-        view_box: RectF,
-        built_options: &PreparedBuildOptions,
-        scene: &Scene,
-        paint_metadata: &[PaintMetadata],
-        built_clip_paths: &[BuiltPath],
-    ) -> BuiltDrawPath {
+    fn build_draw_path(&self, params: DrawPathBuildParams) -> BuiltDrawPath {
+        let DrawPathBuildParams {
+            path_build_params: PathBuildParams { path_index, view_box, built_options, scene },
+            paint_metadata,
+            opacity_tile_page,
+            opacity_tile_transform,
+            built_clip_paths,
+        } = params;
+
         let path_object = &scene.paths[path_index];
         let outline = scene.apply_render_options(path_object.outline(), built_options);
 
@@ -190,6 +200,8 @@ impl<'a> SceneBuilder<'a> {
                                    path_index as u16,
                                    TilingPathInfo::Draw(DrawTilingPathInfo {
             paint_metadata,
+            opacity_tile_page,
+            opacity_tile_transform,
             blend_mode: path_object.blend_mode(),
             opacity: path_object.opacity(),
             built_clip_path,
@@ -202,8 +214,11 @@ impl<'a> SceneBuilder<'a> {
         BuiltDrawPath {
             path: tiler.object_builder.built_path,
             blend_mode: path_object.blend_mode(),
-            color_texture_page: paint_metadata.location.page,
-            sampling_flags: paint_metadata.sampling_flags,
+            color_texture_page_0: paint_metadata.location.page,
+            sampling_flags_0: paint_metadata.sampling_flags,
+            color_texture_page_1: opacity_tile_page,
+            sampling_flags_1: TextureSamplingFlags::NEAREST_MIN |
+                TextureSamplingFlags::NEAREST_MAG,
             fill_rule: path_object.fill_rule(),
         }
     }
@@ -301,24 +316,31 @@ impl<'a> SceneBuilder<'a> {
                             Some(&CulledDisplayItem::DrawTiles(TileBatch {
                                 tiles: _,
                                 color_texture_0: Some(ref color_texture_0),
+                                color_texture_1: Some(ref color_texture_1),
                                 blend_mode,
-                                color_texture_1: None,
                                 effects: Effects { filter: Filter::None },
                                 mask_0_fill_rule: fill_rule
-                            })) if color_texture_0.page == built_draw_path.color_texture_page &&
+                            })) if color_texture_0.page == built_draw_path.color_texture_page_0 &&
+                                color_texture_0.sampling_flags ==
+                                    built_draw_path.sampling_flags_0 &&
+                                color_texture_1.page == built_draw_path.color_texture_page_1 &&
+                                color_texture_1.sampling_flags ==
+                                    built_draw_path.sampling_flags_1 &&
                                 blend_mode == built_draw_path.blend_mode &&
-                                color_texture_0.sampling_flags == built_draw_path.sampling_flags &&
                                 fill_rule == Some(built_draw_path.fill_rule) &&
                                 !blend_mode.needs_readable_framebuffer() => {}
                             _ => {
                                 let batch = TileBatch {
                                     tiles: vec![],
                                     color_texture_0: Some(TileBatchTexture {
-                                        page: built_draw_path.color_texture_page,
-                                        sampling_flags: built_draw_path.sampling_flags,
+                                        page: built_draw_path.color_texture_page_0,
+                                        sampling_flags: built_draw_path.sampling_flags_0,
+                                    }),
+                                    color_texture_1: Some(TileBatchTexture {
+                                        page: built_draw_path.color_texture_page_1,
+                                        sampling_flags: built_draw_path.sampling_flags_1,
                                     }),
                                     blend_mode: built_draw_path.blend_mode,
-                                    color_texture_1: None,
                                     effects: Effects::default(),
                                     mask_0_fill_rule: Some(built_draw_path.fill_rule),
                                 };
@@ -450,6 +472,21 @@ impl<'a> SceneBuilder<'a> {
         }
         false
     }
+}
+
+struct PathBuildParams<'a> {
+    path_index: usize,
+    view_box: RectF,
+    built_options: &'a PreparedBuildOptions,
+    scene: &'a Scene,
+}
+
+struct DrawPathBuildParams<'a> {
+    path_build_params: PathBuildParams<'a>,
+    paint_metadata: &'a [PaintMetadata],
+    opacity_tile_page: TexturePageId,
+    opacity_tile_transform: Transform2F,
+    built_clip_paths: &'a [BuiltPath],
 }
 
 impl BuiltPath {
@@ -779,16 +816,17 @@ impl TileVertex {
                  -> TileVertex {
         // TODO(pcwalton): Opacity.
         let tile_position = tile_origin + tile_offset;
-        let color_uv = draw_tiling_path_info.paint_metadata.calculate_tex_coords(tile_position);
+        let color_0_uv = draw_tiling_path_info.paint_metadata.calculate_tex_coords(tile_position);
+        let color_1_uv = calculate_opacity_uv(draw_tiling_path_info);
         let mask_0_uv = calculate_mask_uv(draw_tile_index, tile_offset);
         let mask_1_uv = calculate_mask_uv(clip_tile_index, tile_offset);
         TileVertex {
             tile_x: tile_position.x() as i16,
             tile_y: tile_position.y() as i16,
-            color_0_u: color_uv.x(),
-            color_0_v: color_uv.y(),
-            color_1_u: 0.0,
-            color_1_v: 0.0,
+            color_0_u: color_0_uv.x(),
+            color_0_v: color_0_uv.y(),
+            color_1_u: color_1_uv.x(),
+            color_1_v: color_1_uv.y(),
             mask_0_u: mask_0_uv.x(),
             mask_0_v: mask_0_uv.y(),
             mask_1_u: mask_1_uv.x(),
@@ -809,6 +847,13 @@ fn calculate_mask_uv(tile_index: u16, tile_offset: Vector2I) -> Vector2F {
     let mask_v = tile_index as i32 / MASK_TILES_ACROSS as i32;
     let scale = Vector2F::new(1.0 / MASK_TILES_ACROSS as f32, 1.0 / MASK_TILES_DOWN as f32);
     (Vector2I::new(mask_u, mask_v) + tile_offset).to_f32().scale_xy(scale)
+}
+
+fn calculate_opacity_uv(draw_tiling_path_info: &DrawTilingPathInfo) -> Vector2F {
+    let DrawTilingPathInfo { opacity_tile_transform, opacity, .. } = *draw_tiling_path_info;
+    let texel_coord = (Vector2I::new((opacity % 16) as i32, (opacity / 16) as i32).to_f32() +
+                       Vector2F::splat(0.5)).scale(1.0 / 16.0);
+    opacity_tile_transform * texel_coord
 }
 
 /*

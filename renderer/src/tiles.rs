@@ -8,8 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::builder::{BuiltPath, ObjectBuilder, SceneBuilder, SolidTileInfo};
-use crate::gpu_data::TileObjectPrimitive;
+use crate::builder::{BuiltPath, ObjectBuilder, SceneBuilder};
+use crate::gpu_data::{TextureLocation, TexturePageId, TileObjectPrimitive};
 use crate::paint::PaintMetadata;
 use pathfinder_content::effects::BlendMode;
 use pathfinder_content::fill::FillRule;
@@ -18,6 +18,7 @@ use pathfinder_content::segment::Segment;
 use pathfinder_content::sorted_vector::SortedVector;
 use pathfinder_geometry::line_segment::LineSegment2F;
 use pathfinder_geometry::rect::{RectF, RectI};
+use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::{Vector2F, Vector2I};
 use std::cmp::Ordering;
 use std::mem;
@@ -49,6 +50,8 @@ pub(crate) enum TilingPathInfo<'a> {
 #[derive(Clone, Copy)]
 pub(crate) struct DrawTilingPathInfo<'a> {
     pub(crate) paint_metadata: &'a PaintMetadata,
+    pub(crate) opacity_tile_page: TexturePageId,
+    pub(crate) opacity_tile_transform: Transform2F,
     pub(crate) blend_mode: BlendMode,
     pub(crate) opacity: u8,
     pub(crate) built_clip_path: Option<&'a BuiltPath>,

@@ -738,7 +738,7 @@ where
 
         let draw_viewport = self.draw_viewport();
 
-        let mut ctrl = COMBINER_CTRL_COMPOSITE_SRC_OVER << COMBINER_CTRL_COMPOSITE_SHIFT;
+        let mut ctrl = 0;
         match mask_0_fill_rule {
             None => {}
             Some(FillRule::Winding) => {
@@ -782,6 +782,7 @@ where
             uniforms.push((&self.tile_program.color_texture_1_uniform,
                            UniformData::TextureUnit(textures.len() as u32)));
             textures.push(color_texture_page);
+            ctrl |= COMBINER_CTRL_COLOR_1_MULTIPLY_MASK << COMBINER_CTRL_COLOR_1_MULTIPLY_SHIFT;
         }
 
         /*
