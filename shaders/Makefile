@@ -22,26 +22,11 @@ SHADERS=\
 	stencil.vs.glsl \
 	tile.fs.glsl \
 	tile.vs.glsl \
-	tile_alpha.fs.glsl \
-	tile_alpha.vs.glsl \
-	tile_alpha_difference.fs.glsl \
-	tile_alpha_dodgeburn.fs.glsl \
-	tile_alpha_exclusion.fs.glsl \
-	tile_alpha_hsl.fs.glsl \
-	tile_alpha_overlay.fs.glsl \
-	tile_alpha_softlight.fs.glsl \
 	tile_copy.fs.glsl \
 	tile_copy.vs.glsl \
-	tile_solid.fs.glsl \
-	tile_solid.vs.glsl \
-	tile_solid_filter_blur.fs.glsl \
-	tile_solid_filter_text.fs.glsl \
 	$(EMPTY)
 
 INCLUDES=\
-	tile_alpha_sample.inc.glsl \
-	tile_solid_filter_text_convolve.inc.glsl \
-	tile_solid_filter_text_gamma_correct.inc.glsl \
 	$(EMPTY)
 
 OUT=\
