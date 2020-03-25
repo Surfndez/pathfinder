@@ -12,8 +12,8 @@
 
 use crate::concurrent::executor::Executor;
 use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
-use crate::gpu_data::{FillBatchPrimitive, RenderCommand, TextureLocation, TexturePageId};
-use crate::gpu_data::{Tile, TileBatch, TileBatchTexture, TileObjectPrimitive, TileVertex};
+use crate::gpu_data::{FillBatchPrimitive, RenderCommand, TexturePageId, Tile, TileBatch};
+use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive, TileVertex};
 use crate::options::{PreparedBuildOptions, RenderCommandListener};
 use crate::paint::{PaintInfo, PaintMetadata, RenderTargetMetadata};
 use crate::scene::{DisplayItem, Scene};
@@ -39,7 +39,6 @@ pub(crate) struct SceneBuilder<'a> {
     built_options: &'a PreparedBuildOptions,
 
     next_alpha_tile_index: AtomicUsize,
-    next_mask_tile_index: AtomicUsize,
 
     pub(crate) listener: Box<dyn RenderCommandListener>,
 }
@@ -59,20 +58,27 @@ struct BuiltDrawPath {
     color_texture_page_1: TexturePageId,
     sampling_flags_0: TextureSamplingFlags,
     sampling_flags_1: TextureSamplingFlags,
-    fill_rule: FillRule,
+    mask_0_fill_rule: FillRule,
+    mask_1_fill_rule: Option<FillRule>,
 }
 
 #[derive(Debug)]
 pub(crate) struct BuiltPath {
-    //pub mask_tiles: Vec<MaskTile>,
-    pub alpha_tiles: Vec<Tile>,
-    pub solid_tiles: Vec<SolidTileInfo>,
+    pub mask_0_tiles: Vec<Tile>,
+    pub masks_0_1_tiles: Vec<Tile>,
+    pub solid_tiles: SolidTiles,
     pub tiles: DenseTileMap<TileObjectPrimitive>,
     pub fill_rule: FillRule,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum SolidTiles {
+    Occluders(Vec<Occluder>),
+    Regular(Vec<Tile>),
+}
+
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct SolidTileInfo {
+pub(crate) struct Occluder {
     pub(crate) coords: Vector2I,
 }
 
@@ -85,10 +91,7 @@ impl<'a> SceneBuilder<'a> {
         SceneBuilder {
             scene,
             built_options,
-
             next_alpha_tile_index: AtomicUsize::new(0),
-            next_mask_tile_index: AtomicUsize::new(0),
-
             listener,
         }
     }
@@ -217,9 +220,9 @@ impl<'a> SceneBuilder<'a> {
             color_texture_page_0: paint_metadata.location.page,
             sampling_flags_0: paint_metadata.sampling_flags,
             color_texture_page_1: opacity_tile_page,
-            sampling_flags_1: TextureSamplingFlags::NEAREST_MIN |
-                TextureSamplingFlags::NEAREST_MAG,
-            fill_rule: path_object.fill_rule(),
+            sampling_flags_1: TextureSamplingFlags::empty(),
+            mask_0_fill_rule: path_object.fill_rule(),
+            mask_1_fill_rule: built_clip_path.map(|_| FillRule::Winding),
         }
     }
 
@@ -293,6 +296,7 @@ impl<'a> SceneBuilder<'a> {
                         effects,
                         blend_mode: BlendMode::SrcOver,
                         mask_0_fill_rule: None,
+                        mask_1_fill_rule: None,
                     };
                     culled_tiles.display_list.push(CulledDisplayItem::DrawTiles(batch));
                     current_depth += 1;
@@ -304,69 +308,51 @@ impl<'a> SceneBuilder<'a> {
                 } => {
                     for draw_path_index in start_draw_path_index..end_draw_path_index {
                         let built_draw_path = &built_draw_paths[draw_path_index as usize];
-
-                        // Create a new `DrawAlphaTiles` display item if we don't have one or if we
-                        // have to break a batch due to blend mode or paint page. Note that every
-                        // path with a blend mode that requires a readable framebuffer needs its
-                        // own batch.
-                        //
-                        // TODO(pcwalton): If we really wanted to, we could use tile maps to avoid
-                        // batch breaks in some cases…
-                        match culled_tiles.display_list.last() {
-                            Some(&CulledDisplayItem::DrawTiles(TileBatch {
-                                tiles: _,
-                                color_texture_0: Some(ref color_texture_0),
-                                color_texture_1: Some(ref color_texture_1),
-                                blend_mode,
-                                effects: Effects { filter: Filter::None },
-                                mask_0_fill_rule: fill_rule
-                            })) if color_texture_0.page == built_draw_path.color_texture_page_0 &&
-                                color_texture_0.sampling_flags ==
-                                    built_draw_path.sampling_flags_0 &&
-                                color_texture_1.page == built_draw_path.color_texture_page_1 &&
-                                color_texture_1.sampling_flags ==
-                                    built_draw_path.sampling_flags_1 &&
-                                blend_mode == built_draw_path.blend_mode &&
-                                fill_rule == Some(built_draw_path.fill_rule) &&
-                                !blend_mode.needs_readable_framebuffer() => {}
-                            _ => {
-                                let batch = TileBatch {
-                                    tiles: vec![],
-                                    color_texture_0: Some(TileBatchTexture {
-                                        page: built_draw_path.color_texture_page_0,
-                                        sampling_flags: built_draw_path.sampling_flags_0,
-                                    }),
-                                    color_texture_1: Some(TileBatchTexture {
-                                        page: built_draw_path.color_texture_page_1,
-                                        sampling_flags: built_draw_path.sampling_flags_1,
-                                    }),
-                                    blend_mode: built_draw_path.blend_mode,
-                                    effects: Effects::default(),
-                                    mask_0_fill_rule: Some(built_draw_path.fill_rule),
-                                };
-                                culled_tiles.display_list.push(CulledDisplayItem::DrawTiles(batch))
-                            }
-                        }
-
-                        // Fetch the destination alpha tiles buffer.
-                        let culled_alpha_tiles = match *culled_tiles.display_list
-                                                                    .last_mut()
-                                                                    .unwrap() {
-                            CulledDisplayItem::DrawTiles(TileBatch {
-                                tiles: ref mut culled_alpha_tiles,
-                                ..
-                            }) => culled_alpha_tiles,
-                            _ => unreachable!(),
-                        };
-
                         let layer_z_buffer = layer_z_buffers_stack.last().unwrap();
-                        for alpha_tile in &built_draw_path.path.alpha_tiles {
-                            let alpha_tile_coords = alpha_tile.upper_left.tile_position();
-                            if layer_z_buffer.test(alpha_tile_coords, current_depth) {
-                                culled_alpha_tiles.push(*alpha_tile);
-                            }
+                        let color_texture_0 = Some(TileBatchTexture {
+                            page: built_draw_path.color_texture_page_0,
+                            sampling_flags: built_draw_path.sampling_flags_0,
+                        });
+                        let color_texture_1 = Some(TileBatchTexture {
+                            page: built_draw_path.color_texture_page_1,
+                            sampling_flags: built_draw_path.sampling_flags_1,
+                        });
+                        self.add_alpha_tiles(&mut culled_tiles,
+                                             layer_z_buffer,
+                                             &built_draw_path.path.mask_0_tiles,
+                                             current_depth,
+                                             color_texture_0,
+                                             color_texture_1,
+                                             built_draw_path.blend_mode,
+                                             Some(built_draw_path.mask_0_fill_rule),
+                                             None);
+                        if let Some(mask_1_fill_rule) = built_draw_path.mask_1_fill_rule {
+                            self.add_alpha_tiles(&mut culled_tiles,
+                                                 layer_z_buffer,
+                                                 &built_draw_path.path.masks_0_1_tiles,
+                                                 current_depth,
+                                                 color_texture_0,
+                                                 color_texture_1,
+                                                 built_draw_path.blend_mode,
+                                                 Some(built_draw_path.mask_0_fill_rule),
+                                                 Some(mask_1_fill_rule));
                         }
-
+                        match built_draw_path.path.solid_tiles {
+                            SolidTiles::Regular(ref tiles) => {
+                                self.add_alpha_tiles(&mut culled_tiles,
+                                                     layer_z_buffer,
+                                                     tiles,
+                                                     current_depth,
+                                                     color_texture_0,
+                                                     color_texture_1,
+                                                     built_draw_path.blend_mode,
+                                                     None,
+                                                     built_draw_path.mask_1_fill_rule);
+                            }
+                            SolidTiles::Occluders(_) => {}
+                        }
+                        // TODO(pcwalton): Add empty tiles for destructive composite ops if
+                        // necessary too.
                         current_depth += 1;
                     }
                 }
@@ -380,7 +366,7 @@ impl<'a> SceneBuilder<'a> {
         let effective_view_box = self.scene.effective_view_box(self.built_options);
         let mut z_buffers = vec![ZBuffer::new(effective_view_box)];
         let mut z_buffer_index_stack = vec![0];
-        let mut current_depth = 0;
+        let mut current_depth = 1;
 
         // Create Z-buffers.
         for display_item in &self.scene.display_list {
@@ -397,11 +383,17 @@ impl<'a> SceneBuilder<'a> {
                     let z_buffer = &mut z_buffers[*z_buffer_index_stack.last().unwrap()];
                     for (path_subindex, built_draw_path) in
                             built_draw_paths[start_index..end_index].iter().enumerate() {
-                        let solid_tiles = &built_draw_path.path.solid_tiles;
                         let path_index = (path_subindex + start_index) as u32;
                         let path = &self.scene.paths[path_index as usize];
                         let metadata = DepthMetadata { paint_id: path.paint() };
-                        z_buffer.update(solid_tiles, current_depth, metadata);
+                        match built_draw_path.path.solid_tiles {
+                            SolidTiles::Regular(_) => {
+                                z_buffer.update(&[], current_depth, metadata);
+                            }
+                            SolidTiles::Occluders(ref occluders) => {
+                                z_buffer.update(occluders, current_depth, metadata);
+                            }
+                        }
                         current_depth += 1;
                     }
                 }
@@ -414,6 +406,72 @@ impl<'a> SceneBuilder<'a> {
         debug_assert_eq!(z_buffer_index_stack.len(), 1);
 
         z_buffers
+    }
+
+    fn add_alpha_tiles(&self,
+                       culled_tiles: &mut CulledTiles,
+                       layer_z_buffer: &ZBuffer,
+                       alpha_tiles: &[Tile],
+                       current_depth: u32,
+                       color_texture_0: Option<TileBatchTexture>,
+                       color_texture_1: Option<TileBatchTexture>,
+                       blend_mode: BlendMode,
+                       mask_0_fill_rule: Option<FillRule>,
+                       mask_1_fill_rule: Option<FillRule>) {
+        if alpha_tiles.is_empty() {
+            return;
+        }
+
+        // Create a new `DrawAlphaTiles` display item if we don't have one or if we
+        // have to break a batch due to blend mode or paint page. Note that every
+        // path with a blend mode that requires a readable framebuffer needs its
+        // own batch.
+        //
+        // TODO(pcwalton): If we really wanted to, we could use tile maps to avoid
+        // batch breaks in some cases…
+        match culled_tiles.display_list.last() {
+            Some(&CulledDisplayItem::DrawTiles(TileBatch {
+                tiles: _,
+                color_texture_0: ref batch_color_texture_0,
+                color_texture_1: ref batch_color_texture_1,
+                blend_mode: batch_blend_mode,
+                effects: Effects { filter: Filter::None },
+                mask_0_fill_rule: batch_mask_0_fill_rule,
+                mask_1_fill_rule: batch_mask_1_fill_rule,
+            })) if *batch_color_texture_0 == color_texture_0 &&
+                *batch_color_texture_1 == color_texture_1 &&
+                batch_blend_mode == blend_mode &&
+                batch_mask_0_fill_rule == mask_0_fill_rule &&
+                batch_mask_1_fill_rule == mask_1_fill_rule &&
+                !batch_blend_mode.needs_readable_framebuffer() => {}
+            _ => {
+                let batch = TileBatch {
+                    tiles: vec![],
+                    color_texture_0,
+                    color_texture_1,
+                    blend_mode,
+                    effects: Effects::default(),
+                    mask_0_fill_rule,
+                    mask_1_fill_rule,
+                };
+                culled_tiles.display_list.push(CulledDisplayItem::DrawTiles(batch))
+            }
+        }
+
+        // Fetch the destination alpha tiles buffer.
+        let culled_alpha_tiles = match *culled_tiles.display_list.last_mut().unwrap() {
+            CulledDisplayItem::DrawTiles(TileBatch { tiles: ref mut culled_alpha_tiles, .. }) => {
+                culled_alpha_tiles
+            }
+            _ => unreachable!(),
+        };
+
+        for alpha_tile in alpha_tiles {
+            let alpha_tile_coords = alpha_tile.upper_left.tile_position();
+            if layer_z_buffer.test(alpha_tile_coords, current_depth) {
+                culled_alpha_tiles.push(*alpha_tile);
+            }
+        }
     }
 
     fn pack_tiles(&mut self, culled_tiles: CulledTiles) {
@@ -443,11 +501,6 @@ impl<'a> SceneBuilder<'a> {
                                            built_clip_paths,
                                            built_draw_paths);
         self.pack_tiles(culled_tiles);
-    }
-
-    pub(crate) fn allocate_mask_tile_index(&self) -> u16 {
-        // FIXME(pcwalton): Check for overflow!
-        self.next_mask_tile_index.fetch_add(1, Ordering::Relaxed) as u16
     }
 
     fn needs_readable_framebuffer(&self) -> bool {
@@ -490,20 +543,34 @@ struct DrawPathBuildParams<'a> {
 }
 
 impl BuiltPath {
-    fn new(bounds: RectF, fill_rule: FillRule) -> BuiltPath {
+    fn new(bounds: RectF, fill_rule: FillRule, tiling_path_info: &TilingPathInfo) -> BuiltPath {
+        let occludes = match *tiling_path_info {
+            TilingPathInfo::Draw(ref draw_tiling_path_info) => {
+                draw_tiling_path_info.paint_metadata.is_opaque &&
+                    draw_tiling_path_info.blend_mode.occludes_backdrop() &&
+                    draw_tiling_path_info.opacity == !0
+            }
+            TilingPathInfo::Clip => true,
+        };
+
         BuiltPath {
-            alpha_tiles: vec![],
-            solid_tiles: vec![],
+            mask_0_tiles: vec![],
+            masks_0_1_tiles: vec![],
             tiles: DenseTileMap::new(tiles::round_rect_out_to_tile_bounds(bounds)),
+            solid_tiles: if occludes {
+                SolidTiles::Occluders(vec![])
+            } else {
+                SolidTiles::Regular(vec![])
+            },
             fill_rule,
         }
     }
 }
 
-impl SolidTileInfo {
+impl Occluder {
     #[inline]
-    pub(crate) fn new(coords: Vector2I) -> SolidTileInfo {
-        SolidTileInfo { coords }
+    pub(crate) fn new(coords: Vector2I) -> Occluder {
+        Occluder { coords }
     }
 }
 
@@ -526,8 +593,13 @@ pub struct TileStats {
 // Utilities for built objects
 
 impl ObjectBuilder {
-    pub(crate) fn new(bounds: RectF, fill_rule: FillRule) -> ObjectBuilder {
-        ObjectBuilder { built_path: BuiltPath::new(bounds, fill_rule), bounds, fills: vec![] }
+    pub(crate) fn new(bounds: RectF, fill_rule: FillRule, tiling_path_info: &TilingPathInfo)
+                      -> ObjectBuilder {
+        ObjectBuilder {
+            built_path: BuiltPath::new(bounds, fill_rule, tiling_path_info),
+            bounds,
+            fills: vec![],
+        }
     }
 
     #[inline]

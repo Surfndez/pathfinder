@@ -336,6 +336,7 @@ where
                                 batch.color_texture_0,
                                 batch.color_texture_1,
                                 batch.mask_0_fill_rule,
+                                batch.mask_1_fill_rule,
                                 batch.blend_mode,
                                 batch.effects)
             }
@@ -725,6 +726,7 @@ where
                   color_texture_0: Option<TileBatchTexture>,
                   color_texture_1: Option<TileBatchTexture>,
                   mask_0_fill_rule: Option<FillRule>,
+                  mask_1_fill_rule: Option<FillRule>,
                   blend_mode: BlendMode,
                   effects: Effects) {
         // TODO(pcwalton): Disable blend for solid tiles.
@@ -739,13 +741,14 @@ where
         let draw_viewport = self.draw_viewport();
 
         let mut ctrl = 0;
-        match mask_0_fill_rule {
-            None => {}
-            Some(FillRule::Winding) => {
-                ctrl |= COMBINER_CTRL_MASK_WINDING << COMBINER_CTRL_MASK_0_SHIFT
-            }
-            Some(FillRule::EvenOdd) => {
-                ctrl |= COMBINER_CTRL_MASK_EVEN_ODD << COMBINER_CTRL_MASK_0_SHIFT
+        for &(fill_rule, shift) in &[
+            (mask_0_fill_rule, COMBINER_CTRL_MASK_0_SHIFT),
+            (mask_1_fill_rule, COMBINER_CTRL_MASK_1_SHIFT),
+        ] {
+            match fill_rule {
+                None => {}
+                Some(FillRule::Winding) => ctrl |= COMBINER_CTRL_MASK_WINDING << shift,
+                Some(FillRule::EvenOdd) => ctrl |= COMBINER_CTRL_MASK_EVEN_ODD << shift,
             }
         }
 
@@ -759,6 +762,11 @@ where
 
         if mask_0_fill_rule.is_some() {
             uniforms.push((&self.tile_program.mask_texture_0_uniform,
+                           UniformData::TextureUnit(textures.len() as u32)));
+            textures.push(self.device.framebuffer_texture(&self.fill_framebuffer));
+        }
+        if mask_1_fill_rule.is_some() {
+            uniforms.push((&self.tile_program.mask_texture_1_uniform,
                            UniformData::TextureUnit(textures.len() as u32)));
             textures.push(self.device.framebuffer_texture(&self.fill_framebuffer));
         }

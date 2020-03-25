@@ -10,7 +10,7 @@
 
 //! Software occlusion culling.
 
-use crate::builder::SolidTileInfo;
+use crate::builder::Occluder;
 use crate::gpu_data::{Tile, TileBatch, TileBatchTexture, TileVertex};
 use crate::paint::{PaintId, PaintMetadata};
 use crate::tile_map::DenseTileMap;
@@ -48,7 +48,7 @@ impl ZBuffer {
     }
 
     pub(crate) fn update(&mut self,
-                         solid_tiles: &[SolidTileInfo],
+                         solid_tiles: &[Occluder],
                          depth: u32,
                          metadata: DepthMetadata) {
         self.depth_metadata.insert(depth as usize, metadata);
@@ -97,6 +97,7 @@ impl ZBuffer {
                         effects: Effects::default(),
                         blend_mode: BlendMode::default(),
                         mask_0_fill_rule: None,
+                        mask_1_fill_rule: None,
                     });
                 }
             }

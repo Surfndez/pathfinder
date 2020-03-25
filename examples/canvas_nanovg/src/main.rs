@@ -73,6 +73,7 @@ fn render_demo(canvas: &mut CanvasRenderingContext2D,
     draw_caps(canvas, RectF::new(Vector2F::new(10.0, 300.0), Vector2F::new(30.0, 40.0)));
     draw_clip(canvas, Vector2F::new(50.0, window_size.y() - 80.0), time);
 
+    /*
     canvas.save();
     canvas.set_global_alpha(0.67);
     canvas.set_fill_style(FillStyle::Color(ColorU::new(0xff, 0xdc, 0x01, 0xff)));
@@ -81,6 +82,7 @@ fn render_demo(canvas: &mut CanvasRenderingContext2D,
     //canvas.set_global_composite_operation(CompositeOperation::Exclusion);
     canvas.fill_rect(RectF::new(Vector2F::splat(200.0), Vector2F::splat(200.0)));
     canvas.restore();
+    */
 }
 
 fn draw_eyes(canvas: &mut CanvasRenderingContext2D,

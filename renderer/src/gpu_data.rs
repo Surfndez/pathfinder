@@ -120,11 +120,12 @@ pub struct TileBatch {
     pub color_texture_0: Option<TileBatchTexture>,
     pub color_texture_1: Option<TileBatchTexture>,
     pub mask_0_fill_rule: Option<FillRule>,
+    pub mask_1_fill_rule: Option<FillRule>,
     pub blend_mode: BlendMode,
     pub effects: Effects,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TileBatchTexture {
     pub page: TexturePageId,
     pub sampling_flags: TextureSamplingFlags,

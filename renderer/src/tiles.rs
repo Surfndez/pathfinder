@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::builder::{BuiltPath, ObjectBuilder, SceneBuilder};
+use crate::builder::{BuiltPath, ObjectBuilder, Occluder, SceneBuilder, SolidTiles};
 use crate::gpu_data::{TextureLocation, TexturePageId, TileObjectPrimitive};
 use crate::paint::PaintMetadata;
 use pathfinder_content::effects::BlendMode;
@@ -71,7 +71,7 @@ impl<'a> Tiler<'a> {
             .bounds()
             .intersection(view_box)
             .unwrap_or(RectF::default());
-        let object_builder = ObjectBuilder::new(bounds, fill_rule);
+        let object_builder = ObjectBuilder::new(bounds, fill_rule, &path_info);
 
         Tiler {
             scene_builder,
@@ -173,31 +173,60 @@ impl<'a> Tiler<'a> {
                 }
             };
 
-            if clip_tile.is_none() && draw_tile.is_solid() {
-                // This is the simple case of a solid tile with no clip, so there are optimization
-                // opportunities. First, tiles that must be blank per the fill rule are always
-                // skipped.
-                match (self.object_builder.built_path.fill_rule, draw_tile.backdrop) {
-                    (FillRule::Winding, 0) => continue,
-                    (FillRule::Winding, _) => {}
-                    (FillRule::EvenOdd, backdrop) if backdrop % 2 == 0 => continue,
-                    (FillRule::EvenOdd, _) => {}
-                }
+            if clip_tile.is_none() {
+                if draw_tile.is_solid() {
+                    // This is the simple case of a solid tile with no clip, so there are optimization
+                    // opportunities. First, tiles that must be blank per the fill rule are always
+                    // skipped.
+                    match (self.object_builder.built_path.fill_rule, draw_tile.backdrop) {
+                        (FillRule::Winding, 0) => continue,
+                        (FillRule::Winding, _) => {}
+                        (FillRule::EvenOdd, backdrop) if backdrop % 2 == 0 => continue,
+                        (FillRule::EvenOdd, _) => {}
+                    }
 
-                // Next, if this is a solid tile that completely occludes the background, record
-                // that fact and stop here.
-                /*
-                if draw_tiling_path_info.paint_metadata.is_opaque &&
-                        draw_tiling_path_info.blend_mode.occludes_backdrop() &&
-                        draw_tiling_path_info.opacity == !0 {
-                    self.object_builder
-                        .built_path
-                        .solid_tiles
-                        .push(SolidTileInfo::new(tile_coords));
-                    continue;
+                    // Next, if this is a solid tile that completely occludes the background, record
+                    // that fact. Otherwise, add a regular solid tile.
+                    match self.object_builder.built_path.solid_tiles {
+                        SolidTiles::Occluders(ref mut occluders) => {
+                            occluders.push(Occluder::new(tile_coords));
+                        }
+                        SolidTiles::Regular(ref mut solid_tiles) => {
+                            ObjectBuilder::push_alpha_tile(solid_tiles,
+                                                           draw_tile,
+                                                        clip_tile,
+                                                        tile_coords,
+                                                        &draw_tiling_path_info);
+                        }
+                    }
+                } else {
+                    ObjectBuilder::push_alpha_tile(&mut self.object_builder
+                                                            .built_path
+                                                            .mask_0_tiles,
+                                                   draw_tile,
+                                                   clip_tile,
+                                                   tile_coords,
+                                                   &draw_tiling_path_info);
                 }
-                */
+            } else {
+                ObjectBuilder::push_alpha_tile(&mut self.object_builder.built_path.masks_0_1_tiles,
+                                               draw_tile,
+                                               clip_tile,
+                                               tile_coords,
+                                               &draw_tiling_path_info);
             }
+
+                    /*
+                    if draw_tiling_path_info.paint_metadata.is_opaque &&
+                            draw_tiling_path_info.blend_mode.occludes_backdrop() &&
+                            draw_tiling_path_info.opacity == !0 {
+                        self.object_builder
+                            .built_path
+                            .solid_tiles
+                            .push(SolidTileInfo::new(tile_coords));
+                        continue;
+                    }
+                    */
 
             /*
             // Allocate a mask tile.
@@ -217,14 +246,6 @@ impl<'a> Tiler<'a> {
                                           mask_tile_index,
                                           self.object_index);
             */
-
-            // Add the primitive to draw the mask.
-            ObjectBuilder::push_alpha_tile(&mut self.object_builder.built_path.alpha_tiles,
-                                           draw_tile,
-                                           clip_tile,
-                                           tile_coords,
-                                           &draw_tiling_path_info);
-
         }
     }
 

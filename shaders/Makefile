@@ -13,9 +13,6 @@ SHADERS=\
 	demo_ground.vs.glsl \
 	fill.fs.glsl \
 	fill.vs.glsl \
-	mask.vs.glsl \
-	mask_evenodd.fs.glsl \
-	mask_winding.fs.glsl \
 	reproject.fs.glsl \
 	reproject.vs.glsl \
 	stencil.fs.glsl \
