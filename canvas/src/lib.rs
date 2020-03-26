@@ -650,6 +650,7 @@ pub enum CompositeOperation {
 impl CompositeOperation {
     fn to_blend_mode(self) -> BlendMode {
         match self {
+            CompositeOperation::Copy => BlendMode::Copy,
             CompositeOperation::SourceAtop => BlendMode::SrcAtop,
             CompositeOperation::DestinationOver => BlendMode::DestOver,
             CompositeOperation::DestinationOut => BlendMode::DestOut,
@@ -675,7 +676,6 @@ impl CompositeOperation {
             CompositeOperation::SourceOut => BlendMode::SrcOut,
             CompositeOperation::DestinationIn => BlendMode::DestIn,
             CompositeOperation::DestinationAtop => BlendMode::DestAtop,
-            CompositeOperation::Copy => BlendMode::SrcOver,
         }
     }
 }

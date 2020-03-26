@@ -71,7 +71,7 @@ impl<'a> Tiler<'a> {
             .bounds()
             .intersection(view_box)
             .unwrap_or(RectF::default());
-        let object_builder = ObjectBuilder::new(bounds, fill_rule, &path_info);
+        let object_builder = ObjectBuilder::new(bounds, view_box, fill_rule, &path_info);
 
         Tiler {
             scene_builder,
@@ -127,17 +127,12 @@ impl<'a> Tiler<'a> {
     }
 
     fn pack_and_cull(&mut self) {
-        match self.path_info {
-            TilingPathInfo::Clip => self.pack_and_cull_clip_path(),
-            TilingPathInfo::Draw { .. } => self.pack_and_cull_draw_path(),
-        }
-    }
-
-    fn pack_and_cull_draw_path(&mut self) {
         let draw_tiling_path_info = match self.path_info {
-            TilingPathInfo::Clip => unreachable!(),
+            TilingPathInfo::Clip => return,
             TilingPathInfo::Draw(draw_tiling_path_info) => draw_tiling_path_info,
         };
+
+        let blend_mode_is_destructive = draw_tiling_path_info.blend_mode.is_destructive();
 
         for (draw_tile_index, draw_tile) in self.object_builder
                                                 .built_path
@@ -145,112 +140,39 @@ impl<'a> Tiler<'a> {
                                                 .data
                                                 .iter()
                                                 .enumerate() {
-            let tile_coords = self.object_builder
-                                  .local_tile_index_to_coords(draw_tile_index as u32);
+            let packed_tile = PackedTile::new(draw_tile_index as u32,
+                                              draw_tile,
+                                              &draw_tiling_path_info,
+                                              &self.object_builder);
 
-            // Figure out what clip tile we need, if any.
-            let clip_tile = match draw_tiling_path_info.built_clip_path {
-                None => None,
-                Some(built_clip_path) => {
-                    match built_clip_path.tiles.get(tile_coords) {
-                        None => {
-                            // This tile is outside of the bounds of the clip path entirely. We can
-                            // cull it.
-                            continue;
-                        }
-                        Some(clip_tile) if clip_tile.is_solid() => {
-                            if clip_tile.backdrop != 0 {
-                                // The clip tile is fully opaque, so this tile isn't clipped at
-                                // all.
-                                None
-                            } else {
-                                // This tile is completely clipped out. Cull it.
-                                continue;
-                            }
-                        }
-                        Some(clip_tile) => Some(clip_tile),
-                    }
-                }
-            };
-
-            if clip_tile.is_none() {
-                if draw_tile.is_solid() {
-                    // This is the simple case of a solid tile with no clip, so there are optimization
-                    // opportunities. First, tiles that must be blank per the fill rule are always
-                    // skipped.
-                    match (self.object_builder.built_path.fill_rule, draw_tile.backdrop) {
-                        (FillRule::Winding, 0) => continue,
-                        (FillRule::Winding, _) => {}
-                        (FillRule::EvenOdd, backdrop) if backdrop % 2 == 0 => continue,
-                        (FillRule::EvenOdd, _) => {}
-                    }
-
-                    // Next, if this is a solid tile that completely occludes the background, record
-                    // that fact. Otherwise, add a regular solid tile.
+            match packed_tile.tile_type {
+                TileType::Solid => {
                     match self.object_builder.built_path.solid_tiles {
                         SolidTiles::Occluders(ref mut occluders) => {
-                            occluders.push(Occluder::new(tile_coords));
+                            occluders.push(Occluder::new(packed_tile.tile_coords));
                         }
                         SolidTiles::Regular(ref mut solid_tiles) => {
-                            ObjectBuilder::push_alpha_tile(solid_tiles,
-                                                           draw_tile,
-                                                        clip_tile,
-                                                        tile_coords,
-                                                        &draw_tiling_path_info);
+                            packed_tile.add_to(solid_tiles, &draw_tiling_path_info);
                         }
                     }
-                } else {
-                    ObjectBuilder::push_alpha_tile(&mut self.object_builder
-                                                            .built_path
-                                                            .mask_0_tiles,
-                                                   draw_tile,
-                                                   clip_tile,
-                                                   tile_coords,
-                                                   &draw_tiling_path_info);
                 }
-            } else {
-                ObjectBuilder::push_alpha_tile(&mut self.object_builder.built_path.masks_0_1_tiles,
-                                               draw_tile,
-                                               clip_tile,
-                                               tile_coords,
-                                               &draw_tiling_path_info);
+                TileType::SingleMask => {
+                    packed_tile.add_to(&mut self.object_builder.built_path.single_mask_tiles,
+                                       &draw_tiling_path_info);
+                }
+                TileType::DualMask => {
+                    packed_tile.add_to(&mut self.object_builder.built_path.dual_mask_tiles,
+                                       &draw_tiling_path_info);
+                }
+                TileType::Empty if blend_mode_is_destructive => {
+                    packed_tile.add_to(&mut self.object_builder.built_path.empty_tiles,
+                                       &draw_tiling_path_info);
+                }
+                TileType::Empty => {
+                    // Just cull.
+                }
             }
-
-                    /*
-                    if draw_tiling_path_info.paint_metadata.is_opaque &&
-                            draw_tiling_path_info.blend_mode.occludes_backdrop() &&
-                            draw_tiling_path_info.opacity == !0 {
-                        self.object_builder
-                            .built_path
-                            .solid_tiles
-                            .push(SolidTileInfo::new(tile_coords));
-                        continue;
-                    }
-                    */
-
-            /*
-            // Allocate a mask tile.
-            let mask_tile_index = self.scene_builder.allocate_mask_tile_index();
-
-            // Add the clip primitive to the mask framebuffer, if necessary.
-            if let Some(clip_tile) = clip_tile {
-                ObjectBuilder::push_mask_tile(&mut self.object_builder.built_path.mask_tiles,
-                                              clip_tile,
-                                              mask_tile_index,
-                                              self.object_index);
-            }
-
-            // Add the primitive to the mask framebuffer.
-            ObjectBuilder::push_mask_tile(&mut self.object_builder.built_path.mask_tiles,
-                                          draw_tile,
-                                          mask_tile_index,
-                                          self.object_index);
-            */
         }
-    }
-
-    fn pack_and_cull_clip_path(&mut self) {
-        // TODO(pcwalton)
     }
 
     fn process_old_active_edges(&mut self, tile_y: i32) {
@@ -460,6 +382,123 @@ impl<'a> Tiler<'a> {
                 next_endpoint_index = contour.next_endpoint_index_of(cur_endpoint_index);
             }
         }
+    }
+}
+
+impl<'a> TilingPathInfo<'a> {
+    pub(crate) fn has_destructive_blend_mode(&self) -> bool {
+        match *self {
+            TilingPathInfo::Draw(ref draw_tiling_path_info) => {
+                draw_tiling_path_info.blend_mode.is_destructive()
+            }
+            TilingPathInfo::Clip => false,
+        }
+    }
+}
+
+pub(crate) struct PackedTile<'a> {
+    pub(crate) tile_type: TileType,
+    pub(crate) tile_coords: Vector2I,
+    pub(crate) draw_tile: &'a TileObjectPrimitive,
+    pub(crate) clip_tile: Option<&'a TileObjectPrimitive>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum TileType {
+    Solid,
+    Empty,
+    SingleMask,
+    DualMask,
+}
+
+impl<'a> PackedTile<'a> {
+    fn new(draw_tile_index: u32,
+           draw_tile: &'a TileObjectPrimitive,
+           draw_tiling_path_info: &DrawTilingPathInfo<'a>,
+           object_builder: &ObjectBuilder)
+           -> PackedTile<'a> {
+        let tile_coords = object_builder.local_tile_index_to_coords(draw_tile_index as u32);
+
+        // Figure out what clip tile we need, if any.
+        let clip_tile = match draw_tiling_path_info.built_clip_path {
+            None => None,
+            Some(built_clip_path) => {
+                match built_clip_path.tiles.get(tile_coords) {
+                    None => {
+                        // This tile is outside of the bounds of the clip path entirely. We can
+                        // cull it.
+                        return PackedTile {
+                            tile_type: TileType::Empty,
+                            tile_coords,
+                            draw_tile,
+                            clip_tile: None,
+                        };
+                    }
+                    Some(clip_tile) if clip_tile.is_solid() => {
+                        if clip_tile.backdrop != 0 {
+                            // The clip tile is fully opaque, so this tile isn't clipped at
+                            // all.
+                            None
+                        } else {
+                            // This tile is completely clipped out. Cull it.
+                            return PackedTile {
+                                tile_type: TileType::Empty,
+                                tile_coords,
+                                draw_tile,
+                                clip_tile: None,
+                            };
+                        }
+                    }
+                    Some(clip_tile) => Some(clip_tile),
+                }
+            }
+        };
+
+        if clip_tile.is_none() {
+            if draw_tile.is_solid() {
+                // This is the simple case of a solid tile with no clip, so there are optimization
+                // opportunities. First, tiles that must be blank per the fill rule are always
+                // skipped.
+                match (object_builder.built_path.fill_rule, draw_tile.backdrop) {
+                    (FillRule::Winding, 0) => {
+                        return PackedTile {
+                            tile_type: TileType::Empty,
+                            tile_coords,
+                            draw_tile,
+                            clip_tile,
+                        };
+                    }
+                    (FillRule::Winding, _) => {}
+                    (FillRule::EvenOdd, backdrop) if backdrop % 2 == 0 => {
+                        return PackedTile {
+                            tile_type: TileType::Empty,
+                            tile_coords,
+                            draw_tile,
+                            clip_tile,
+                        };
+                    }
+                    (FillRule::EvenOdd, _) => {}
+                }
+
+                // Next, if this is a solid tile that completely occludes the background, record
+                // that fact. Otherwise, add a regular solid tile.
+                return PackedTile {
+                    tile_type: TileType::Solid,
+                    tile_coords,
+                    draw_tile,
+                    clip_tile,
+                };
+            }
+
+            return PackedTile {
+                tile_type: TileType::SingleMask,
+                tile_coords,
+                draw_tile,
+                clip_tile,
+            };
+        }
+
+        PackedTile { tile_type: TileType::DualMask, tile_coords, draw_tile, clip_tile }
     }
 }
 

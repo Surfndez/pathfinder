@@ -169,11 +169,24 @@ impl GLDevice {
         }
     }
 
+    // Workaround for a macOS driver bug, it seems.
+    fn unset_uniform(&self, uniform: &GLUniform, data: &UniformData) {
+        unsafe {
+            match *data {
+                UniformData::TextureUnit(_) => {
+                    gl::Uniform1i(uniform.location, 0); ck();
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn reset_render_state(&self, render_state: &RenderState<GLDevice>) {
         self.reset_render_options(&render_state.options);
         for texture_unit in 0..(render_state.textures.len() as u32) {
             self.unbind_texture(texture_unit);
         }
+        render_state.uniforms.iter().for_each(|(uniform, data)| self.unset_uniform(uniform, data));
         self.unuse_program();
         self.unbind_vertex_array();
     }
@@ -1178,7 +1191,7 @@ impl GLVersion {
 
 // Error checking
 
-#[cfg(debug_assertions)]
+//#[cfg(debug_assertions)]
 fn ck() {
     unsafe {
         // Note that ideally we should be calling gl::GetError() in a loop until it
@@ -1199,8 +1212,10 @@ fn ck() {
     }
 }
 
+/*
 #[cfg(not(debug_assertions))]
 fn ck() {}
+*/
 
 // Utilities
 

@@ -76,18 +76,6 @@ precision highp float;
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 uniform sampler2D uColorTexture0;
 uniform sampler2D uColorTexture1;
 uniform sampler2D uMaskTexture0;
@@ -346,11 +334,11 @@ vec3 compositeSoftLight(vec3 destColor, vec3 srcColor){
 
 vec3 compositeHSL(vec3 destColor, vec3 srcColor, int op){
     switch(op){
-    case 0x17 :
+    case 0xc :
         return vec3(srcColor . x, destColor . y, destColor . z);
-    case 0x18 :
+    case 0xd :
         return vec3(destColor . x, srcColor . y, destColor . z);
-    case 0x19 :
+    case 0xe :
         return vec3(srcColor . x, srcColor . y, destColor . z);
     default :
         return vec3(destColor . x, destColor . y, srcColor . z);
@@ -359,32 +347,32 @@ vec3 compositeHSL(vec3 destColor, vec3 srcColor, int op){
 
 vec3 compositeRGB(vec3 destColor, vec3 srcColor, int op){
     switch(op){
-    case 0x0e :
+    case 0x1 :
         return destColor * srcColor;
-    case 0x0f :
+    case 0x2 :
         return compositeScreen(destColor, srcColor);
-    case 0x10 :
+    case 0x3 :
         return compositeHardLight(srcColor, destColor);
-    case 0x06 :
+    case 0x4 :
         return min(destColor, srcColor);
-    case 0x07 :
+    case 0x5 :
         return max(destColor, srcColor);
-    case 0x11 :
+    case 0x6 :
         return compositeColorDodge(destColor, srcColor);
-    case 0x12 :
+    case 0x7 :
         return vec3(1.0)- compositeColorDodge(vec3(1.0)- destColor, vec3(1.0)- srcColor);
-    case 0x13 :
+    case 0x8 :
         return compositeHardLight(destColor, srcColor);
-    case 0x14 :
+    case 0x9 :
         return compositeSoftLight(destColor, srcColor);
-    case 0x15 :
+    case 0xa :
         return abs(destColor - srcColor);
-    case 0x16 :
+    case 0xb :
         return destColor + srcColor - vec3(2.0)* destColor * srcColor;
-    case 0x17 :
-    case 0x18 :
-    case 0x19 :
-    case 0x1a :
+    case 0xc :
+    case 0xd :
+    case 0xe :
+    case 0xf :
         return compositeHSLToRGB(compositeHSL(compositeRGBToHSL(destColor),
                                               compositeRGBToHSL(srcColor),
                                               op));
@@ -392,38 +380,17 @@ vec3 compositeRGB(vec3 destColor, vec3 srcColor, int op){
     return srcColor;
 }
 
-vec4 compositePorterDuff(vec4 destColor, vec4 srcColor, int op){
-    vec4 color;
-    switch(op){
-    case 0x08 :
-        return vec4(0.0);
-    case 0x09 :
-        return srcColor;
-    case 0x0a :
-        return srcColor * destColor . a;
-    case 0x0b :
-        return srcColor *(1.0 - destColor . a);
-    case 0x0c :
-        return destColor * srcColor . a;
-    case 0x0d :
-        return srcColor *(1.0 - destColor . a)+ destColor * srcColor . a;
-    }
-}
-
 vec4 composite(vec4 srcColor,
                sampler2D destTexture,
                vec2 destTextureSize,
                vec2 fragCoord,
                int op){
-    if(op <= 0x08)
+    if(op == 0x0)
         return srcColor;
+
 
     vec2 destTexCoord = fragCoord / destTextureSize;
     vec4 destColor = texture(destTexture, destTexCoord);
-    if(op <= 0x0d)
-        return compositePorterDuff(destColor, srcColor, op);
-
-
     vec3 blendedRGB = compositeRGB(destColor . rgb, srcColor . rgb, op);
     return vec4(srcColor . a *(1.0 - destColor . a)* srcColor . rgb +
                 srcColor . a * destColor . a * blendedRGB +
@@ -458,8 +425,11 @@ void calculateColor(int ctrl){
     maskAlpha = sampleMask(maskAlpha, uMaskTexture1, vMaskTexCoord1, maskCtrl1);
 
 
-    int color0Filter =(ctrl >> 4)& 0x3;
-    vec4 color = filterColor(vColorTexCoord0,
+    vec4 color = vec4(0.0);
+    if(((ctrl >> 6)& 0x1)!= 0){
+        int color0Filter =(ctrl >> 4)&
+                                    0x3;
+        color += filterColor(vColorTexCoord0,
                              uColorTexture0,
                              uGammaLUT,
                              uColorTexture0Size,
@@ -467,17 +437,15 @@ void calculateColor(int ctrl){
                              uFilterParams1,
                              uFilterParams2,
                              color0Filter);
-
-    if(((ctrl >> 6)&
-                                            0x1)!= 0){
-        color *= sampleColor(uColorTexture1, vColorTexCoord1);
     }
+    if(((ctrl >> 7)& 0x1)!= 0)
+        color *= sampleColor(uColorTexture1, vColorTexCoord1);
 
 
     color . a *= maskAlpha;
 
 
-    int compositeOp =(ctrl >> 7)& 0x1f;
+    int compositeOp =(ctrl >> 8)& 0xf;
     color = composite(color, uDestTexture, uDestTextureSize, gl_FragCoord . xy, compositeOp);
 
 

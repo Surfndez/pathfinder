@@ -42,49 +42,37 @@ precision highp float;
 #define COMBINER_CTRL_MASK_WINDING              0x1
 #define COMBINER_CTRL_MASK_EVEN_ODD             0x2
 
-#define COMBINER_CTRL_COLOR_1_MULTIPLY_MASK     0x1
+#define COMBINER_CTRL_COLOR_ENABLE_MASK         0x1
 
 #define COMBINER_CTRL_FILTER_MASK               0x3
 #define COMBINER_CTRL_FILTER_RADIAL_GRADIENT    0x1
 #define COMBINER_CTRL_FILTER_TEXT               0x2
 #define COMBINER_CTRL_FILTER_BLUR               0x3
 
-#define COMBINER_CTRL_COMPOSITE_MASK                0x1f
-#define COMBINER_CTRL_COMPOSITE_LAST_GPU_BLENDABLE  0x08
-#define COMBINER_CTRL_COMPOSITE_LAST_PORTER_DUFF    0x0d
-#define COMBINER_CTRL_COMPOSITE_SRC_OVER            0x00
-#define COMBINER_CTRL_COMPOSITE_SRC_ATOP            0x01
-#define COMBINER_CTRL_COMPOSITE_DEST_OVER           0x02
-#define COMBINER_CTRL_COMPOSITE_DEST_OUT            0x03
-#define COMBINER_CTRL_COMPOSITE_XOR                 0x04
-#define COMBINER_CTRL_COMPOSITE_LIGHTER             0x05
-#define COMBINER_CTRL_COMPOSITE_DARKEN              0x06
-#define COMBINER_CTRL_COMPOSITE_LIGHTEN             0x07
-#define COMBINER_CTRL_COMPOSITE_CLEAR               0x08
-#define COMBINER_CTRL_COMPOSITE_COPY                0x09
-#define COMBINER_CTRL_COMPOSITE_SRC_IN              0x0a
-#define COMBINER_CTRL_COMPOSITE_SRC_OUT             0x0b
-#define COMBINER_CTRL_COMPOSITE_DEST_IN             0x0c
-#define COMBINER_CTRL_COMPOSITE_DEST_ATOP           0x0d
-#define COMBINER_CTRL_COMPOSITE_MULTIPLY            0x0e
-#define COMBINER_CTRL_COMPOSITE_SCREEN              0x0f
-#define COMBINER_CTRL_COMPOSITE_OVERLAY             0x10
-#define COMBINER_CTRL_COMPOSITE_COLOR_DODGE         0x11
-#define COMBINER_CTRL_COMPOSITE_COLOR_BURN          0x12
-#define COMBINER_CTRL_COMPOSITE_HARD_LIGHT          0x13
-#define COMBINER_CTRL_COMPOSITE_SOFT_LIGHT          0x14
-#define COMBINER_CTRL_COMPOSITE_DIFFERENCE          0x15
-#define COMBINER_CTRL_COMPOSITE_EXCLUSION           0x16
-#define COMBINER_CTRL_COMPOSITE_HUE                 0x17
-#define COMBINER_CTRL_COMPOSITE_SATURATION          0x18
-#define COMBINER_CTRL_COMPOSITE_COLOR               0x19
-#define COMBINER_CTRL_COMPOSITE_LUMINOSITY          0x1a
+#define COMBINER_CTRL_COMPOSITE_MASK            0xf
+#define COMBINER_CTRL_COMPOSITE_NORMAL          0x0
+#define COMBINER_CTRL_COMPOSITE_MULTIPLY        0x1
+#define COMBINER_CTRL_COMPOSITE_SCREEN          0x2
+#define COMBINER_CTRL_COMPOSITE_OVERLAY         0x3
+#define COMBINER_CTRL_COMPOSITE_DARKEN          0x4
+#define COMBINER_CTRL_COMPOSITE_LIGHTEN         0x5
+#define COMBINER_CTRL_COMPOSITE_COLOR_DODGE     0x6
+#define COMBINER_CTRL_COMPOSITE_COLOR_BURN      0x7
+#define COMBINER_CTRL_COMPOSITE_HARD_LIGHT      0x8
+#define COMBINER_CTRL_COMPOSITE_SOFT_LIGHT      0x9
+#define COMBINER_CTRL_COMPOSITE_DIFFERENCE      0xa
+#define COMBINER_CTRL_COMPOSITE_EXCLUSION       0xb
+#define COMBINER_CTRL_COMPOSITE_HUE             0xc
+#define COMBINER_CTRL_COMPOSITE_SATURATION      0xd
+#define COMBINER_CTRL_COMPOSITE_COLOR           0xe
+#define COMBINER_CTRL_COMPOSITE_LUMINOSITY      0xf
 
 #define COMBINER_CTRL_MASK_0_SHIFT              0
 #define COMBINER_CTRL_MASK_1_SHIFT              2
 #define COMBINER_CTRL_COLOR_0_FILTER_SHIFT      4
-#define COMBINER_CTRL_COLOR_1_MULTIPLY_SHIFT    6
-#define COMBINER_CTRL_COMPOSITE_SHIFT           7
+#define COMBINER_CTRL_COLOR_0_ENABLE_SHIFT      6
+#define COMBINER_CTRL_COLOR_1_ENABLE_SHIFT      7
+#define COMBINER_CTRL_COMPOSITE_SHIFT           8
 
 uniform sampler2D uColorTexture0;
 uniform sampler2D uColorTexture1;
@@ -390,38 +378,17 @@ vec3 compositeRGB(vec3 destColor, vec3 srcColor, int op) {
     return srcColor;
 }
 
-vec4 compositePorterDuff(vec4 destColor, vec4 srcColor, int op) {
-    vec4 color;
-    switch (op) {
-    case COMBINER_CTRL_COMPOSITE_CLEAR:
-        return vec4(0.0);
-    case COMBINER_CTRL_COMPOSITE_COPY:
-        return srcColor;
-    case COMBINER_CTRL_COMPOSITE_SRC_IN:
-        return srcColor * destColor.a;
-    case COMBINER_CTRL_COMPOSITE_SRC_OUT:
-        return srcColor * (1.0 - destColor.a);
-    case COMBINER_CTRL_COMPOSITE_DEST_IN:
-        return destColor * srcColor.a;
-    case COMBINER_CTRL_COMPOSITE_DEST_ATOP:
-        return srcColor * (1.0 - destColor.a) + destColor * srcColor.a;
-    }
-}
-
 vec4 composite(vec4 srcColor,
                sampler2D destTexture,
                vec2 destTextureSize,
                vec2 fragCoord,
                int op) {
-    if (op <= COMBINER_CTRL_COMPOSITE_LAST_GPU_BLENDABLE)
+    if (op == COMBINER_CTRL_COMPOSITE_NORMAL)
         return srcColor;
 
+    // FIXME(pcwalton): What should the output alpha be here?
     vec2 destTexCoord = fragCoord / destTextureSize;
     vec4 destColor = texture(destTexture, destTexCoord);
-    if (op <= COMBINER_CTRL_COMPOSITE_LAST_PORTER_DUFF)
-        return compositePorterDuff(destColor, srcColor, op);
-
-    // FIXME(pcwalton): What should the output alpha be here?
     vec3 blendedRGB = compositeRGB(destColor.rgb, srcColor.rgb, op);
     return vec4(srcColor.a * (1.0 - destColor.a) * srcColor.rgb +
                 srcColor.a * destColor.a * blendedRGB +
@@ -456,8 +423,11 @@ void calculateColor(int ctrl) {
     maskAlpha = sampleMask(maskAlpha, uMaskTexture1, vMaskTexCoord1, maskCtrl1);
 
     // Sample color.
-    int color0Filter = (ctrl >> COMBINER_CTRL_COLOR_0_FILTER_SHIFT) & COMBINER_CTRL_FILTER_MASK;
-    vec4 color = filterColor(vColorTexCoord0,
+    vec4 color = vec4(0.0);
+    if (((ctrl >> COMBINER_CTRL_COLOR_0_ENABLE_SHIFT) & COMBINER_CTRL_COLOR_ENABLE_MASK) != 0) {
+        int color0Filter = (ctrl >> COMBINER_CTRL_COLOR_0_FILTER_SHIFT) &
+            COMBINER_CTRL_FILTER_MASK;
+        color += filterColor(vColorTexCoord0,
                              uColorTexture0,
                              uGammaLUT,
                              uColorTexture0Size,
@@ -465,11 +435,9 @@ void calculateColor(int ctrl) {
                              uFilterParams1,
                              uFilterParams2,
                              color0Filter);
-    //color.a = 1.0;
-    if (((ctrl >> COMBINER_CTRL_COLOR_1_MULTIPLY_SHIFT) &
-          COMBINER_CTRL_COLOR_1_MULTIPLY_MASK) != 0) {
-        color *= sampleColor(uColorTexture1, vColorTexCoord1);
     }
+    if (((ctrl >> COMBINER_CTRL_COLOR_1_ENABLE_SHIFT) & COMBINER_CTRL_COLOR_ENABLE_MASK) != 0)
+        color *= sampleColor(uColorTexture1, vColorTexCoord1);
 
     // Apply mask.
     color.a *= maskAlpha;

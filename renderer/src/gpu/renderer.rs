@@ -58,48 +58,37 @@ const COMBINER_CTRL_MASK_MASK: i32 =               0x3;
 const COMBINER_CTRL_MASK_WINDING: i32 =            0x1;
 const COMBINER_CTRL_MASK_EVEN_ODD: i32 =           0x2;
 
-const COMBINER_CTRL_COLOR_1_MULTIPLY_MASK: i32 =   0x1;
+const COMBINER_CTRL_COLOR_ENABLE_MASK: i32 =       0x1;
 
 const COMBINER_CTRL_FILTER_MASK: i32 =             0x3;
 const COMBINER_CTRL_FILTER_RADIAL_GRADIENT: i32 =  0x1;
 const COMBINER_CTRL_FILTER_TEXT: i32 =             0x2;
 const COMBINER_CTRL_FILTER_BLUR: i32 =             0x3;
 
-const COMBINER_CTRL_COMPOSITE_MASK: i32 =               0x1f;
-const COMBINER_CTRL_COMPOSITE_LAST_GPU_BLENDABLE: i32 = 0x08;
-const COMBINER_CTRL_COMPOSITE_SRC_OVER: i32 =           0x00;
-const COMBINER_CTRL_COMPOSITE_SRC_ATOP: i32 =           0x01;
-const COMBINER_CTRL_COMPOSITE_DEST_OVER: i32 =          0x02;
-const COMBINER_CTRL_COMPOSITE_DEST_OUT: i32 =           0x03;
-const COMBINER_CTRL_COMPOSITE_XOR: i32 =                0x04;
-const COMBINER_CTRL_COMPOSITE_LIGHTER: i32 =            0x05;
-const COMBINER_CTRL_COMPOSITE_DARKEN: i32 =             0x06;
-const COMBINER_CTRL_COMPOSITE_LIGHTEN: i32 =            0x07;
-const COMBINER_CTRL_COMPOSITE_CLEAR: i32 =              0x08;
-const COMBINER_CTRL_COMPOSITE_COPY: i32 =               0x09;
-const COMBINER_CTRL_COMPOSITE_SRC_IN: i32 =             0x0a;
-const COMBINER_CTRL_COMPOSITE_SRC_OUT: i32 =            0x0b;
-const COMBINER_CTRL_COMPOSITE_DEST_IN: i32 =            0x0c;
-const COMBINER_CTRL_COMPOSITE_DEST_ATOP: i32 =          0x0d;
-const COMBINER_CTRL_COMPOSITE_MULTIPLY: i32 =           0x0e;
-const COMBINER_CTRL_COMPOSITE_SCREEN: i32 =             0x0f;
-const COMBINER_CTRL_COMPOSITE_OVERLAY: i32 =            0x10;
-const COMBINER_CTRL_COMPOSITE_COLOR_DODGE: i32 =        0x11;
-const COMBINER_CTRL_COMPOSITE_COLOR_BURN: i32 =         0x12;
-const COMBINER_CTRL_COMPOSITE_HARD_LIGHT: i32 =         0x13;
-const COMBINER_CTRL_COMPOSITE_SOFT_LIGHT: i32 =         0x14;
-const COMBINER_CTRL_COMPOSITE_DIFFERENCE: i32 =         0x15;
-const COMBINER_CTRL_COMPOSITE_EXCLUSION: i32 =          0x16;
-const COMBINER_CTRL_COMPOSITE_HUE: i32 =                0x17;
-const COMBINER_CTRL_COMPOSITE_SATURATION: i32 =         0x18;
-const COMBINER_CTRL_COMPOSITE_COLOR: i32 =              0x19;
-const COMBINER_CTRL_COMPOSITE_LUMINOSITY: i32 =         0x1a;
+const COMBINER_CTRL_COMPOSITE_MASK: i32 =         0xf;
+const COMBINER_CTRL_COMPOSITE_NORMAL: i32 =       0x0;
+const COMBINER_CTRL_COMPOSITE_MULTIPLY: i32 =     0x1;
+const COMBINER_CTRL_COMPOSITE_SCREEN: i32 =       0x2;
+const COMBINER_CTRL_COMPOSITE_OVERLAY: i32 =      0x3;
+const COMBINER_CTRL_COMPOSITE_DARKEN: i32 =       0x4;
+const COMBINER_CTRL_COMPOSITE_LIGHTEN: i32 =      0x5;
+const COMBINER_CTRL_COMPOSITE_COLOR_DODGE: i32 =  0x6;
+const COMBINER_CTRL_COMPOSITE_COLOR_BURN: i32 =   0x7;
+const COMBINER_CTRL_COMPOSITE_HARD_LIGHT: i32 =   0x8;
+const COMBINER_CTRL_COMPOSITE_SOFT_LIGHT: i32 =   0x9;
+const COMBINER_CTRL_COMPOSITE_DIFFERENCE: i32 =   0xa;
+const COMBINER_CTRL_COMPOSITE_EXCLUSION: i32 =    0xb;
+const COMBINER_CTRL_COMPOSITE_HUE: i32 =          0xc;
+const COMBINER_CTRL_COMPOSITE_SATURATION: i32 =   0xd;
+const COMBINER_CTRL_COMPOSITE_COLOR: i32 =        0xe;
+const COMBINER_CTRL_COMPOSITE_LUMINOSITY: i32 =   0xf;
 
 const COMBINER_CTRL_MASK_0_SHIFT: i32 =              0;
 const COMBINER_CTRL_MASK_1_SHIFT: i32 =              2;
 const COMBINER_CTRL_COLOR_0_FILTER_SHIFT: i32 =      4;
-const COMBINER_CTRL_COLOR_1_MULTIPLY_SHIFT: i32 =    6;
-const COMBINER_CTRL_COMPOSITE_SHIFT: i32 =           7;
+const COMBINER_CTRL_COLOR_0_ENABLE_SHIFT: i32 =      6;
+const COMBINER_CTRL_COLOR_1_ENABLE_SHIFT: i32 =      7;
+const COMBINER_CTRL_COMPOSITE_SHIFT: i32 =           8;
 
 pub struct Renderer<D>
 where
@@ -132,10 +121,6 @@ where
     render_targets: Vec<RenderTargetInfo>,
     render_target_stack: Vec<RenderTargetId>,
 
-    // This is a dummy texture consisting solely of a single `rgba(0, 0, 0, 255)` texel. It serves
-    // as the paint texture when drawing alpha tiles with the Clear blend mode. If this weren't
-    // used, then the transparent black paint would zero out the alpha mask.
-    clear_paint_texture: D::Texture,
     gamma_lut_texture: D::Texture,
 
     // Stencil shader
@@ -242,11 +227,6 @@ where
         let intermediate_dest_texture = device.create_texture(TextureFormat::RGBA8, window_size);
         let intermediate_dest_framebuffer = device.create_framebuffer(intermediate_dest_texture);
 
-        let clear_paint_texture =
-            device.create_texture_from_data(TextureFormat::RGBA8,
-                                            Vector2I::splat(1),
-                                            TextureDataRef::U8(&[0, 0, 0, 255]));
-
         let debug_ui_presenter = DebugUIPresenter::new(&device, resources, window_size);
 
         Renderer {
@@ -275,7 +255,6 @@ where
             render_targets: vec![],
             render_target_stack: vec![],
 
-            clear_paint_texture,
             gamma_lut_texture,
 
             stencil_program,
@@ -305,7 +284,6 @@ where
     }
 
     pub fn render_command(&mut self, command: &RenderCommand) {
-        println!("{:?}", command);
         match *command {
             RenderCommand::Start { bounding_quad, path_count, needs_readable_framebuffer } => {
                 self.start_rendering(bounding_quad, path_count, needs_readable_framebuffer);
@@ -601,126 +579,6 @@ where
         Transform4F::from_scale(scale).translate(Vector4F::new(-1.0, 1.0, 0.0, 1.0))
     }
 
-    /*
-    fn draw_alpha_tiles(&mut self,
-                        tile_count: u32,
-                        color_texture_page: TexturePageId,
-                        sampling_flags: TextureSamplingFlags,
-                        blend_mode: BlendMode) {
-        let blend_mode_program = BlendModeProgram::from_blend_mode(blend_mode);
-        if blend_mode_program.needs_readable_framebuffer() {
-            self.copy_alpha_tiles_to_dest_blend_texture(tile_count);
-        }
-
-        let clear_color = self.clear_color_for_draw_operation();
-
-        let (alpha_tile_program, alpha_tile_vertex_array) = match blend_mode_program {
-            BlendModeProgram::Regular => (&self.alpha_tile_program, &self.alpha_tile_vertex_array),
-            BlendModeProgram::Overlay => {
-                (&self.alpha_tile_overlay_program.alpha_tile_blend_mode_program.alpha_tile_program,
-                 &self.alpha_tile_overlay_vertex_array)
-            }
-            BlendModeProgram::DodgeBurn => {
-                (&self.alpha_tile_dodgeburn_program
-                      .alpha_tile_blend_mode_program
-                      .alpha_tile_program,
-                 &self.alpha_tile_dodgeburn_vertex_array)
-            }
-            BlendModeProgram::SoftLight => {
-                (&self.alpha_tile_softlight_program.alpha_tile_program,
-                 &self.alpha_tile_softlight_vertex_array)
-            }
-            BlendModeProgram::Difference => {
-                (&self.alpha_tile_difference_program.alpha_tile_program,
-                 &self.alpha_tile_difference_vertex_array)
-            }
-            BlendModeProgram::Exclusion => {
-                (&self.alpha_tile_exclusion_program.alpha_tile_program,
-                 &self.alpha_tile_exclusion_vertex_array)
-            }
-            BlendModeProgram::HSL => {
-                (&self.alpha_tile_hsl_program.alpha_tile_blend_mode_program.alpha_tile_program,
-                 &self.alpha_tile_hsl_vertex_array)
-            }
-        };
-
-        let draw_viewport = self.draw_viewport();
-
-        let mut textures = vec![self.device.framebuffer_texture(&self.mask_framebuffer)];
-        let mut uniforms = vec![
-            (&alpha_tile_program.transform_uniform,
-             UniformData::Mat4(self.tile_transform().to_columns())),
-            (&alpha_tile_program.tile_size_uniform,
-             UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
-            (&alpha_tile_program.stencil_texture_uniform, UniformData::TextureUnit(0)),
-            (&alpha_tile_program.framebuffer_size_uniform,
-             UniformData::Vec2(draw_viewport.size().to_f32().0)),
-        ];
-
-        let paint_texture = match blend_mode {
-            BlendMode::Clear => {
-                // Use a special dummy paint texture containing `rgba(0, 0, 0, 255)` so that the
-                // transparent black paint color doesn't zero out the mask.
-                &self.clear_paint_texture
-            }
-            _ => self.texture_page(color_texture_page),
-        };
-
-        self.device.set_texture_sampling_mode(paint_texture, sampling_flags);
-
-        textures.push(paint_texture);
-        uniforms.push((&alpha_tile_program.paint_texture_uniform, UniformData::TextureUnit(1)));
-
-        match blend_mode_program {
-            BlendModeProgram::Regular => {}
-            BlendModeProgram::Overlay => {
-                self.set_uniforms_for_overlay_blend_mode(&mut textures, &mut uniforms, blend_mode);
-            }
-            BlendModeProgram::DodgeBurn => {
-                self.set_uniforms_for_dodge_burn_blend_mode(&mut textures,
-                                                            &mut uniforms,
-                                                            blend_mode);
-            }
-            BlendModeProgram::SoftLight => {
-                self.set_uniforms_for_blend_mode(&mut textures,
-                                                 &mut uniforms,
-                                                 &self.alpha_tile_softlight_program);
-            }
-            BlendModeProgram::Difference => {
-                self.set_uniforms_for_blend_mode(&mut textures,
-                                                 &mut uniforms,
-                                                 &self.alpha_tile_difference_program);
-            }
-            BlendModeProgram::Exclusion => {
-                self.set_uniforms_for_blend_mode(&mut textures,
-                                                 &mut uniforms,
-                                                 &self.alpha_tile_exclusion_program);
-            }
-            BlendModeProgram::HSL => {
-                self.set_uniforms_for_hsl_blend_mode(&mut textures, &mut uniforms, blend_mode);
-            }
-        }
-
-        self.device.draw_elements(tile_count * 6, &RenderState {
-            target: &self.draw_render_target(),
-            program: &alpha_tile_program.program,
-            vertex_array: &alpha_tile_vertex_array.vertex_array,
-            primitive: Primitive::Triangles,
-            textures: &textures,
-            uniforms: &uniforms,
-            viewport: draw_viewport,
-            options: RenderOptions {
-                blend: blend_mode.to_blend_state(),
-                stencil: self.stencil_state(),
-                clear_ops: ClearOps { color: clear_color, ..ClearOps::default() },
-                ..RenderOptions::default()
-            },
-        });
-
-        self.preserve_draw_framebuffer();
-    }
-    */
-
     fn draw_tiles(&mut self,
                   tile_count: u32,
                   color_texture_0: Option<TileBatchTexture>,
@@ -731,13 +589,24 @@ where
                   effects: Effects) {
         // TODO(pcwalton): Disable blend for solid tiles.
 
+        // FIXME(pcwalton)
+        /*match blend_mode {
+            BlendMode::SrcOver => {}
+            _ => return,
+        }*/
+        /*if color_texture_1.is_some() && mask_0_fill_rule.is_some() {
+            return;
+        }
+        if blend_mode == BlendMode::Multiply && mask_0_fill_rule.is_some() {
+            return;
+        }*/
+
         let needs_readable_framebuffer = blend_mode.needs_readable_framebuffer();
         if needs_readable_framebuffer {
             self.copy_alpha_tiles_to_dest_blend_texture(tile_count);
         }
 
         let clear_color = self.clear_color_for_draw_operation();
-
         let draw_viewport = self.draw_viewport();
 
         let mut ctrl = 0;
@@ -759,6 +628,14 @@ where
             (&self.tile_program.tile_size_uniform,
              UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
         ];
+
+        if needs_readable_framebuffer {
+            uniforms.push((&self.tile_program.dest_texture_uniform,
+                           UniformData::TextureUnit(textures.len() as u32)));
+            uniforms.push((&self.tile_program.dest_texture_size_uniform,
+                           UniformData::Vec2(draw_viewport.size().to_f32().0)));
+            textures.push(self.device.framebuffer_texture(&self.dest_blend_framebuffer));
+        }
 
         if mask_0_fill_rule.is_some() {
             uniforms.push((&self.tile_program.mask_texture_0_uniform,
@@ -782,6 +659,7 @@ where
             uniforms.push((&self.tile_program.color_texture_0_size_uniform,
                            UniformData::Vec2(color_texture_size.0)));
             textures.push(color_texture_page);
+            ctrl |= COMBINER_CTRL_COLOR_ENABLE_MASK << COMBINER_CTRL_COLOR_0_ENABLE_SHIFT;
         }
         if let Some(color_texture) = color_texture_1 {
             let color_texture_page = self.texture_page(color_texture.page);
@@ -790,19 +668,8 @@ where
             uniforms.push((&self.tile_program.color_texture_1_uniform,
                            UniformData::TextureUnit(textures.len() as u32)));
             textures.push(color_texture_page);
-            ctrl |= COMBINER_CTRL_COLOR_1_MULTIPLY_MASK << COMBINER_CTRL_COLOR_1_MULTIPLY_SHIFT;
+            ctrl |= COMBINER_CTRL_COLOR_ENABLE_MASK << COMBINER_CTRL_COLOR_1_ENABLE_SHIFT;
         }
-
-        /*
-        let paint_texture = match blend_mode {
-            BlendMode::Clear => {
-                // Use a special dummy paint texture containing `rgba(0, 0, 0, 255)` so that the
-                // transparent black paint color doesn't zero out the mask.
-                &self.clear_paint_texture
-            }
-            _ => self.texture_page(color_texture_page),
-        };
-        */
 
         ctrl |= blend_mode.to_composite_ctrl() << COMBINER_CTRL_COMPOSITE_SHIFT;
 
@@ -821,14 +688,6 @@ where
                 ctrl |= COMBINER_CTRL_FILTER_BLUR << COMBINER_CTRL_COLOR_0_FILTER_SHIFT;
                 self.set_uniforms_for_blur_filter(&mut uniforms, direction, sigma);
             }
-        }
-
-        if needs_readable_framebuffer {
-            uniforms.push((&self.tile_program.dest_texture_uniform,
-                           UniformData::TextureUnit(textures.len() as u32)));
-            uniforms.push((&self.tile_program.dest_texture_size_uniform,
-                           UniformData::Vec2(draw_viewport.size().to_f32().0)));
-            textures.push(self.device.framebuffer_texture(&self.dest_blend_framebuffer));
         }
 
         uniforms.push((&self.tile_program.ctrl_uniform, UniformData::Int(ctrl)));
@@ -852,64 +711,6 @@ where
         self.preserve_draw_framebuffer();
     }
 
-    /*
-    fn set_uniforms_for_overlay_blend_mode<'a>(&'a self,
-                                               textures: &mut Vec<&'a D::Texture>,
-                                               uniforms: &mut Vec<(&'a D::Uniform, UniformData)>,
-                                               blend_mode: BlendMode) {
-        let overlay_blend_mode = match blend_mode {
-            BlendMode::Multiply  => OVERLAY_BLEND_MODE_MULTIPLY,
-            BlendMode::Screen    => OVERLAY_BLEND_MODE_SCREEN,
-            BlendMode::HardLight => OVERLAY_BLEND_MODE_HARD_LIGHT,
-            BlendMode::Overlay   => OVERLAY_BLEND_MODE_OVERLAY,
-            _                    => unreachable!(),
-        };
-
-        uniforms.push((&self.alpha_tile_overlay_program.blend_mode_uniform,
-                       UniformData::Int(overlay_blend_mode)));
-
-        self.set_uniforms_for_blend_mode(textures,
-                                         uniforms,
-                                         &self.alpha_tile_overlay_program
-                                              .alpha_tile_blend_mode_program);
-    }
-
-    fn set_uniforms_for_dodge_burn_blend_mode<'a>(
-            &'a self,
-            textures: &mut Vec<&'a D::Texture>,
-            uniforms: &mut Vec<(&'a D::Uniform, UniformData)>,
-            blend_mode: BlendMode) {
-        uniforms.push((&self.alpha_tile_dodgeburn_program.burn_uniform,
-                       UniformData::Int(if blend_mode == BlendMode::ColorBurn { 1 } else { 0 })));
-
-        self.set_uniforms_for_blend_mode(textures,
-                                         uniforms,
-                                         &self.alpha_tile_dodgeburn_program
-                                              .alpha_tile_blend_mode_program);
-    }
-
-    fn set_uniforms_for_hsl_blend_mode<'a>(&'a self,
-                                           textures: &mut Vec<&'a D::Texture>,
-                                           uniforms: &mut Vec<(&'a D::Uniform, UniformData)>,
-                                           blend_mode: BlendMode) {
-        let hsl_terms = match blend_mode {
-            BlendMode::Hue        => [BLEND_TERM_SRC,  BLEND_TERM_DEST, BLEND_TERM_DEST],
-            BlendMode::Saturation => [BLEND_TERM_DEST, BLEND_TERM_SRC,  BLEND_TERM_DEST],
-            BlendMode::Luminosity => [BLEND_TERM_DEST, BLEND_TERM_DEST, BLEND_TERM_SRC ],
-            BlendMode::Color      => [BLEND_TERM_SRC,  BLEND_TERM_SRC,  BLEND_TERM_DEST],
-            _                     => unreachable!(),
-        };
-
-        uniforms.push((&self.alpha_tile_hsl_program.blend_hsl_uniform,
-                       UniformData::IVec3(hsl_terms)));
-
-        self.set_uniforms_for_blend_mode(textures,
-                                         uniforms,
-                                         &self.alpha_tile_hsl_program
-                                              .alpha_tile_blend_mode_program);
-    }
-
-    */
     fn copy_alpha_tiles_to_dest_blend_texture(&mut self, tile_count: u32) {
         let draw_viewport = self.draw_viewport();
 
@@ -943,7 +744,7 @@ where
             viewport: draw_viewport,
             options: RenderOptions {
                 clear_ops: ClearOps {
-                    color: Some(ColorF::transparent_black()),
+                    color: Some(ColorF::new(1.0, 0.0, 0.0, 1.0)),
                     ..ClearOps::default()
                 },
                 ..RenderOptions::default()
@@ -1374,17 +1175,8 @@ impl ToBlendState for BlendMode {
             BlendMode::Clear => {
                 Some(BlendState {
                     src_rgb_factor: BlendFactor::Zero,
-                    dest_rgb_factor: BlendFactor::OneMinusSrcAlpha,
-                    src_alpha_factor: BlendFactor::Zero,
-                    dest_alpha_factor: BlendFactor::OneMinusSrcAlpha,
-                    ..BlendState::default()
-                })
-            }
-            BlendMode::Copy => {
-                Some(BlendState {
-                    src_rgb_factor: BlendFactor::One,
                     dest_rgb_factor: BlendFactor::Zero,
-                    src_alpha_factor: BlendFactor::One,
+                    src_alpha_factor: BlendFactor::Zero,
                     dest_alpha_factor: BlendFactor::Zero,
                     ..BlendState::default()
                 })
@@ -1395,6 +1187,15 @@ impl ToBlendState for BlendMode {
                     dest_rgb_factor: BlendFactor::OneMinusSrcAlpha,
                     src_alpha_factor: BlendFactor::One,
                     dest_alpha_factor: BlendFactor::OneMinusSrcAlpha,
+                    ..BlendState::default()
+                })
+            }
+            BlendMode::DestOver => {
+                Some(BlendState {
+                    src_rgb_factor: BlendFactor::OneMinusDestAlpha,
+                    dest_rgb_factor: BlendFactor::One,
+                    src_alpha_factor: BlendFactor::OneMinusDestAlpha,
+                    dest_alpha_factor: BlendFactor::One,
                     ..BlendState::default()
                 })
             }
@@ -1425,6 +1226,24 @@ impl ToBlendState for BlendMode {
                     ..BlendState::default()
                 })
             }
+            BlendMode::DestOut => {
+                Some(BlendState {
+                    src_rgb_factor: BlendFactor::Zero,
+                    dest_rgb_factor: BlendFactor::OneMinusSrcAlpha,
+                    src_alpha_factor: BlendFactor::Zero,
+                    dest_alpha_factor: BlendFactor::OneMinusSrcAlpha,
+                    ..BlendState::default()
+                })
+            }
+            BlendMode::SrcAtop => {
+                Some(BlendState {
+                    src_rgb_factor: BlendFactor::DestAlpha,
+                    dest_rgb_factor: BlendFactor::OneMinusSrcAlpha,
+                    src_alpha_factor: BlendFactor::DestAlpha,
+                    dest_alpha_factor: BlendFactor::OneMinusSrcAlpha,
+                    ..BlendState::default()
+                })
+            }
             BlendMode::DestAtop => {
                 Some(BlendState {
                     src_rgb_factor: BlendFactor::OneMinusDestAlpha,
@@ -1434,11 +1253,25 @@ impl ToBlendState for BlendMode {
                     ..BlendState::default()
                 })
             }
-            BlendMode::SrcAtop |
-            BlendMode::DestOver |
-            BlendMode::DestOut |
-            BlendMode::Xor |
-            BlendMode::Lighter |
+            BlendMode::Xor => {
+                Some(BlendState {
+                    src_rgb_factor: BlendFactor::OneMinusDestAlpha,
+                    dest_rgb_factor: BlendFactor::OneMinusSrcAlpha,
+                    src_alpha_factor: BlendFactor::OneMinusDestAlpha,
+                    dest_alpha_factor: BlendFactor::OneMinusSrcAlpha,
+                    ..BlendState::default()
+                })
+            }
+            BlendMode::Lighter => {
+                Some(BlendState {
+                    src_rgb_factor: BlendFactor::One,
+                    dest_rgb_factor: BlendFactor::One,
+                    src_alpha_factor: BlendFactor::One,
+                    dest_alpha_factor: BlendFactor::One,
+                    ..BlendState::default()
+                })
+            }
+            BlendMode::Copy |
             BlendMode::Darken |
             BlendMode::Lighten |
             BlendMode::Multiply |
@@ -1469,19 +1302,19 @@ impl BlendModeExt for BlendMode {
     fn needs_readable_framebuffer(self) -> bool {
         match self {
             BlendMode::Clear |
-            BlendMode::Copy |
             BlendMode::SrcOver |
             BlendMode::DestOver |
-            BlendMode::DestOut |
-            BlendMode::DestIn |
-            BlendMode::DestAtop |
-            BlendMode::SrcAtop |
             BlendMode::SrcIn |
+            BlendMode::DestIn |
             BlendMode::SrcOut |
+            BlendMode::DestOut |
+            BlendMode::SrcAtop |
+            BlendMode::DestAtop |
             BlendMode::Xor |
             BlendMode::Lighter |
+            BlendMode::Copy => false,
             BlendMode::Lighten |
-            BlendMode::Darken => false,
+            BlendMode::Darken |
             BlendMode::Multiply |
             BlendMode::Screen |
             BlendMode::HardLight |
@@ -1518,21 +1351,21 @@ trait ToCompositeCtrl {
 impl ToCompositeCtrl for BlendMode {
     fn to_composite_ctrl(&self) -> i32 {
         match *self {
-            BlendMode::SrcOver => COMBINER_CTRL_COMPOSITE_SRC_OVER,
-            BlendMode::SrcAtop => COMBINER_CTRL_COMPOSITE_SRC_ATOP,
-            BlendMode::DestOver => COMBINER_CTRL_COMPOSITE_DEST_OVER,
-            BlendMode::DestOut => COMBINER_CTRL_COMPOSITE_DEST_OUT,
-            BlendMode::Xor => COMBINER_CTRL_COMPOSITE_XOR,
-            BlendMode::Lighter => COMBINER_CTRL_COMPOSITE_LIGHTER,
+            BlendMode::SrcOver |
+            BlendMode::SrcAtop |
+            BlendMode::DestOver |
+            BlendMode::DestOut |
+            BlendMode::Xor |
+            BlendMode::Lighter |
+            BlendMode::Clear |
+            BlendMode::Copy |
+            BlendMode::SrcIn |
+            BlendMode::SrcOut |
+            BlendMode::DestIn |
+            BlendMode::DestAtop => COMBINER_CTRL_COMPOSITE_NORMAL,
+            BlendMode::Multiply => COMBINER_CTRL_COMPOSITE_MULTIPLY,
             BlendMode::Darken => COMBINER_CTRL_COMPOSITE_DARKEN,
             BlendMode::Lighten => COMBINER_CTRL_COMPOSITE_LIGHTEN,
-            BlendMode::Clear => COMBINER_CTRL_COMPOSITE_CLEAR,
-            BlendMode::Copy => COMBINER_CTRL_COMPOSITE_COPY,
-            BlendMode::SrcIn => COMBINER_CTRL_COMPOSITE_SRC_IN,
-            BlendMode::SrcOut => COMBINER_CTRL_COMPOSITE_SRC_OUT,
-            BlendMode::DestIn => COMBINER_CTRL_COMPOSITE_DEST_IN,
-            BlendMode::DestAtop => COMBINER_CTRL_COMPOSITE_DEST_ATOP,
-            BlendMode::Multiply => COMBINER_CTRL_COMPOSITE_MULTIPLY,
             BlendMode::Screen => COMBINER_CTRL_COMPOSITE_SCREEN,
             BlendMode::Overlay => COMBINER_CTRL_COMPOSITE_OVERLAY,
             BlendMode::ColorDodge => COMBINER_CTRL_COMPOSITE_COLOR_DODGE,

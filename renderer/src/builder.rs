@@ -18,7 +18,8 @@ use crate::options::{PreparedBuildOptions, RenderCommandListener};
 use crate::paint::{PaintInfo, PaintMetadata, RenderTargetMetadata};
 use crate::scene::{DisplayItem, Scene};
 use crate::tile_map::DenseTileMap;
-use crate::tiles::{self, DrawTilingPathInfo, TILE_HEIGHT, TILE_WIDTH, Tiler, TilingPathInfo};
+use crate::tiles::{self, DrawTilingPathInfo, PackedTile, TILE_HEIGHT, TILE_WIDTH};
+use crate::tiles::{Tiler, TilingPathInfo};
 use crate::z_buffer::{DepthMetadata, ZBuffer};
 use pathfinder_content::effects::{BlendMode, Effects, Filter};
 use pathfinder_content::fill::FillRule;
@@ -64,9 +65,10 @@ struct BuiltDrawPath {
 
 #[derive(Debug)]
 pub(crate) struct BuiltPath {
-    pub mask_0_tiles: Vec<Tile>,
-    pub masks_0_1_tiles: Vec<Tile>,
     pub solid_tiles: SolidTiles,
+    pub empty_tiles: Vec<Tile>,
+    pub single_mask_tiles: Vec<Tile>,
+    pub dual_mask_tiles: Vec<Tile>,
     pub tiles: DenseTileMap<TileObjectPrimitive>,
     pub fill_rule: FillRule,
 }
@@ -148,14 +150,11 @@ impl<'a> SceneBuilder<'a> {
                 paint_metadata: &paint_metadata,
                 opacity_tile_page,
                 opacity_tile_transform,
-                built_clip_paths: &built_clip_paths
+                built_clip_paths: &built_clip_paths,
             })
         });
 
-        self.finish_building(&paint_metadata,
-                             &render_target_metadata,
-                             built_clip_paths,
-                             built_draw_paths);
+        self.finish_building(&paint_metadata, &render_target_metadata, built_draw_paths);
 
         let build_time = Instant::now() - start_time;
         self.listener.send(RenderCommand::Finish { build_time });
@@ -229,7 +228,6 @@ impl<'a> SceneBuilder<'a> {
     fn cull_tiles(&self,
                   paint_metadata: &[PaintMetadata],
                   render_target_metadata: &[RenderTargetMetadata],
-                  built_clip_paths: Vec<BuiltPath>,
                   built_draw_paths: Vec<BuiltDrawPath>)
                   -> CulledTiles {
         let mut culled_tiles = CulledTiles { display_list: vec![] };
@@ -317,19 +315,33 @@ impl<'a> SceneBuilder<'a> {
                             page: built_draw_path.color_texture_page_1,
                             sampling_flags: built_draw_path.sampling_flags_1,
                         });
+
+                        debug_assert!(built_draw_path.path.empty_tiles.is_empty() ||
+                                      built_draw_path.blend_mode.is_destructive());
                         self.add_alpha_tiles(&mut culled_tiles,
                                              layer_z_buffer,
-                                             &built_draw_path.path.mask_0_tiles,
+                                             &built_draw_path.path.empty_tiles,
+                                             current_depth,
+                                             None,
+                                             None,
+                                             built_draw_path.blend_mode,
+                                             None,
+                                             None);
+
+                        self.add_alpha_tiles(&mut culled_tiles,
+                                             layer_z_buffer,
+                                             &built_draw_path.path.single_mask_tiles,
                                              current_depth,
                                              color_texture_0,
                                              color_texture_1,
                                              built_draw_path.blend_mode,
                                              Some(built_draw_path.mask_0_fill_rule),
                                              None);
+
                         if let Some(mask_1_fill_rule) = built_draw_path.mask_1_fill_rule {
                             self.add_alpha_tiles(&mut culled_tiles,
                                                  layer_z_buffer,
-                                                 &built_draw_path.path.masks_0_1_tiles,
+                                                 &built_draw_path.path.dual_mask_tiles,
                                                  current_depth,
                                                  color_texture_0,
                                                  color_texture_1,
@@ -337,6 +349,7 @@ impl<'a> SceneBuilder<'a> {
                                                  Some(built_draw_path.mask_0_fill_rule),
                                                  Some(mask_1_fill_rule));
                         }
+
                         match built_draw_path.path.solid_tiles {
                             SolidTiles::Regular(ref tiles) => {
                                 self.add_alpha_tiles(&mut culled_tiles,
@@ -351,8 +364,7 @@ impl<'a> SceneBuilder<'a> {
                             }
                             SolidTiles::Occluders(_) => {}
                         }
-                        // TODO(pcwalton): Add empty tiles for destructive composite ops if
-                        // necessary too.
+
                         current_depth += 1;
                     }
                 }
@@ -493,12 +505,10 @@ impl<'a> SceneBuilder<'a> {
     fn finish_building(&mut self,
                        paint_metadata: &[PaintMetadata],
                        render_target_metadata: &[RenderTargetMetadata],
-                       built_clip_paths: Vec<BuiltPath>,
                        built_draw_paths: Vec<BuiltDrawPath>) {
         self.listener.send(RenderCommand::FlushFills);
         let culled_tiles = self.cull_tiles(paint_metadata,
                                            render_target_metadata,
-                                           built_clip_paths,
                                            built_draw_paths);
         self.pack_tiles(culled_tiles);
     }
@@ -543,7 +553,11 @@ struct DrawPathBuildParams<'a> {
 }
 
 impl BuiltPath {
-    fn new(bounds: RectF, fill_rule: FillRule, tiling_path_info: &TilingPathInfo) -> BuiltPath {
+    fn new(path_bounds: RectF,
+           view_box_bounds: RectF,
+           fill_rule: FillRule,
+           tiling_path_info: &TilingPathInfo)
+           -> BuiltPath {
         let occludes = match *tiling_path_info {
             TilingPathInfo::Draw(ref draw_tiling_path_info) => {
                 draw_tiling_path_info.paint_metadata.is_opaque &&
@@ -553,15 +567,22 @@ impl BuiltPath {
             TilingPathInfo::Clip => true,
         };
 
+        let tile_map_bounds = if tiling_path_info.has_destructive_blend_mode() {
+            view_box_bounds
+        } else {
+            path_bounds
+        };
+
         BuiltPath {
-            mask_0_tiles: vec![],
-            masks_0_1_tiles: vec![],
-            tiles: DenseTileMap::new(tiles::round_rect_out_to_tile_bounds(bounds)),
+            single_mask_tiles: vec![],
+            dual_mask_tiles: vec![],
+            empty_tiles: vec![],
             solid_tiles: if occludes {
                 SolidTiles::Occluders(vec![])
             } else {
                 SolidTiles::Regular(vec![])
             },
+            tiles: DenseTileMap::new(tiles::round_rect_out_to_tile_bounds(tile_map_bounds)),
             fill_rule,
         }
     }
@@ -593,11 +614,14 @@ pub struct TileStats {
 // Utilities for built objects
 
 impl ObjectBuilder {
-    pub(crate) fn new(bounds: RectF, fill_rule: FillRule, tiling_path_info: &TilingPathInfo)
+    pub(crate) fn new(path_bounds: RectF,
+                      view_box_bounds: RectF,
+                      fill_rule: FillRule,
+                      tiling_path_info: &TilingPathInfo)
                       -> ObjectBuilder {
         ObjectBuilder {
-            built_path: BuiltPath::new(bounds, fill_rule, tiling_path_info),
-            bounds,
+            built_path: BuiltPath::new(path_bounds, view_box_bounds, fill_rule, tiling_path_info),
+            bounds: path_bounds,
             fills: vec![],
         }
     }
@@ -777,72 +801,42 @@ impl ObjectBuilder {
     pub(crate) fn local_tile_index_to_coords(&self, tile_index: u32) -> Vector2I {
         self.built_path.tiles.index_to_coords(tile_index as usize)
     }
+}
 
-    /*
-    pub(crate) fn push_mask_tile(mask_tiles: &mut Vec<MaskTile>,
-                                 fill_tile: &TileObjectPrimitive,
-                                 mask_tile_index: u16,
-                                 object_index: u16) {
-        mask_tiles.push(MaskTile {
-            upper_left: MaskTileVertex::new(mask_tile_index,
-                                            fill_tile.alpha_tile_index as u16,
-                                            Vector2I::default(),
-                                            object_index,
-                                            fill_tile.backdrop as i16),
-            upper_right: MaskTileVertex::new(mask_tile_index,
-                                             fill_tile.alpha_tile_index as u16,
-                                             Vector2I::new(1, 0),
-                                             object_index,
-                                             fill_tile.backdrop as i16),
-            lower_left: MaskTileVertex::new(mask_tile_index,
-                                            fill_tile.alpha_tile_index as u16,
-                                            Vector2I::new(0, 1),
-                                            object_index,
-                                            fill_tile.backdrop as i16),
-            lower_right: MaskTileVertex::new(mask_tile_index,
-                                             fill_tile.alpha_tile_index as u16,
-                                             Vector2I::splat(1),
-                                             object_index,
-                                             fill_tile.backdrop as i16),
-        });
-    }
-    */
-
-    pub(crate) fn push_alpha_tile(alpha_tiles: &mut Vec<Tile>,
-                                  fill_tile: &TileObjectPrimitive,
-                                  clip_tile: Option<&TileObjectPrimitive>,
-                                  tile_coords: Vector2I,
-                                  draw_tiling_path_info: &DrawTilingPathInfo) {
-        let fill_tile_index = fill_tile.alpha_tile_index as u16;
-        let fill_tile_backdrop = fill_tile.backdrop as i16;
-        let (clip_tile_index, clip_tile_backdrop) = match clip_tile {
+impl<'a> PackedTile<'a> {
+    pub(crate) fn add_to(&self,
+                         tiles: &mut Vec<Tile>,
+                         draw_tiling_path_info: &DrawTilingPathInfo) {
+        let fill_tile_index = self.draw_tile.alpha_tile_index as u16;
+        let fill_tile_backdrop = self.draw_tile.backdrop as i16;
+        let (clip_tile_index, clip_tile_backdrop) = match self.clip_tile {
             None => (0, 0),
             Some(clip_tile) => (clip_tile.alpha_tile_index as u16, clip_tile.backdrop as i16),
         };
 
-        alpha_tiles.push(Tile {
-            upper_left: TileVertex::new_alpha(tile_coords,
+        tiles.push(Tile {
+            upper_left: TileVertex::new_alpha(self.tile_coords,
                                               fill_tile_index,
                                               fill_tile_backdrop,
                                               clip_tile_index,
                                               clip_tile_backdrop,
                                               Vector2I::default(),
                                               draw_tiling_path_info),
-            upper_right: TileVertex::new_alpha(tile_coords,
+            upper_right: TileVertex::new_alpha(self.tile_coords,
                                                fill_tile_index,
                                                fill_tile_backdrop,
                                                clip_tile_index,
                                                clip_tile_backdrop,
                                                Vector2I::new(1, 0),
                                                draw_tiling_path_info),
-            lower_left: TileVertex::new_alpha(tile_coords,
+            lower_left: TileVertex::new_alpha(self.tile_coords,
                                               fill_tile_index,
                                               fill_tile_backdrop,
                                               clip_tile_index,
                                               clip_tile_backdrop,
                                               Vector2I::new(0, 1),
                                               draw_tiling_path_info),
-            lower_right: TileVertex::new_alpha(tile_coords,
+            lower_right: TileVertex::new_alpha(self.tile_coords,
                                                fill_tile_index,
                                                fill_tile_backdrop,
                                                clip_tile_index,
@@ -852,29 +846,6 @@ impl ObjectBuilder {
         });
     }
 }
-
-/*
-impl MaskTileVertex {
-    #[inline]
-    fn new(mask_index: u16,
-           fill_index: u16,
-           tile_offset: Vector2I,
-           object_index: u16,
-           backdrop: i16)
-           -> MaskTileVertex {
-        let mask_uv = calculate_mask_uv(mask_index, tile_offset);
-        let fill_uv = calculate_mask_uv(fill_index, tile_offset);
-        MaskTileVertex {
-            mask_u: mask_uv.x() as u16,
-            mask_v: mask_uv.y() as u16,
-            fill_u: fill_uv.x() as u16,
-            fill_v: fill_uv.y() as u16,
-            backdrop,
-            object_index,
-        }
-    }
-}
-*/
 
 impl TileVertex {
     #[inline]
@@ -927,14 +898,3 @@ fn calculate_opacity_uv(draw_tiling_path_info: &DrawTilingPathInfo) -> Vector2F 
                        Vector2F::splat(0.5)).scale(1.0 / 16.0);
     opacity_tile_transform * texel_coord
 }
-
-/*
-impl CulledTiles {
-    fn push_mask_tiles(&mut self, built_path: &BuiltPath) {
-        match built_path.fill_rule {
-            FillRule::Winding => self.mask_winding_tiles.extend_from_slice(&built_path.mask_tiles),
-            FillRule::EvenOdd => self.mask_evenodd_tiles.extend_from_slice(&built_path.mask_tiles),
-        }
-    }
-}
-*/

@@ -69,33 +69,22 @@ pub enum Filter {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BlendMode {
     // Porter-Duff, supported by GPU blender
+    Clear,
+    Copy,
+    SrcIn,
+    SrcOut,
     SrcOver,
     SrcAtop,
-    DestOver,
+    DestIn,
     DestOut,
+    DestOver,
+    DestAtop,
     Xor,
     Lighter,
 
-    // Others, supported by GPU blender
+    // Others, unsupported by GPU blender
     Darken,
     Lighten,
-
-    // Porter-Duff, unsupported by GPU blender
-
-    /// No regions are enabled.
-    Clear,
-    /// Only the source will be present.
-    Copy,
-    /// The source that overlaps the destination replaces the destination.
-    SrcIn,
-    /// Source is placed where it falls outside of the destination.
-    SrcOut,
-    /// Destination which overlaps the source replaces the source.
-    DestIn,
-    /// Destination which overlaps the source replaces the source. Source is placed elsewhere.
-    DestAtop,
-
-    // Others, unsupported by GPU blender
     Multiply,
     Screen,
     HardLight,
@@ -160,6 +149,39 @@ impl BlendMode {
             BlendMode::DestIn |
             BlendMode::SrcOut |
             BlendMode::DestAtop |
+            BlendMode::Multiply |
+            BlendMode::Screen |
+            BlendMode::HardLight |
+            BlendMode::Overlay |
+            BlendMode::ColorDodge |
+            BlendMode::ColorBurn |
+            BlendMode::SoftLight |
+            BlendMode::Difference |
+            BlendMode::Exclusion |
+            BlendMode::Hue |
+            BlendMode::Saturation |
+            BlendMode::Color |
+            BlendMode::Luminosity => false,
+        }
+    }
+
+    /// True if this blend mode does not preserve destination areas outside the source.
+    pub fn is_destructive(self) -> bool {
+        match self {
+            BlendMode::Clear |
+            BlendMode::Copy |
+            BlendMode::SrcIn |
+            BlendMode::DestIn |
+            BlendMode::SrcOut |
+            BlendMode::DestAtop => true,
+            BlendMode::SrcOver |
+            BlendMode::DestOver |
+            BlendMode::DestOut |
+            BlendMode::SrcAtop |
+            BlendMode::Xor |
+            BlendMode::Lighter |
+            BlendMode::Lighten |
+            BlendMode::Darken |
             BlendMode::Multiply |
             BlendMode::Screen |
             BlendMode::HardLight |
