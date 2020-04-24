@@ -285,7 +285,7 @@ dependencies = [
  "pathfinder_renderer 0.5.0",
  "pathfinder_resources 0.5.0",
  "pathfinder_simd 0.5.0",
- "surfman 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "surfman 0.2.0 (git+https://github.com/pcwalton/surfman?rev=bc29e7ae88ca7dd64d3b1c7e185604693290207f)",
  "winit 0.19.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2450,6 +2450,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "surfman"
 version = "0.2.0"
+source = "git+https://github.com/pcwalton/surfman?rev=bc29e7ae88ca7dd64d3b1c7e185604693290207f#bc29e7ae88ca7dd64d3b1c7e185604693290207f"
+dependencies = [
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cgl 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cocoa 0.19.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "core-foundation 0.6.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "core-graphics 0.17.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "display-link 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "euclid 0.20.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gl_generator 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "io-surface 0.12.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.69 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mach 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "objc 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "parking_lot 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wayland-sys 0.24.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winit 0.19.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wio 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "x11 2.18.2 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "surfman"
+version = "0.2.0"
 dependencies = [
  "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "cgl 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3297,6 +3324,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum static_assertions 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)" = "7f3eb36b47e512f8f1c9e3d10c2c1965bc992bd9cdb024fa581e2194501c83d3"
 "checksum stb_truetype 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "f77b6b07e862c66a9f3e62a07588fee67cd90a9135a2b942409f195507b4fb51"
 "checksum strsim 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)" = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
+"checksum surfman 0.2.0 (git+https://github.com/pcwalton/surfman?rev=bc29e7ae88ca7dd64d3b1c7e185604693290207f)" = "<none>"
 "checksum surfman 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "d28b4931b29b2c65fcce61898d6b4dbae2337a60308176c2d5cbff0913740d4a"
 "checksum svgtypes 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "9c536faaff1a10837cfe373142583f6e27d81e96beba339147e77b67c9f260ff"
 "checksum swf-fixed 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)" = "6b212c20df50b382c442a4098d7d9f1c94f0b040f0f0a5d120fa3a82fa51e302"
