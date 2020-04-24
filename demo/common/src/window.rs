@@ -18,7 +18,9 @@ use rayon::ThreadPoolBuilder;
 use std::path::PathBuf;
 
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-use metal::{CoreAnimationLayerRef, Device as MetalDevice, Texture as MetalTexture};
+use io_surface::IOSurfaceRef;
+#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+use metal::{CoreAnimationLayerRef, Device as MetalDevice};
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
 use pathfinder_metal::MetalDevice as PathfinderMetalDevice;
 
@@ -38,7 +40,7 @@ pub trait Window {
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
     fn metal_device(&self) -> MetalDevice;
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    fn metal_texture(&self) -> MetalTexture;
+    fn metal_io_surface(&self) -> IOSurfaceRef;
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
     fn present(&mut self, device: &mut PathfinderMetalDevice);
 

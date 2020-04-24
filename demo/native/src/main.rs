@@ -37,6 +37,8 @@ use surfman::{Context, ContextAttributeFlags, ContextAttributes, ContextDescript
 #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
 use surfman::{GLVersion as SurfmanGLVersion, Surface};
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+use io_surface::IOSurfaceRef;
+#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
 use metal::{CoreAnimationLayerRef, Device, MTLPixelFormat, MTLStorageMode, MTLTextureType};
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
 use metal::{MTLTextureUsage, Texture, TextureDescriptor};
@@ -130,8 +132,6 @@ struct WindowImpl {
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
     metal_device: NativeDevice,
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    metal_texture: Texture,
-    #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
     surface: SystemSurface,
 
     event_loop: EventsLoop,
@@ -161,8 +161,8 @@ impl Window for WindowImpl {
     }
 
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    fn metal_texture(&self) -> Texture {
-        self.metal_texture.clone()
+    fn metal_io_surface(&self) -> IOSurfaceRef {
+        self.device.native_surface(&self.surface).0
     }
 
     fn viewport(&self, view: View) -> RectI {
@@ -200,8 +200,9 @@ impl Window for WindowImpl {
     }
 
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    fn present(&mut self, _: &mut MetalDevice) {
-        self.device.present_surface(&mut self.surface).expect("Failed to present surface!")
+    fn present(&mut self, metal_device: &mut MetalDevice) {
+        self.device.present_surface(&mut self.surface).expect("Failed to present surface!");
+        metal_device.swap_texture(self.device.native_surface(&self.surface).0);
     }
 
     fn resource_loader(&self) -> &dyn ResourceLoader {
@@ -351,6 +352,8 @@ impl WindowImpl {
         let native_surface = device.native_surface(&surface);
 
         let physical_size = logical_size.to_physical(dpi);
+
+        /*
         let descriptor = TextureDescriptor::new();
         descriptor.set_texture_type(MTLTextureType::D2);
         descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
@@ -364,6 +367,7 @@ impl WindowImpl {
                                                       iosurface:native_surface.0
                                                           plane:0]
         };
+        */
 
         let resource_loader = FilesystemResourceLoader::locate();
 
@@ -372,7 +376,6 @@ impl WindowImpl {
             event_loop,
             connection,
             device,
-            metal_texture,
             metal_device: native_device,
             surface,
             pending_events: VecDeque::new(),

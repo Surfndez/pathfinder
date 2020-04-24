@@ -24,6 +24,8 @@ use core_foundation::base::TCFType;
 use core_foundation::string::{CFString, CFStringRef};
 use foreign_types::{ForeignType, ForeignTypeRef};
 use half::f16;
+use io_surface::IOSurfaceRef;
+use libc::size_t;
 use metal::{self, Argument, ArgumentEncoder, Buffer, CommandBuffer, CommandBufferRef};
 use metal::{CommandQueue, CompileOptions, CoreAnimationDrawable, CoreAnimationDrawableRef};
 use metal::{CoreAnimationLayer, CoreAnimationLayerRef, DepthStencilDescriptor, Function, Library};
@@ -83,7 +85,7 @@ pub struct MetalBuffer {
 
 impl MetalDevice {
     #[inline]
-    pub fn new(device: metal::Device, main_color_texture: Texture) -> MetalDevice {
+    pub unsafe fn new<T>(device: metal::Device, texture: T) -> MetalDevice where T: IntoTexture {
         let command_queue = device.new_command_queue();
 
         let samplers = (0..16).map(|sampling_flags_value| {
@@ -118,15 +120,15 @@ impl MetalDevice {
             device.new_sampler(&sampler_descriptor)
         }).collect();
 
-        let framebuffer_size = vec2i(main_color_texture.width() as i32,
-                                     main_color_texture.height() as i32);
+        let texture = texture.into_texture(&device);
+        let framebuffer_size = vec2i(texture.width() as i32, texture.height() as i32);
         let main_depth_stencil_texture = device.create_depth_stencil_texture(framebuffer_size);
 
         let shared_event = device.new_shared_event();
 
         MetalDevice {
             device,
-            main_color_texture,
+            main_color_texture: texture,
             main_depth_stencil_texture,
             command_queue,
             command_buffers: RefCell::new(vec![]),
@@ -138,8 +140,11 @@ impl MetalDevice {
     }
 
     #[inline]
-    pub fn swap_texture(&mut self, new_texture: Texture) -> Texture {
-        mem::replace(&mut self.main_color_texture, new_texture)
+    pub fn swap_texture<T>(&mut self, new_texture: T) -> Texture where T: IntoTexture {
+        unsafe {
+            let new_texture = new_texture.into_texture(&self.device);
+            mem::replace(&mut self.main_color_texture, new_texture)
+        }
     }
 
     #[inline]
@@ -1213,10 +1218,43 @@ impl DeviceExtra for metal::Device {
     }
 }
 
+// Miscellaneous extra public methods
+
 impl MetalTexture {
     #[inline]
     pub fn metal_texture(&self) -> Texture {
         self.texture.clone()
+    }
+}
+
+pub trait IntoTexture {
+    unsafe fn into_texture(self, metal_device: &metal::Device) -> Texture;
+}
+
+impl IntoTexture for Texture {
+    #[inline]
+    unsafe fn into_texture(self, _: &metal::Device) -> Texture {
+        self
+    }
+}
+
+impl IntoTexture for IOSurfaceRef {
+    #[inline]
+    unsafe fn into_texture(self, metal_device: &metal::Device) -> Texture {
+        unsafe {
+            let width = IOSurfaceGetWidth(self);
+            let height = IOSurfaceGetHeight(self);
+
+            let descriptor = TextureDescriptor::new();
+            descriptor.set_texture_type(MTLTextureType::D2);
+            descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            descriptor.set_width(width as u64);
+            descriptor.set_height(height as u64);
+            descriptor.set_storage_mode(MTLStorageMode::Managed);
+            descriptor.set_usage(MTLTextureUsage::Unknown);
+
+            msg_send![*metal_device, newTextureWithDescriptor:descriptor iosurface:self plane:0]
+        }
     }
 }
 
@@ -1763,4 +1801,11 @@ struct BlockExtra<A, R> {
     unknown2: *mut i32,             // 0x10
     dtor: BlockExtraDtor<A, R>,     // 0x18
     signature: *const *const i8,    // 0x20
+}
+
+// TODO(pcwalton): These should go upstream to `core-foundation-rs`.
+#[link(name = "IOSurface", kind = "framework")]
+extern {
+    fn IOSurfaceGetWidth(buffer: IOSurfaceRef) -> size_t;
+    fn IOSurfaceGetHeight(buffer: IOSurfaceRef) -> size_t;
 }
