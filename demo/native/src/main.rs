@@ -10,21 +10,27 @@
 
 //! A demo app for Pathfinder using SDL 2.
 
+use euclid::default::Size2D;
+use gl::types::GLuint;
+use gl;
 use nfd::Response;
 use pathfinder_demo::window::{Event, Keycode, SVGPath, View, Window, WindowSize};
 use pathfinder_demo::{DemoApp, Options};
 use pathfinder_geometry::rect::RectI;
-use pathfinder_geometry::vector::vec2i;
+use pathfinder_geometry::vector::{Vector2I, vec2i};
 use pathfinder_resources::ResourceLoader;
 use pathfinder_resources::fs::FilesystemResourceLoader;
-use sdl2::event::{Event as SDLEvent, WindowEvent};
-use sdl2::keyboard::Keycode as SDLKeycode;
-use sdl2::video::Window as SDLWindow;
-use sdl2::{EventPump, EventSubsystem, Sdl, VideoSubsystem};
-use sdl2_sys::{SDL_Event, SDL_UserEvent};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::ptr;
+use surfman::{Adapter, Connection, Context, ContextAttributeFlags, ContextAttributes, ContextDescriptor, Device, GLApi, GLVersion as SurfmanGLVersion, Surface};
+use surfman::{SurfaceAccess, SurfaceTexture, SurfaceType, declare_surfman};
+use winit::{ControlFlow, ElementState, Event as WinitEvent, EventsLoop, MouseButton, Touch, VirtualKeyCode, Window as WinitWindow, WindowBuilder, WindowEvent};
+use winit::dpi::{LogicalSize, PhysicalSize};
 
+declare_surfman!();
+
+/*
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
 use foreign_types::ForeignTypeRef;
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
@@ -37,11 +43,15 @@ use sdl2::hint;
 use sdl2::render::Canvas;
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
 use sdl2_sys::SDL_RenderGetMetalLayer;
+*/
 
 #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
 use pathfinder_gl::{GLDevice, GLVersion};
+
+/*
 #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
 use sdl2::video::{GLContext, GLProfile};
+*/
 
 #[cfg(not(windows))]
 use jemallocator;
@@ -81,28 +91,35 @@ fn main() {
     }
 }
 
+/*
 thread_local! {
     static SDL_CONTEXT: Sdl = sdl2::init().unwrap();
     static SDL_VIDEO: VideoSubsystem = SDL_CONTEXT.with(|context| context.video().unwrap());
     static SDL_EVENT: EventSubsystem = SDL_CONTEXT.with(|context| context.event().unwrap());
-}
+}*/
 
 struct WindowImpl {
     #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
-    window: SDLWindow,
+    window: WinitWindow,
     #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
-    gl_context: GLContext,
+    context: Context,
 
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    canvas: Canvas<SDLWindow>,
+    canvas: Canvas<WinitWindow>,
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
     metal_layer: *mut CAMetalLayer,
 
-    event_pump: EventPump,
+    event_loop: EventsLoop,
+    pending_events: VecDeque<Event>,
+    mouse_position: Vector2I,
+    mouse_down: bool,
+
+    connection: Connection,
+    device: Device,
+
     #[allow(dead_code)]
     resource_loader: FilesystemResourceLoader,
     selected_file: Option<PathBuf>,
-    open_svg_message_type: u32,
 }
 
 impl Window for WindowImpl {
@@ -111,26 +128,30 @@ impl Window for WindowImpl {
         GLVersion::GL3
     }
 
+    #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
+    fn gl_default_framebuffer(&self) -> GLuint {
+        self.device.context_surface_info(&self.context).unwrap().unwrap().framebuffer_object
+    }
+
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
     fn metal_layer(&self) -> &CoreAnimationLayerRef {
         unsafe { CoreAnimationLayerRef::from_ptr(self.metal_layer) }
     }
 
     fn viewport(&self, view: View) -> RectI {
-        let (width, height) = self.window().drawable_size();
-        let mut width = width as i32;
-        let height = height as i32;
+        let WindowSize { logical_size, backing_scale_factor } = self.size();
+        let mut size = (logical_size.to_f32() * backing_scale_factor).to_i32();
         let mut x_offset = 0;
         if let View::Stereo(index) = view {
-            width = width / 2;
-            x_offset = width * (index as i32);
+            size.set_x(size.x() / 2);
+            x_offset = size.x() * (index as i32);
         }
-        RectI::new(vec2i(x_offset, 0), vec2i(width, height))
+        RectI::new(vec2i(x_offset, 0), size)
     }
 
     #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
     fn make_current(&mut self, _view: View) {
-        self.window().gl_make_current(&self.gl_context).unwrap();
+        self.device.make_context_current(&self.context).unwrap();
     }
 
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
@@ -138,7 +159,17 @@ impl Window for WindowImpl {
 
     #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
     fn present(&mut self, _: &mut GLDevice) {
-        self.window().gl_swap_window();
+        let fbo = self.device
+                      .context_surface_info(&self.context)
+                      .unwrap()
+                      .unwrap()
+                      .framebuffer_object;
+        let mut surface = self.device
+                              .unbind_surface_from_context(&mut self.context)
+                              .unwrap()
+                              .unwrap();
+        self.device.present_surface(&mut self.context, &mut surface).unwrap();
+        self.device.bind_surface_to_context(&mut self.context, surface).unwrap();
     }
 
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
@@ -150,29 +181,14 @@ impl Window for WindowImpl {
         &self.resource_loader
     }
 
-    fn create_user_event_id(&self) -> u32 {
-        SDL_EVENT.with(|sdl_event| unsafe { sdl_event.register_event().unwrap() })
-    }
-
-    fn push_user_event(message_type: u32, message_data: u32) {
-        unsafe {
-            let mut user_event = SDL_UserEvent {
-                timestamp: 0,
-                windowID: 0,
-                type_: message_type,
-                code: message_data as i32,
-                data1: ptr::null_mut(),
-                data2: ptr::null_mut(),
-            };
-            sdl2_sys::SDL_PushEvent(&mut user_event as *mut SDL_UserEvent as *mut SDL_Event);
-        }
-    }
-
     fn present_open_svg_dialog(&mut self) {
+        /*
         if let Ok(Response::Okay(path)) = nfd::open_file_dialog(Some("svg"), None) {
             self.selected_file = Some(PathBuf::from(path));
             WindowImpl::push_user_event(self.open_svg_message_type, 0);
         }
+        */
+        // TODO(pcwalton)
     }
 
     fn run_save_dialog(&self, extension: &str) -> Result<PathBuf, ()> {
@@ -181,11 +197,53 @@ impl Window for WindowImpl {
             _ => Err(()),
         }
     }
+
+    fn create_user_event_id(&self) -> u32 {
+        // TODO(pcwalton)
+        0
+    }
+
+    fn push_user_event(message_type: u32, message_data: u32) {
+        // TODO(pcwalton)
+    }
 }
 
 impl WindowImpl {
     #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
     fn new() -> WindowImpl {
+        let mut event_loop = EventsLoop::new();
+        let dpi = event_loop.get_primary_monitor().get_hidpi_factor();
+        let window_size = Size2D::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
+        let logical_size = LogicalSize::new(window_size.width as f64, window_size.height as f64);
+        let window = WindowBuilder::new().with_title("Pathfinder Demo")
+                                         .with_dimensions(logical_size)
+                                         .build(&event_loop)
+                                         .unwrap();
+        window.show();
+
+        let connection = Connection::from_winit_window(&window).unwrap();
+        let native_widget = connection.create_native_widget_from_winit_window(&window).unwrap();
+        let adapter = connection.create_low_power_adapter().unwrap();
+        let mut device = connection.create_device(&adapter).unwrap();
+
+        let context_attributes = ContextAttributes {
+            version: SurfmanGLVersion::new(3, 0),
+            flags: ContextAttributeFlags::ALPHA,
+        };
+        let context_descriptor = device.create_context_descriptor(&context_attributes).unwrap();
+
+        let surface_type = SurfaceType::Widget { native_widget };
+        let mut context = device.create_context(&context_descriptor).unwrap();
+        let surface = device.create_surface(&context, SurfaceAccess::GPUOnly, surface_type)
+                            .unwrap();
+        device.bind_surface_to_context(&mut context, surface).unwrap();
+        device.make_context_current(&context).unwrap();
+
+        gl::load_with(|symbol_name| device.get_proc_address(&context, symbol_name));
+
+        let resource_loader = FilesystemResourceLoader::locate();
+
+        /*
         SDL_VIDEO.with(|sdl_video| {
             SDL_EVENT.with(|sdl_event| {
                 let (window, gl_context, event_pump);
@@ -227,8 +285,23 @@ impl WindowImpl {
                 }
             })
         })
+        */
+
+        WindowImpl {
+            window,
+            event_loop,
+            connection,
+            context,
+            device,
+            pending_events: VecDeque::new(),
+            mouse_position: vec2i(0, 0),
+            mouse_down: false,
+            resource_loader,
+            selected_file: None,
+        }
     }
 
+    /*
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
     fn new() -> WindowImpl {
         assert!(hint::set("SDL_RENDER_DRIVER", "metal"));
@@ -259,7 +332,7 @@ impl WindowImpl {
                 let open_svg_message_type = unsafe { sdl_event.register_event().unwrap() };
 
                 WindowImpl {
-                    event_pump,
+                    event_loop,
                     canvas,
                     metal_layer,
                     resource_loader,
@@ -269,93 +342,142 @@ impl WindowImpl {
             })
         })
     }
+    */
 
     #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
-    fn window(&self) -> &SDLWindow { &self.window }
+    fn window(&self) -> &WinitWindow { &self.window }
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    fn window(&self) -> &SDLWindow { self.canvas.window() }
+    fn window(&self) -> &WinitWindow { self.canvas.window() }
 
     fn size(&self) -> WindowSize {
-        let (logical_width, logical_height) = self.window().size();
-        let (drawable_width, _) = self.window().drawable_size();
+        let window = self.window();
+        let (monitor, size) = (window.get_current_monitor(), window.get_inner_size().unwrap());
+
         WindowSize {
-            logical_size: vec2i(logical_width as i32, logical_height as i32),
-            backing_scale_factor: drawable_width as f32 / logical_width as f32,
+            logical_size: vec2i(size.width as i32, size.height as i32),
+            backing_scale_factor: monitor.get_hidpi_factor() as f32,
         }
     }
 
     fn get_event(&mut self) -> Event {
-        loop {
-            let sdl_event = self.event_pump.wait_event();
-            if let Some(event) = self.convert_sdl_event(sdl_event) {
-                return event;
-            }
+        if self.pending_events.is_empty() {
+            let window = &self.window;
+            let mouse_position = &mut self.mouse_position;
+            let mouse_down = &mut self.mouse_down;
+            let selected_file = &mut self.selected_file;
+            let pending_events = &mut self.pending_events;
+            self.event_loop.run_forever(|event| {
+                match convert_winit_event(event,
+                                          window,
+                                          mouse_position,
+                                          mouse_down,
+                                          selected_file) {
+                    Some(event) => {
+                        pending_events.push_back(event);
+                        ControlFlow::Break
+                    }
+                    None => ControlFlow::Continue,
+                }
+            });
         }
+
+        self.pending_events.pop_front().expect("Where's the event?")
     }
 
     fn try_get_event(&mut self) -> Option<Event> {
-        loop {
-            let sdl_event = self.event_pump.poll_event()?;
-            if let Some(event) = self.convert_sdl_event(sdl_event) {
-                return Some(event);
-            }
-        }
-    }
-
-    fn convert_sdl_event(&self, sdl_event: SDLEvent) -> Option<Event> {
-        match sdl_event {
-            SDLEvent::User { type_, .. } if type_ == self.open_svg_message_type => Some(
-                Event::OpenSVG(SVGPath::Path(self.selected_file.clone().unwrap())),
-            ),
-            SDLEvent::User { type_, code, .. } => Some(Event::User {
-                message_type: type_,
-                message_data: code as u32,
-            }),
-            SDLEvent::MouseButtonDown { x, y, .. } => Some(Event::MouseDown(vec2i(x, y))),
-            SDLEvent::MouseMotion {
-                x, y, mousestate, ..
-            } => {
-                let position = vec2i(x, y);
-                if mousestate.left() {
-                    Some(Event::MouseDragged(position))
-                } else {
-                    Some(Event::MouseMoved(position))
+        if self.pending_events.is_empty() {
+            let window = &self.window;
+            let mouse_position = &mut self.mouse_position;
+            let mouse_down = &mut self.mouse_down;
+            let selected_file = &mut self.selected_file;
+            let pending_events = &mut self.pending_events;
+            self.event_loop.poll_events(|event| {
+                if let Some(event) = convert_winit_event(event,
+                                                         window,
+                                                         mouse_position,
+                                                         mouse_down,
+                                                         selected_file) {
+                    pending_events.push_back(event);
                 }
-            }
-            SDLEvent::Quit { .. } => Some(Event::Quit),
-            SDLEvent::Window {
-                win_event: WindowEvent::SizeChanged(..),
-                ..
-            } => Some(Event::WindowResized(self.size())),
-            SDLEvent::KeyDown {
-                keycode: Some(sdl_keycode),
-                ..
-            } => self.convert_sdl_keycode(sdl_keycode).map(Event::KeyDown),
-            SDLEvent::KeyUp {
-                keycode: Some(sdl_keycode),
-                ..
-            } => self.convert_sdl_keycode(sdl_keycode).map(Event::KeyUp),
-            SDLEvent::MultiGesture { d_dist, .. } => {
-                let mouse_state = self.event_pump.mouse_state();
-                let center = vec2i(mouse_state.x(), mouse_state.y());
-                Some(Event::Zoom(d_dist, center))
-            }
-            _ => None,
+            });
         }
+        self.pending_events.pop_front()
     }
+}
 
-    fn convert_sdl_keycode(&self, sdl_keycode: SDLKeycode) -> Option<Keycode> {
-        match sdl_keycode {
-            SDLKeycode::Escape => Some(Keycode::Escape),
-            SDLKeycode::Tab => Some(Keycode::Tab),
-            sdl_keycode
-                if sdl_keycode as i32 >= SDLKeycode::A as i32
-                    && sdl_keycode as i32 <= SDLKeycode::Z as i32 =>
-            {
-                let offset = (sdl_keycode as i32 - SDLKeycode::A as i32) as u8;
-                Some(Keycode::Alphanumeric(offset + b'a'))
-            }
-            _ => None,
+fn convert_winit_event(winit_event: WinitEvent,
+                       window: &WinitWindow,
+                       mouse_position: &mut Vector2I,
+                       mouse_down: &mut bool,
+                       selected_file: &mut Option<PathBuf>)
+                       -> Option<Event> {
+    match winit_event {
+        WinitEvent::Awakened => {
+            Some(Event::OpenSVG(SVGPath::Path(selected_file.clone().unwrap())))
         }
+        WinitEvent::WindowEvent { event: window_event, .. } => {
+            match window_event {
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    *mouse_down = true;
+                    Some(Event::MouseDown(*mouse_position))
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    *mouse_down = false;
+                    None
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    *mouse_position = vec2i(position.x as i32, position.y as i32);
+                    if *mouse_down {
+                        Some(Event::MouseDragged(*mouse_position))
+                    } else {
+                        Some(Event::MouseMoved(*mouse_position))
+                    }
+                }
+                WindowEvent::KeyboardInput { input, .. } => {
+                    input.virtual_keycode.and_then(|virtual_keycode| {
+                        match virtual_keycode {
+                            VirtualKeyCode::Escape => Some(Keycode::Escape),
+                            VirtualKeyCode::Tab => Some(Keycode::Tab),
+                            virtual_keycode => {
+                                let vk = virtual_keycode as u32;
+                                let vk_a = VirtualKeyCode::A as u32;
+                                let vk_z = VirtualKeyCode::Z as u32;
+                                if vk >= vk_a && vk <= vk_z {
+                                    let character = ((vk - vk_a) + 'A' as u32) as u8;
+                                    Some(Keycode::Alphanumeric(character))
+                                } else {
+                                    None
+                                }
+                            }
+                        }
+                    }).map(|keycode| {
+                        match input.state {
+                            ElementState::Pressed => Event::KeyDown(keycode),
+                            ElementState::Released => Event::KeyUp(keycode),
+                        }
+                    })
+                }
+                WindowEvent::CloseRequested => Some(Event::Quit),
+                WindowEvent::Resized(new_size) => {
+                    let logical_size = vec2i(new_size.width as i32, new_size.height as i32);
+                    let backing_scale_factor =
+                        window.get_current_monitor().get_hidpi_factor() as f32;
+                    Some(Event::WindowResized(WindowSize {
+                        logical_size,
+                        backing_scale_factor,
+                    }))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
