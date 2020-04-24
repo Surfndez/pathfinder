@@ -61,8 +61,7 @@ const FIRST_VERTEX_BUFFER_INDEX: u64 = 1;
 
 pub struct MetalDevice {
     device: metal::Device,
-    layer: CoreAnimationLayer,
-    drawable: CoreAnimationDrawable,
+    main_color_texture: Texture,
     main_depth_stencil_texture: Texture,
     command_queue: CommandQueue,
     command_buffers: RefCell<Vec<CommandBuffer>>,
@@ -84,10 +83,7 @@ pub struct MetalBuffer {
 
 impl MetalDevice {
     #[inline]
-    pub fn new(layer: &CoreAnimationLayerRef) -> MetalDevice {
-        let layer = layer.retain();
-        let device = layer.device();
-        let drawable = layer.next_drawable().unwrap().retain();
+    pub fn new(device: metal::Device, main_color_texture: Texture) -> MetalDevice {
         let command_queue = device.new_command_queue();
 
         let samplers = (0..16).map(|sampling_flags_value| {
@@ -122,7 +118,6 @@ impl MetalDevice {
             device.new_sampler(&sampler_descriptor)
         }).collect();
 
-        let main_color_texture = drawable.texture();
         let framebuffer_size = vec2i(main_color_texture.width() as i32,
                                      main_color_texture.height() as i32);
         let main_depth_stencil_texture = device.create_depth_stencil_texture(framebuffer_size);
@@ -131,8 +126,7 @@ impl MetalDevice {
 
         MetalDevice {
             device,
-            layer,
-            drawable,
+            main_color_texture,
             main_depth_stencil_texture,
             command_queue,
             command_buffers: RefCell::new(vec![]),
@@ -143,11 +137,14 @@ impl MetalDevice {
         }
     }
 
-    pub fn present_drawable(&mut self) {
-        self.begin_commands();
-        self.command_buffers.borrow_mut().last().unwrap().present_drawable(&self.drawable);
-        self.end_commands();
-        self.drawable = self.layer.next_drawable().unwrap().retain();
+    #[inline]
+    pub fn swap_texture(&mut self, new_texture: Texture) -> Texture {
+        mem::replace(&mut self.main_color_texture, new_texture)
+    }
+
+    #[inline]
+    pub fn metal_device(&self) -> metal::Device {
+        self.device.clone()
     }
 }
 
@@ -724,7 +721,7 @@ impl MetalDevice {
     fn render_target_color_texture(&self, render_target: &RenderTarget<MetalDevice>)
                                    -> Texture {
         match *render_target {
-            RenderTarget::Default {..} => self.drawable.texture().retain(),
+            RenderTarget::Default {..} => self.main_color_texture.retain(),
             RenderTarget::Framebuffer(framebuffer) => framebuffer.0.texture.retain(),
         }
     }
@@ -1213,6 +1210,13 @@ impl DeviceExtra for metal::Device {
         descriptor.set_storage_mode(MTLStorageMode::Private);
         descriptor.set_usage(MTLTextureUsage::Unknown);
         self.new_texture(&descriptor)
+    }
+}
+
+impl MetalTexture {
+    #[inline]
+    pub fn metal_texture(&self) -> Texture {
+        self.texture.clone()
     }
 }
 

@@ -10,6 +10,10 @@
 
 //! A demo app for Pathfinder using SDL 2.
 
+#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+#[macro_use]
+extern crate objc;
+
 use euclid::default::Size2D;
 use gl::types::GLuint;
 use gl;
@@ -23,10 +27,23 @@ use pathfinder_resources::fs::FilesystemResourceLoader;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::ptr;
-use surfman::{Adapter, Connection, Context, ContextAttributeFlags, ContextAttributes, ContextDescriptor, Device, GLApi, GLVersion as SurfmanGLVersion, Surface};
+use surfman::{Adapter, Connection};
 use surfman::{SurfaceAccess, SurfaceTexture, SurfaceType, declare_surfman};
 use winit::{ControlFlow, ElementState, Event as WinitEvent, EventsLoop, MouseButton, Touch, VirtualKeyCode, Window as WinitWindow, WindowBuilder, WindowEvent};
 use winit::dpi::{LogicalSize, PhysicalSize};
+
+#[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
+use surfman::{Context, ContextAttributeFlags, ContextAttributes, ContextDescriptor, Device, GLApi};
+#[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
+use surfman::{GLVersion as SurfmanGLVersion, Surface};
+#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+use metal::{CoreAnimationLayerRef, Device, MTLPixelFormat, MTLStorageMode, MTLTextureType};
+#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+use metal::{MTLTextureUsage, Texture, TextureDescriptor};
+#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+use pathfinder_metal::MetalDevice;
+#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+use surfman::{NativeDevice, SystemConnection, SystemDevice, SystemSurface};
 
 declare_surfman!();
 
@@ -35,8 +52,6 @@ declare_surfman!();
 use foreign_types::ForeignTypeRef;
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
 use metal::{CAMetalLayer, CoreAnimationLayerRef};
-#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-use pathfinder_metal::MetalDevice;
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
 use sdl2::hint;
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
@@ -99,23 +114,30 @@ thread_local! {
 }*/
 
 struct WindowImpl {
-    #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
     window: WinitWindow,
+
     #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
     context: Context,
+    #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
+    connection: Connection,
+    #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
+    device: Device,
 
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    canvas: Canvas<WinitWindow>,
+    connection: SystemConnection,
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    metal_layer: *mut CAMetalLayer,
+    device: SystemDevice,
+    #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+    metal_device: NativeDevice,
+    #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+    metal_texture: Texture,
+    #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+    surface: SystemSurface,
 
     event_loop: EventsLoop,
     pending_events: VecDeque<Event>,
     mouse_position: Vector2I,
     mouse_down: bool,
-
-    connection: Connection,
-    device: Device,
 
     #[allow(dead_code)]
     resource_loader: FilesystemResourceLoader,
@@ -134,8 +156,13 @@ impl Window for WindowImpl {
     }
 
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    fn metal_layer(&self) -> &CoreAnimationLayerRef {
-        unsafe { CoreAnimationLayerRef::from_ptr(self.metal_layer) }
+    fn metal_device(&self) -> metal::Device {
+        self.metal_device.0.clone()
+    }
+
+    #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+    fn metal_texture(&self) -> Texture {
+        self.metal_texture.clone()
     }
 
     fn viewport(&self, view: View) -> RectI {
@@ -173,8 +200,8 @@ impl Window for WindowImpl {
     }
 
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    fn present(&mut self, device: &mut MetalDevice) {
-        device.present_drawable();
+    fn present(&mut self, _: &mut MetalDevice) {
+        self.device.present_surface(&mut self.surface).expect("Failed to present surface!")
     }
 
     fn resource_loader(&self) -> &dyn ResourceLoader {
@@ -301,6 +328,61 @@ impl WindowImpl {
         }
     }
 
+    #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
+    fn new() -> WindowImpl {
+        let mut event_loop = EventsLoop::new();
+        let dpi = event_loop.get_primary_monitor().get_hidpi_factor();
+        let window_size = Size2D::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
+        let logical_size = LogicalSize::new(window_size.width as f64, window_size.height as f64);
+        let window = WindowBuilder::new().with_title("Pathfinder Demo")
+                                         .with_dimensions(logical_size)
+                                         .build(&event_loop)
+                                         .unwrap();
+        window.show();
+
+        let connection = SystemConnection::from_winit_window(&window).unwrap();
+        let native_widget = connection.create_native_widget_from_winit_window(&window).unwrap();
+        let adapter = connection.create_low_power_adapter().unwrap();
+        let mut device = connection.create_device(&adapter).unwrap();
+        let native_device = device.native_device();
+
+        let surface_type = SurfaceType::Widget { native_widget };
+        let surface = device.create_surface(SurfaceAccess::GPUOnly, surface_type).unwrap();
+        let native_surface = device.native_surface(&surface);
+
+        let physical_size = logical_size.to_physical(dpi);
+        let descriptor = TextureDescriptor::new();
+        descriptor.set_texture_type(MTLTextureType::D2);
+        descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
+        descriptor.set_width(physical_size.width as u64);
+        descriptor.set_height(physical_size.height as u64);
+        descriptor.set_storage_mode(MTLStorageMode::Managed);
+        descriptor.set_usage(MTLTextureUsage::Unknown);
+
+        let metal_texture = unsafe {
+            msg_send![native_device.0, newTextureWithDescriptor:descriptor
+                                                      iosurface:native_surface.0
+                                                          plane:0]
+        };
+
+        let resource_loader = FilesystemResourceLoader::locate();
+
+        WindowImpl {
+            window,
+            event_loop,
+            connection,
+            device,
+            metal_texture,
+            metal_device: native_device,
+            surface,
+            pending_events: VecDeque::new(),
+            mouse_position: vec2i(0, 0),
+            mouse_down: false,
+            resource_loader,
+            selected_file: None,
+        }
+    }
+
     /*
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
     fn new() -> WindowImpl {
@@ -344,10 +426,7 @@ impl WindowImpl {
     }
     */
 
-    #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
     fn window(&self) -> &WinitWindow { &self.window }
-    #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    fn window(&self) -> &WinitWindow { self.canvas.window() }
 
     fn size(&self) -> WindowSize {
         let window = self.window();

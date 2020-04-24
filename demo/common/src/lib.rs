@@ -122,7 +122,7 @@ impl<W> DemoApp<W> where W: Window {
         let device;
         #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
         {
-            device = DeviceImpl::new(window.metal_layer());
+            device = DeviceImpl::new(window.metal_device(), window.metal_texture());
         }
         #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
         {
