@@ -467,7 +467,7 @@ impl<W> DemoApp<W> where W: Window {
         MousePosition { absolute, relative }
     }
 
-    pub fn finish_drawing_frame(&mut self) {
+    pub fn finish_drawing_frame(&mut self, before_time: ::std::time::Instant) {
         self.maybe_take_screenshot();
         self.update_stats();
         self.draw_debug_ui();
@@ -494,7 +494,17 @@ impl<W> DemoApp<W> where W: Window {
 
         self.handle_ui_events(frame, &mut ui_action);
 
+        /*
+        println!("time elapsed before end commands: {}ms",
+                 (::std::time::Instant::now() - before_time).as_secs_f32() * 1000.0);
+                 */
+
         self.renderer.device.end_commands();
+
+        /*
+        println!("time elapsed before present: {}ms",
+                 (::std::time::Instant::now() - before_time).as_secs_f32() * 1000.0);
+                 */
 
         self.window.present(&mut self.renderer.device);
         self.frame_counter += 1;
@@ -549,6 +559,11 @@ impl<W> DemoApp<W> where W: Window {
                                       viewport_size);
         }
 
+        let before_translation = match self.camera {
+            Camera::TwoD(ref transform) => transform.vector,
+            _ => Vector2F::default(),
+        }; 
+
         for ui_event in frame.ui_events {
             match ui_event {
                 UIEvent::MouseDown(_) if self.camera.is_3d() => {
@@ -563,6 +578,12 @@ impl<W> DemoApp<W> where W: Window {
                 _ => {}
             }
         }
+
+        /*
+        if let Camera::TwoD(ref transform) = self.camera {
+            println!("delta: {:?}", transform.vector - before_translation);
+        }
+        */
     }
 
     fn handle_ui_action(&mut self, ui_action: &mut UIAction) {

@@ -54,7 +54,6 @@ pub(crate) const MASK_TILES_DOWN: u32 = 256;
 const SQRT_2_PI_INV: f32 = 0.3989422804014327;
 
 const TEXTURE_CACHE_SIZE: usize = 8;
-const TIMER_QUERY_CACHE_SIZE: usize = 8;
 
 const TEXTURE_METADATA_ENTRIES_PER_ROW: i32 = 128;
 const TEXTURE_METADATA_TEXTURE_WIDTH:   i32 = TEXTURE_METADATA_ENTRIES_PER_ROW * 4;
@@ -142,9 +141,9 @@ where
     // Debug
     pub stats: RenderStats,
     current_cpu_build_time: Option<Duration>,
-    current_timer: Option<D::TimerQuery>,
+    current_timer: Option<PendingTimer<D>>,
     pending_timers: VecDeque<PendingTimer<D>>,
-    free_timer_queries: Vec<D::TimerQuery>,
+    timer_query_cache: TimerQueryCache<D>,
     pub debug_ui_presenter: DebugUIPresenter<D>,
 
     // Extra info
@@ -237,11 +236,7 @@ where
         let intermediate_dest_texture = device.create_texture(TextureFormat::RGBA8, window_size);
         let intermediate_dest_framebuffer = device.create_framebuffer(intermediate_dest_texture);
 
-        let mut timer_queries = vec![];
-        for _ in 0..TIMER_QUERY_CACHE_SIZE {
-            timer_queries.push(device.create_timer_query());
-        }
-
+        let timer_query_cache = TimerQueryCache::new(&device);
         let debug_ui_presenter = DebugUIPresenter::new(&device, resources, window_size);
 
         Renderer {
@@ -285,7 +280,7 @@ where
             current_cpu_build_time: None,
             current_timer: None,
             pending_timers: VecDeque::new(),
-            free_timer_queries: timer_queries,
+            timer_query_cache,
             debug_ui_presenter,
 
             framebuffer_flags: FramebufferFlags::empty(),
@@ -302,6 +297,7 @@ where
         }
 
         self.device.begin_commands();
+        self.current_timer = Some(PendingTimer::new());
         self.stats = RenderStats::default();
     }
 
@@ -333,7 +329,7 @@ where
             RenderCommand::ClipTiles(ref batches) => {
                 batches.iter().for_each(|batch| self.draw_clip_batch(batch))
             }
-            RenderCommand::BeginTileDrawing => self.begin_tile_drawing(),
+            RenderCommand::BeginTileDrawing => {}
             RenderCommand::PushRenderTarget(render_target_id) => {
                 self.push_render_target(render_target_id)
             }
@@ -352,24 +348,15 @@ where
         }
     }
 
-    fn begin_tile_drawing(&mut self) {
-        if let Some(timer_query) = self.allocate_timer_query() {
-            self.device.begin_timer_query(&timer_query);
-            self.current_timer = Some(timer_query);
-        }
-    }
-
     pub fn end_scene(&mut self) {
         self.blit_intermediate_dest_framebuffer_if_necessary();
 
         self.device.end_commands();
 
-        if let Some(timer_query) = self.current_timer.take() {
-            self.device.end_timer_query(&timer_query);
-            self.pending_timers.push_back(PendingTimer {
-                gpu_timer_query: timer_query,
-            });
+        if let Some(timer) = self.current_timer.take() {
+            self.pending_timers.push_back(timer);
         }
+
         self.current_cpu_build_time = None;
     }
 
@@ -397,11 +384,12 @@ where
     }
 
     pub fn shift_rendering_time(&mut self) -> Option<RenderTime> {
-        if let Some(pending_timer) = self.pending_timers.pop_front() {
-            if let Some(gpu_time) =
-                    self.device.try_recv_timer_query(&pending_timer.gpu_timer_query) {
-                self.free_timer_queries.push(pending_timer.gpu_timer_query);
-                return Some(RenderTime { gpu_time });
+        if let Some(mut pending_timer) = self.pending_timers.pop_front() {
+            for old_query in pending_timer.poll(&self.device) {
+                self.timer_query_cache.free(old_query);
+            }
+            if let Some(gpu_time) = pending_timer.total_time() {
+                return Some(RenderTime { gpu_time })
             }
             self.pending_timers.push_front(pending_timer);
         }
@@ -617,6 +605,9 @@ where
             clear_color = Some(ColorF::default());
         };
 
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
         debug_assert!(buffered_fills.len() <= u32::MAX as usize);
         self.device.draw_elements_instanced(6, buffered_fills.len() as u32, &RenderState {
             target: &RenderTarget::Framebuffer(&alpha_tile_page.framebuffer),
@@ -645,6 +636,9 @@ where
                 ..RenderOptions::default()
             },
         });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
 
         alpha_tile_page.must_preserve_framebuffer = true;
         buffered_fills.clear();
@@ -686,6 +680,9 @@ where
 
         let mask_viewport = self.mask_viewport();
 
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
         {
             let dest_framebuffer = &self.alpha_tile_pages[&dest_page].framebuffer;
             let src_framebuffer = &self.alpha_tile_pages[&src_page].framebuffer;
@@ -706,6 +703,9 @@ where
                     ..RenderOptions::default()
                 },
             });
+
+            self.device.end_timer_query(&timer_query);
+            self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
         }
 
         self.alpha_tile_pages.get_mut(&dest_page).unwrap().must_preserve_framebuffer = true;
@@ -732,6 +732,9 @@ where
 
         let clear_color = self.clear_color_for_draw_operation();
         let draw_viewport = self.draw_viewport();
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
 
         let mut textures = vec![&self.texture_metadata_texture];
         let mut uniforms = vec![
@@ -821,6 +824,9 @@ where
                 ..RenderOptions::default()
             },
         });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().tile_times.push(TimerFuture::new(timer_query));
 
         self.preserve_draw_framebuffer();
     }
@@ -1087,6 +1093,9 @@ where
     }
 
     fn clear_color_for_draw_operation(&self) -> Option<ColorF> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static FRAME_COUNT: AtomicUsize = AtomicUsize::new(0);
+
         let must_preserve_contents = match self.render_target_stack.last() {
             Some(&render_target_id) => {
                 let texture_page = self.render_target_location(render_target_id).page;
@@ -1163,10 +1172,6 @@ where
     fn texture_page(&self, id: TexturePageId) -> &D::Texture {
         self.device.framebuffer_texture(&self.texture_page_framebuffer(id))
     }
-
-    fn allocate_timer_query(&mut self) -> Option<D::TimerQuery> {
-        self.free_timer_queries.pop()
-    }
 }
 
 // Render stats
@@ -1206,9 +1211,91 @@ impl Div<usize> for RenderStats {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+struct TimerQueryCache<D> where D: Device {
+    free_queries: Vec<D::TimerQuery>,
+}
+
 struct PendingTimer<D> where D: Device {
-    gpu_timer_query: D::TimerQuery,
+    fill_times: Vec<TimerFuture<D>>,
+    tile_times: Vec<TimerFuture<D>>,
+}
+
+enum TimerFuture<D> where D: Device {
+    Pending(D::TimerQuery),
+    Resolved(Duration),
+}
+
+impl<D> TimerQueryCache<D> where D: Device {
+    fn new(device: &D) -> TimerQueryCache<D> {
+        TimerQueryCache { free_queries: vec![] }
+    }
+
+    fn alloc(&mut self, device: &D) -> D::TimerQuery {
+        self.free_queries.pop().unwrap_or_else(|| device.create_timer_query())
+    }
+
+    fn free(&mut self, old_query: D::TimerQuery) {
+        self.free_queries.push(old_query);
+    }
+}
+
+impl<D> PendingTimer<D> where D: Device {
+    fn new() -> PendingTimer<D> {
+        PendingTimer { fill_times: vec![], tile_times: vec![] }
+    }
+
+    fn poll(&mut self, device: &D) -> Vec<D::TimerQuery> {
+        let mut old_queries = vec![];
+        for future in self.fill_times.iter_mut().chain(self.tile_times.iter_mut()) {
+            if let Some(old_query) = future.poll(device) {
+                old_queries.push(old_query)
+            }
+        }
+        old_queries
+    }
+
+    fn is_resolved(&self) -> bool {
+        for future in self.fill_times.iter().chain(self.tile_times.iter()) {
+            match *future {
+                TimerFuture::Pending(_) => return false,
+                TimerFuture::Resolved(_) => {}
+            }
+        }
+        true
+    }
+
+    fn total_time(&self) -> Option<Duration> {
+        let mut total = Duration::default();
+        for future in self.fill_times.iter().chain(self.tile_times.iter()) {
+            match *future {
+                TimerFuture::Pending(_) => return None,
+                TimerFuture::Resolved(time) => total += time,
+            }
+        }
+        Some(total)
+    }
+}
+
+impl<D> TimerFuture<D> where D: Device {
+    fn new(query: D::TimerQuery) -> TimerFuture<D> {
+        TimerFuture::Pending(query)
+    }
+
+    fn poll(&mut self, device: &D) -> Option<D::TimerQuery> {
+        let duration = match *self {
+            TimerFuture::Pending(ref query) => device.try_recv_timer_query(query),
+            TimerFuture::Resolved(_) => None,
+        };
+        match duration {
+            None => None,
+            Some(duration) => {
+                match mem::replace(self, TimerFuture::Resolved(duration)) {
+                    TimerFuture::Resolved(_) => unreachable!(),
+                    TimerFuture::Pending(old_query) => Some(old_query),
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

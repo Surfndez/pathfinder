@@ -10,13 +10,13 @@
 
 //! A demo app for Pathfinder using SDL 2.
 
-#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
 #[macro_use]
+extern crate lazy_static;
+
+#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
 extern crate objc;
 
 use euclid::default::Size2D;
-use gl::types::GLuint;
-use gl;
 use nfd::Response;
 use pathfinder_demo::window::{Event, Keycode, SVGPath, View, Window, WindowSize};
 use pathfinder_demo::{DemoApp, Options};
@@ -24,24 +24,25 @@ use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::vector::{Vector2I, vec2i};
 use pathfinder_resources::ResourceLoader;
 use pathfinder_resources::fs::FilesystemResourceLoader;
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::ptr;
-use surfman::{Adapter, Connection};
-use surfman::{SurfaceAccess, SurfaceTexture, SurfaceType, declare_surfman};
-use winit::{ControlFlow, ElementState, Event as WinitEvent, EventsLoop, MouseButton, Touch, VirtualKeyCode, Window as WinitWindow, WindowBuilder, WindowEvent};
-use winit::dpi::{LogicalSize, PhysicalSize};
+use std::sync::Mutex;
+use surfman::{SurfaceAccess, SurfaceType, declare_surfman};
+use winit::{ControlFlow, ElementState, Event as WinitEvent, EventsLoop, EventsLoopProxy};
+use winit::{MouseButton, Touch, VirtualKeyCode, Window as WinitWindow, WindowBuilder, WindowEvent};
+use winit::dpi::LogicalSize;
 
 #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
-use surfman::{Context, ContextAttributeFlags, ContextAttributes, ContextDescriptor, Device, GLApi};
+use gl::types::GLuint;
+#[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
+use gl;
+#[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
+use surfman::{Connection, Context, ContextAttributeFlags, ContextAttributes, ContextDescriptor, Device, GLApi};
 #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
 use surfman::{GLVersion as SurfmanGLVersion, Surface};
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
 use io_surface::IOSurfaceRef;
-#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-use metal::{CoreAnimationLayerRef, Device, MTLPixelFormat, MTLStorageMode, MTLTextureType};
-#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-use metal::{MTLTextureUsage, Texture, TextureDescriptor};
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
 use pathfinder_metal::MetalDevice;
 #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
@@ -49,26 +50,8 @@ use surfman::{NativeDevice, SystemConnection, SystemDevice, SystemSurface};
 
 declare_surfman!();
 
-/*
-#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-use foreign_types::ForeignTypeRef;
-#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-use metal::{CAMetalLayer, CoreAnimationLayerRef};
-#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-use sdl2::hint;
-#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-use sdl2::render::Canvas;
-#[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-use sdl2_sys::SDL_RenderGetMetalLayer;
-*/
-
 #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
 use pathfinder_gl::{GLDevice, GLVersion};
-
-/*
-#[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
-use sdl2::video::{GLContext, GLProfile};
-*/
 
 #[cfg(not(windows))]
 use jemallocator;
@@ -80,6 +63,10 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 const DEFAULT_WINDOW_WIDTH: u32 = 1067;
 const DEFAULT_WINDOW_HEIGHT: u32 = 800;
 
+lazy_static! {
+    static ref EVENT_QUEUE: Mutex<Option<EventQueue>> = Mutex::new(None);
+}
+
 fn main() {
     color_backtrace::install();
     pretty_env_logger::init();
@@ -90,6 +77,7 @@ fn main() {
     let mut app = DemoApp::new(window, window_size, options);
 
     while !app.should_exit {
+        let before = Instant::now();
         let mut events = vec![];
         if !app.dirty {
             events.push(app.window.get_event());
@@ -97,23 +85,26 @@ fn main() {
         while let Some(event) = app.window.try_get_event() {
             events.push(event);
         }
+        let after = Instant::now();
+        //println!("event waiting={}ms", (after - before).as_secs_f32() * 1000.0);
+
+        //println!("----- next frame -----");
+        use std::time::Instant;
+        let before = Instant::now();
 
         let scene_count = app.prepare_frame(events);
+
         app.draw_scene();
         app.begin_compositing();
         for scene_index in 0..scene_count {
             app.composite_scene(scene_index);
         }
-        app.finish_drawing_frame();
+        app.finish_drawing_frame(before);
+
+        let after = Instant::now();
+        //println!("frame time={}ms", (after - before).as_secs_f32() * 1000.0);
     }
 }
-
-/*
-thread_local! {
-    static SDL_CONTEXT: Sdl = sdl2::init().unwrap();
-    static SDL_VIDEO: VideoSubsystem = SDL_CONTEXT.with(|context| context.video().unwrap());
-    static SDL_EVENT: EventSubsystem = SDL_CONTEXT.with(|context| context.event().unwrap());
-}*/
 
 struct WindowImpl {
     window: WinitWindow,
@@ -138,10 +129,21 @@ struct WindowImpl {
     pending_events: VecDeque<Event>,
     mouse_position: Vector2I,
     mouse_down: bool,
+    next_user_event_id: Cell<u32>,
 
     #[allow(dead_code)]
     resource_loader: FilesystemResourceLoader,
-    selected_file: Option<PathBuf>,
+}
+
+struct EventQueue {
+    event_loop_proxy: EventsLoopProxy,
+    pending_custom_events: VecDeque<CustomEvent>,
+}
+
+#[derive(Clone)]
+enum CustomEvent {
+    User { message_type: u32, message_data: u32 },
+    OpenSVG(PathBuf),
 }
 
 impl Window for WindowImpl {
@@ -195,7 +197,13 @@ impl Window for WindowImpl {
                               .unbind_surface_from_context(&mut self.context)
                               .unwrap()
                               .unwrap();
+
+        use std::time::Instant;
+        let before = Instant::now();
         self.device.present_surface(&mut self.context, &mut surface).unwrap();
+        let after = Instant::now();
+        //println!("presenting took {}ms", (after - before).as_secs_f32() * 1000.0);
+
         self.device.bind_surface_to_context(&mut self.context, surface).unwrap();
     }
 
@@ -210,13 +218,12 @@ impl Window for WindowImpl {
     }
 
     fn present_open_svg_dialog(&mut self) {
-        /*
         if let Ok(Response::Okay(path)) = nfd::open_file_dialog(Some("svg"), None) {
-            self.selected_file = Some(PathBuf::from(path));
-            WindowImpl::push_user_event(self.open_svg_message_type, 0);
+            let mut event_queue = EVENT_QUEUE.lock().unwrap();
+            let mut event_queue = event_queue.as_mut().unwrap();
+            event_queue.pending_custom_events.push_back(CustomEvent::OpenSVG(PathBuf::from(path)));
+            drop(event_queue.event_loop_proxy.wakeup());
         }
-        */
-        // TODO(pcwalton)
     }
 
     fn run_save_dialog(&self, extension: &str) -> Result<PathBuf, ()> {
@@ -227,12 +234,19 @@ impl Window for WindowImpl {
     }
 
     fn create_user_event_id(&self) -> u32 {
-        // TODO(pcwalton)
-        0
+        let id = self.next_user_event_id.get();
+        self.next_user_event_id.set(id + 1);
+        id
     }
 
     fn push_user_event(message_type: u32, message_data: u32) {
-        // TODO(pcwalton)
+        let mut event_queue = EVENT_QUEUE.lock().unwrap();
+        let mut event_queue = event_queue.as_mut().unwrap();
+        event_queue.pending_custom_events.push_back(CustomEvent::User {
+            message_type,
+            message_data,
+        });
+        drop(event_queue.event_loop_proxy.wakeup());
     }
 }
 
@@ -271,49 +285,10 @@ impl WindowImpl {
 
         let resource_loader = FilesystemResourceLoader::locate();
 
-        /*
-        SDL_VIDEO.with(|sdl_video| {
-            SDL_EVENT.with(|sdl_event| {
-                let (window, gl_context, event_pump);
-
-                let gl_attributes = sdl_video.gl_attr();
-                gl_attributes.set_context_profile(GLProfile::Core);
-                gl_attributes.set_context_version(3, 3);
-                gl_attributes.set_depth_size(24);
-                gl_attributes.set_stencil_size(8);
-
-                window = sdl_video
-                    .window(
-                        "Pathfinder Demo",
-                        DEFAULT_WINDOW_WIDTH,
-                        DEFAULT_WINDOW_HEIGHT,
-                    )
-                    .opengl()
-                    .resizable()
-                    .allow_highdpi()
-                    .build()
-                    .unwrap();
-
-                gl_context = window.gl_create_context().unwrap();
-                gl::load_with(|name| sdl_video.gl_get_proc_address(name) as *const _);
-
-                event_pump = SDL_CONTEXT.with(|sdl_context| sdl_context.event_pump().unwrap());
-
-                let resource_loader = FilesystemResourceLoader::locate();
-
-                let open_svg_message_type = unsafe { sdl_event.register_event().unwrap() };
-
-                WindowImpl {
-                    window,
-                    event_pump,
-                    gl_context,
-                    resource_loader,
-                    open_svg_message_type,
-                    selected_file: None,
-                }
-            })
-        })
-        */
+        *EVENT_QUEUE.lock().unwrap() = Some(EventQueue {
+            event_loop_proxy: event_loop.create_proxy(),
+            pending_custom_events: VecDeque::new(),
+        });
 
         WindowImpl {
             window,
@@ -321,18 +296,17 @@ impl WindowImpl {
             connection,
             context,
             device,
+            next_user_event_id: Cell::new(0),
             pending_events: VecDeque::new(),
             mouse_position: vec2i(0, 0),
             mouse_down: false,
             resource_loader,
-            selected_file: None,
         }
     }
 
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
     fn new() -> WindowImpl {
-        let mut event_loop = EventsLoop::new();
-        let dpi = event_loop.get_primary_monitor().get_hidpi_factor();
+        let event_loop = EventsLoop::new();
         let window_size = Size2D::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
         let logical_size = LogicalSize::new(window_size.width as f64, window_size.height as f64);
         let window = WindowBuilder::new().with_title("Pathfinder Demo")
@@ -349,27 +323,13 @@ impl WindowImpl {
 
         let surface_type = SurfaceType::Widget { native_widget };
         let surface = device.create_surface(SurfaceAccess::GPUOnly, surface_type).unwrap();
-        let native_surface = device.native_surface(&surface);
-
-        let physical_size = logical_size.to_physical(dpi);
-
-        /*
-        let descriptor = TextureDescriptor::new();
-        descriptor.set_texture_type(MTLTextureType::D2);
-        descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
-        descriptor.set_width(physical_size.width as u64);
-        descriptor.set_height(physical_size.height as u64);
-        descriptor.set_storage_mode(MTLStorageMode::Managed);
-        descriptor.set_usage(MTLTextureUsage::Unknown);
-
-        let metal_texture = unsafe {
-            msg_send![native_device.0, newTextureWithDescriptor:descriptor
-                                                      iosurface:native_surface.0
-                                                          plane:0]
-        };
-        */
 
         let resource_loader = FilesystemResourceLoader::locate();
+
+        *EVENT_QUEUE.lock().unwrap() = Some(EventQueue {
+            event_loop_proxy: event_loop.create_proxy(),
+            pending_custom_events: VecDeque::new(),
+        });
 
         WindowImpl {
             window,
@@ -378,56 +338,13 @@ impl WindowImpl {
             device,
             metal_device: native_device,
             surface,
+            next_user_event_id: Cell::new(0),
             pending_events: VecDeque::new(),
             mouse_position: vec2i(0, 0),
             mouse_down: false,
             resource_loader,
-            selected_file: None,
         }
     }
-
-    /*
-    #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    fn new() -> WindowImpl {
-        assert!(hint::set("SDL_RENDER_DRIVER", "metal"));
-
-        SDL_VIDEO.with(|sdl_video| {
-            SDL_EVENT.with(|sdl_event| {
-                let window = sdl_video
-                    .window(
-                        "Pathfinder Demo",
-                        DEFAULT_WINDOW_WIDTH,
-                        DEFAULT_WINDOW_HEIGHT,
-                    )
-                    .opengl()
-                    .resizable()
-                    .allow_highdpi()
-                    .build()
-                    .unwrap();
-
-                let canvas = window.into_canvas().present_vsync().build().unwrap();
-                let metal_layer = unsafe {
-                    SDL_RenderGetMetalLayer(canvas.raw()) as *mut CAMetalLayer
-                };
-
-                let event_pump = SDL_CONTEXT.with(|sdl_context| sdl_context.event_pump().unwrap());
-
-                let resource_loader = FilesystemResourceLoader::locate();
-
-                let open_svg_message_type = unsafe { sdl_event.register_event().unwrap() };
-
-                WindowImpl {
-                    event_loop,
-                    canvas,
-                    metal_layer,
-                    resource_loader,
-                    open_svg_message_type,
-                    selected_file: None,
-                }
-            })
-        })
-    }
-    */
 
     fn window(&self) -> &WinitWindow { &self.window }
 
@@ -446,19 +363,21 @@ impl WindowImpl {
             let window = &self.window;
             let mouse_position = &mut self.mouse_position;
             let mouse_down = &mut self.mouse_down;
-            let selected_file = &mut self.selected_file;
             let pending_events = &mut self.pending_events;
-            self.event_loop.run_forever(|event| {
-                match convert_winit_event(event,
+            self.event_loop.run_forever(|winit_event| {
+                //println!("blocking {:?}", winit_event);
+                match convert_winit_event(winit_event,
                                           window,
                                           mouse_position,
-                                          mouse_down,
-                                          selected_file) {
+                                          mouse_down) {
                     Some(event) => {
+                        //println!("handled");
                         pending_events.push_back(event);
                         ControlFlow::Break
                     }
-                    None => ControlFlow::Continue,
+                    None => {
+                        ControlFlow::Continue
+                    }
                 }
             });
         }
@@ -471,14 +390,14 @@ impl WindowImpl {
             let window = &self.window;
             let mouse_position = &mut self.mouse_position;
             let mouse_down = &mut self.mouse_down;
-            let selected_file = &mut self.selected_file;
             let pending_events = &mut self.pending_events;
-            self.event_loop.poll_events(|event| {
-                if let Some(event) = convert_winit_event(event,
+            self.event_loop.poll_events(|winit_event| {
+                //println!("nonblocking {:?}", winit_event);
+                if let Some(event) = convert_winit_event(winit_event,
                                                          window,
                                                          mouse_position,
-                                                         mouse_down,
-                                                         selected_file) {
+                                                         mouse_down) {
+                    //println!("handled");
                     pending_events.push_back(event);
                 }
             });
@@ -490,12 +409,20 @@ impl WindowImpl {
 fn convert_winit_event(winit_event: WinitEvent,
                        window: &WinitWindow,
                        mouse_position: &mut Vector2I,
-                       mouse_down: &mut bool,
-                       selected_file: &mut Option<PathBuf>)
+                       mouse_down: &mut bool)
                        -> Option<Event> {
     match winit_event {
         WinitEvent::Awakened => {
-            Some(Event::OpenSVG(SVGPath::Path(selected_file.clone().unwrap())))
+            let mut event_queue = EVENT_QUEUE.lock().unwrap();
+            let mut event_queue = event_queue.as_mut().unwrap();
+            match event_queue.pending_custom_events
+                             .pop_front()
+                             .expect("`Awakened` with no pending custom event!") {
+                CustomEvent::OpenSVG(svg_path) => Some(Event::OpenSVG(SVGPath::Path(svg_path))),
+                CustomEvent::User { message_data, message_type } => {
+                    Some(Event::User { message_data, message_type })
+                }
+            }
         }
         WinitEvent::WindowEvent { event: window_event, .. } => {
             match window_event {
