@@ -96,30 +96,12 @@ where
             buffer_index: 0,
         });
         device.bind_buffer(&vertex_array, &vertex_buffer, BufferTarget::Vertex);
-        device.configure_vertex_attr(&vertex_array, &from_px_attr, &VertexAttrDescriptor {
-            size: 1,
-            class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::U8,
-            stride: FILL_INSTANCE_SIZE,
-            offset: 0,
-            divisor: 1,
-            buffer_index: 1,
-        });
-        device.configure_vertex_attr(&vertex_array, &to_px_attr, &VertexAttrDescriptor {
-            size: 1,
-            class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::U8,
-            stride: FILL_INSTANCE_SIZE,
-            offset: 1,
-            divisor: 1,
-            buffer_index: 1,
-        });
         device.configure_vertex_attr(&vertex_array, &from_subpx_attr, &VertexAttrDescriptor {
             size: 2,
             class: VertexAttrClass::FloatNorm,
             attr_type: VertexAttrType::U8,
             stride: FILL_INSTANCE_SIZE,
-            offset: 2,
+            offset: 0,
             divisor: 1,
             buffer_index: 1,
         });
@@ -128,7 +110,25 @@ where
             class: VertexAttrClass::FloatNorm,
             attr_type: VertexAttrType::U8,
             stride: FILL_INSTANCE_SIZE,
+            offset: 2,
+            divisor: 1,
+            buffer_index: 1,
+        });
+        device.configure_vertex_attr(&vertex_array, &from_px_attr, &VertexAttrDescriptor {
+            size: 1,
+            class: VertexAttrClass::Int,
+            attr_type: VertexAttrType::U8,
+            stride: FILL_INSTANCE_SIZE,
             offset: 4,
+            divisor: 1,
+            buffer_index: 1,
+        });
+        device.configure_vertex_attr(&vertex_array, &to_px_attr, &VertexAttrDescriptor {
+            size: 1,
+            class: VertexAttrClass::Int,
+            attr_type: VertexAttrType::U8,
+            stride: FILL_INSTANCE_SIZE,
+            offset: 5,
             divisor: 1,
             buffer_index: 1,
         });
