@@ -20,11 +20,12 @@ constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(16u, 16u, 1u);
 
 struct spvDescriptorSetBuffer0
 {
-    const device bFillRanges* m_157 [[id(0)]];
-    const device bFills* m_189 [[id(1)]];
-    texture2d<float> uAreaLUT [[id(2)]];
-    sampler uAreaLUTSmplr [[id(3)]];
-    texture2d<float, access::write> uDest [[id(4)]];
+    constant int* uFirstTileIndex [[id(0)]];
+    const device bFillRanges* m_164 [[id(1)]];
+    const device bFills* m_196 [[id(2)]];
+    texture2d<float> uAreaLUT [[id(3)]];
+    sampler uAreaLUTSmplr [[id(4)]];
+    texture2d<float, access::write> uDest [[id(5)]];
 };
 
 static inline __attribute__((always_inline))
@@ -44,17 +45,18 @@ float computeCoverage(thread const float2& from, thread const float2& to, thread
 kernel void main0(constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[buffer(0)]], uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]])
 {
     int2 tileSubCoord = int2(gl_LocalInvocationID.xy);
-    uint tileIndex = gl_WorkGroupID.z;
+    uint tileIndexOffset = gl_WorkGroupID.z;
+    uint tileIndex = tileIndexOffset + uint((*spvDescriptorSet0.uFirstTileIndex));
     int2 tileOrigin = int2(int(tileIndex & 255u), int((tileIndex >> 8u) & 255u)) * int2(16);
     int2 destCoord = tileOrigin + tileSubCoord;
-    uint startFillIndex = (*spvDescriptorSet0.m_157).iFillRanges[tileIndex];
-    uint endFillIndex = (*spvDescriptorSet0.m_157).iFillRanges[tileIndex + 1u];
+    uint startFillIndex = (*spvDescriptorSet0.m_164).iFillRanges[tileIndexOffset];
+    uint endFillIndex = (*spvDescriptorSet0.m_164).iFillRanges[tileIndexOffset + 1u];
     if (startFillIndex < endFillIndex)
     {
         float coverage = 0.0;
         for (uint fillIndex = startFillIndex; fillIndex < endFillIndex; fillIndex++)
         {
-            uint2 fill = (*spvDescriptorSet0.m_189).iFills[fillIndex];
+            uint2 fill = (*spvDescriptorSet0.m_196).iFills[fillIndex];
             float2 from = float2(float(fill.y & 15u), float((fill.y >> 4u) & 15u)) + (float2(float(fill.x & 255u), float((fill.x >> 8u) & 255u)) / float2(256.0));
             float2 to = float2(float((fill.y >> 8u) & 15u), float((fill.y >> 12u) & 15u)) + (float2(float((fill.x >> 16u) & 255u), float((fill.x >> 24u) & 255u)) / float2(256.0));
             from -= (float2(tileSubCoord) + float2(0.5));

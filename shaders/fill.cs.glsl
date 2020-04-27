@@ -21,6 +21,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 uniform writeonly image2D uDest;
 uniform sampler2D uAreaLUT;
+uniform int uFirstTileIndex;
 
 layout(std430, binding = 0) buffer bFills {
     restrict readonly uvec2 iFills[];
@@ -32,13 +33,14 @@ layout(std430, binding = 1) buffer bFillRanges {
 
 void main() {
     ivec2 tileSubCoord = ivec2(gl_LocalInvocationID.xy);
-    uint tileIndex = gl_WorkGroupID.z;
+    uint tileIndexOffset = gl_WorkGroupID.z;
 
+    uint tileIndex = tileIndexOffset + uint(uFirstTileIndex);
     ivec2 tileOrigin = ivec2(tileIndex & 0xff, (tileIndex >> 8u) & 0xff) * 16;
     ivec2 destCoord = tileOrigin + tileSubCoord;
-    //ivec2 destCoord = tileOrigin + ivec2(tileSubCoord.x, 15 - tileSubCoord.y);
 
-    uint startFillIndex = iFillRanges[tileIndex], endFillIndex = iFillRanges[tileIndex + 1];
+    uint startFillIndex = iFillRanges[tileIndexOffset];
+    uint endFillIndex = iFillRanges[tileIndexOffset + 1];
     if (startFillIndex < endFillIndex) {
         float coverage = 0.0;
         for (uint fillIndex = startFillIndex; fillIndex < endFillIndex; fillIndex++) {
@@ -52,12 +54,8 @@ void main() {
             to   -= vec2(tileSubCoord) + vec2(0.5);
 
             coverage += computeCoverage(from, to, uAreaLUT);
-
-            //coverage += ((fill.y >> 16) == tileIndex) ? 0.0 : 1.0;
         }
 
-        //coverage = float(tileSubCoord.y) / 16.0;
-        //coverage = float(endFillIndex - startFillIndex) / 16.0;
         imageStore(uDest, destCoord, vec4(coverage));
     }
 }

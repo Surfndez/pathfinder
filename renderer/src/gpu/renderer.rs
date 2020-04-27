@@ -682,16 +682,16 @@ where
         buffered_fills.sort_by_key(|fill| fill.alpha_tile_index);
         //println!("buffered fills={:?}", buffered_fills);
         let first_alpha_tile_index = buffered_fills[0].alpha_tile_index as usize;
-        let mut buffered_fill_ranges: Vec<u32> = vec![0; first_alpha_tile_index];
+        let mut buffered_fill_ranges: Vec<u32> = vec![];
         for (fill_index, fill) in buffered_fills.iter().enumerate() {
-            let alpha_tile_index = fill.alpha_tile_index as usize;
-            while buffered_fill_ranges.len() != alpha_tile_index + 1 {
+            let alpha_tile_index_offset = fill.alpha_tile_index as usize - first_alpha_tile_index;
+            while buffered_fill_ranges.len() != alpha_tile_index_offset + 1 {
                 buffered_fill_ranges.push(fill_index as u32);
             }
         }
         buffered_fill_ranges.push(buffered_fills.len() as u32);
         //println!("{:?}", buffered_fill_ranges);
-        let end_tile_index = buffered_fill_ranges.len();
+        let end_tile_index_offset = buffered_fill_ranges.len();
 
         self.device.allocate_buffer(&self.fill_vertex_buffer,
                                     BufferData::Memory(&buffered_fills),
@@ -712,7 +712,7 @@ where
 
         debug_assert!(buffered_fills.len() <= u32::MAX as usize);
         //println!("end tile index={}", end_tile_index);
-        let dimensions = ComputeDimensions { x: 1, y: 1, z: (end_tile_index - 1) as u32 };
+        let dimensions = ComputeDimensions { x: 1, y: 1, z: (end_tile_index_offset - 1) as u32 };
         self.device.dispatch_compute(dimensions, &ComputeState {
             program: &self.fill_compute_program.program,
             textures: &[&self.area_lut_texture],
@@ -720,6 +720,8 @@ where
             uniforms: &[
                 (&self.fill_compute_program.area_lut_uniform, UniformData::TextureUnit(0)),
                 (&self.fill_compute_program.dest_uniform, UniformData::ImageUnit(0)),
+                (&self.fill_compute_program.first_tile_index_uniform,
+                 UniformData::Int(first_alpha_tile_index as i32)),
             ],
             storage_buffers: &[
                 (&self.fill_compute_program.fills_storage_buffer, &self.fill_vertex_buffer),
