@@ -346,31 +346,38 @@ impl<D> BlitProgram<D> where D: Device {
     }
 }
 
-pub struct FillProgram<D>
-where
-    D: Device,
-{
+pub struct FillRasterProgram<D> where D: Device {
     pub program: D::Program,
     pub framebuffer_size_uniform: D::Uniform,
     pub tile_size_uniform: D::Uniform,
     pub area_lut_uniform: D::Uniform,
 }
 
-impl<D> FillProgram<D>
-where
-    D: Device,
-{
-    pub fn new(device: &D, resources: &dyn ResourceLoader) -> FillProgram<D> {
-        let program = device.create_program(resources, "fill");
+impl<D> FillRasterProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> FillRasterProgram<D> {
+        let program = device.create_raster_program(resources, "fill");
         let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
         let tile_size_uniform = device.get_uniform(&program, "TileSize");
         let area_lut_uniform = device.get_uniform(&program, "AreaLUT");
-        FillProgram {
+        FillRasterProgram {
             program,
             framebuffer_size_uniform,
             tile_size_uniform,
             area_lut_uniform,
         }
+    }
+}
+
+pub struct FillComputeProgram<D> where D: Device {
+    pub program: D::Program,
+    pub area_lut_uniform: D::Uniform,
+}
+
+impl<D> FillComputeProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> FillComputeProgram<D> {
+        let program = device.create_compute_program(resources, "fill");
+        let area_lut_uniform = device.get_uniform(&program, "AreaLUT");
+        FillComputeProgram { program, area_lut_uniform }
     }
 }
 

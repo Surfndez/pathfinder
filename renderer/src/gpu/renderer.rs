@@ -11,7 +11,7 @@
 use crate::gpu::debug::DebugUIPresenter;
 use crate::gpu::options::{DestFramebuffer, RendererOptions};
 use crate::gpu::shaders::{BlitProgram, BlitVertexArray, ClipTileProgram, ClipTileVertexArray};
-use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
+use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillComputeProgram, FillRasterProgram, FillVertexArray};
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, ReprojectionProgram, ReprojectionVertexArray};
 use crate::gpu::shaders::{StencilProgram, StencilVertexArray, TileProgram, TileVertexArray};
 use crate::gpu_data::{ClipBatch, ClipBatchKey, ClipBatchKind, Fill, FillBatchEntry, RenderCommand};
@@ -102,7 +102,8 @@ where
     dest_framebuffer: DestFramebuffer<D>,
     options: RendererOptions,
     blit_program: BlitProgram<D>,
-    fill_program: FillProgram<D>,
+    fill_raster_program: FillRasterProgram<D>,
+    fill_compute_program: Option<FillComputeProgram<D>>,
     tile_program: TileProgram<D>,
     tile_copy_program: CopyTileProgram<D>,
     tile_clip_program: ClipTileProgram<D>,

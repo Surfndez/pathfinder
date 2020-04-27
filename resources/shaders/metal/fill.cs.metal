@@ -21,7 +21,7 @@ constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(16u, 16u, 1u);
 struct spvDescriptorSetBuffer0
 {
     const device bFillRanges* m_151 [[id(0)]];
-    const device bFills* m_178 [[id(1)]];
+    const device bFills* m_183 [[id(1)]];
     texture2d<float> uAreaLUT [[id(2)]];
     sampler uAreaLUTSmplr [[id(3)]];
     texture2d<float, access::write> uDest [[id(4)]];
@@ -47,18 +47,21 @@ kernel void main0(constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[buffer(0
     int2 tileOrigin = int2(int(tileIndex & 255u), int(tileIndex >> 8u)) * int2(16);
     uint startFillIndex = (*spvDescriptorSet0.m_151).iFillRanges[tileIndex];
     uint endFillIndex = (*spvDescriptorSet0.m_151).iFillRanges[tileIndex + 1u];
-    float coverage = 0.0;
-    for (uint fillIndex = startFillIndex; fillIndex < endFillIndex; fillIndex++)
+    if (startFillIndex < endFillIndex)
     {
-        uint2 fill = (*spvDescriptorSet0.m_178).iFills[fillIndex];
-        float2 from = float2(float(fill.y & 15u), float((fill.y >> 4u) & 15u)) + (float2(float(fill.x & 255u), float((fill.x >> 8u) & 255u)) / float2(256.0));
-        float2 to = float2(float((fill.y >> 8u) & 15u), float((fill.y >> 16u) & 15u)) + (float2(float((fill.x >> 16u) & 255u), float((fill.x >> 24u) & 255u)) / float2(256.0));
-        from -= float2(tileSubCoord);
-        to -= float2(tileSubCoord);
-        float2 param = from;
-        float2 param_1 = to;
-        coverage += computeCoverage(param, param_1, spvDescriptorSet0.uAreaLUT, spvDescriptorSet0.uAreaLUTSmplr);
+        float coverage = 0.0;
+        for (uint fillIndex = startFillIndex; fillIndex < endFillIndex; fillIndex++)
+        {
+            uint2 fill = (*spvDescriptorSet0.m_183).iFills[fillIndex];
+            float2 from = float2(float(fill.y & 15u), float((fill.y >> 4u) & 15u)) + (float2(float(fill.x & 255u), float((fill.x >> 8u) & 255u)) / float2(256.0));
+            float2 to = float2(float((fill.y >> 8u) & 15u), float((fill.y >> 16u) & 15u)) + (float2(float((fill.x >> 16u) & 255u), float((fill.x >> 24u) & 255u)) / float2(256.0));
+            from -= float2(tileSubCoord);
+            to -= float2(tileSubCoord);
+            float2 param = from;
+            float2 param_1 = to;
+            coverage += computeCoverage(param, param_1, spvDescriptorSet0.uAreaLUT, spvDescriptorSet0.uAreaLUTSmplr);
+        }
+        spvDescriptorSet0.uDest.write(float4(coverage), uint2((tileOrigin + tileSubCoord)));
     }
-    spvDescriptorSet0.uDest.write(float4(coverage), uint2((tileOrigin + tileSubCoord)));
 }
 
