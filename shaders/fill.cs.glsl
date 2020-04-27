@@ -31,27 +31,33 @@ layout(std430, binding = 1) buffer bFillRanges {
 };
 
 void main() {
-    ivec2 tileSubCoord = ivec2(gl_WorkGroupID.xy);
+    ivec2 tileSubCoord = ivec2(gl_LocalInvocationID.xy);
     uint tileIndex = gl_WorkGroupID.z;
 
-    ivec2 tileOrigin = ivec2(tileIndex & 0xff, tileIndex >> 8u) * 16;
-    uint startFillIndex = iFillRanges[tileIndex], endFillIndex = iFillRanges[tileIndex + 1];
+    ivec2 tileOrigin = ivec2(tileIndex & 0xff, (tileIndex >> 8u) & 0xff) * 16;
+    ivec2 destCoord = tileOrigin + tileSubCoord;
+    //ivec2 destCoord = tileOrigin + ivec2(tileSubCoord.x, 15 - tileSubCoord.y);
 
+    uint startFillIndex = iFillRanges[tileIndex], endFillIndex = iFillRanges[tileIndex + 1];
     if (startFillIndex < endFillIndex) {
         float coverage = 0.0;
         for (uint fillIndex = startFillIndex; fillIndex < endFillIndex; fillIndex++) {
             uvec2 fill = iFills[fillIndex];
-            vec2 from = vec2(fill.y          & 0xf,  (fill.y >> 4u)  & 0xf) +
-                        vec2(fill.x          & 0xff, (fill.x >> 8u)  & 0xff) / 256.0;
-            vec2 to   = vec2((fill.y >> 8u)  & 0xf,  (fill.y >> 16u) & 0xf) +
+            vec2 from = vec2(fill.y & 0xf,           (fill.y >> 4u) & 0xf) +
+                        vec2(fill.x & 0xff,          (fill.x >> 8u) & 0xff) / 256.0;
+            vec2 to   = vec2((fill.y >> 8u) & 0xf,   (fill.y >> 12u) & 0xf) +
                         vec2((fill.x >> 16u) & 0xff, (fill.x >> 24u) & 0xff) / 256.0;
 
-            from -= vec2(tileSubCoord);
-            to   -= vec2(tileSubCoord);
+            from -= vec2(tileSubCoord) + vec2(0.5);
+            to   -= vec2(tileSubCoord) + vec2(0.5);
 
             coverage += computeCoverage(from, to, uAreaLUT);
+
+            //coverage += ((fill.y >> 16) == tileIndex) ? 0.0 : 1.0;
         }
 
-        imageStore(uDest, tileOrigin + tileSubCoord, vec4(coverage));
+        //coverage = float(tileSubCoord.y) / 16.0;
+        //coverage = float(endFillIndex - startFillIndex) / 16.0;
+        imageStore(uDest, destCoord, vec4(coverage));
     }
 }

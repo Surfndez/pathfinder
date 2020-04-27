@@ -23,6 +23,7 @@ struct main0_in
     float2 vTo [[user(locn1)]];
 };
 
+static inline __attribute__((always_inline))
 float computeCoverage(thread const float2& from, thread const float2& to, thread const texture2d<float> areaLUT, thread const sampler areaLUTSmplr)
 {
     float2 left = select(to, from, bool2(from.x < to.x));

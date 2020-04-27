@@ -132,6 +132,11 @@ pub trait Device: Sized {
         let shaders = ProgramKind::Raster { vertex: name, fragment: name };
         self.create_program_from_shader_names(resources, name, shaders)
     }
+
+    fn create_compute_program(&self, resources: &dyn ResourceLoader, name: &str) -> Self::Program {
+        let shaders = ProgramKind::Compute(name);
+        self.create_program_from_shader_names(resources, name, shaders)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -162,6 +167,7 @@ pub enum BufferData<'a, T> {
 pub enum BufferTarget {
     Vertex,
     Index,
+    Storage,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -229,7 +235,6 @@ pub struct RenderState<'a, D> where D: Device {
 
 #[derive(Clone)]
 pub struct ComputeState<'a, D> where D: Device {
-    pub target: &'a RenderTarget<'a, D>,
     pub program: &'a D::Program,
     pub uniforms: &'a [(&'a D::Uniform, UniformData)],
     pub textures: &'a [&'a D::Texture],

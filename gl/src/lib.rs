@@ -18,8 +18,8 @@ use gl::types::{GLuint, GLvoid};
 use half::f16;
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::vector::Vector2I;
-use pathfinder_gpu::{BlendFactor, BlendOp, BufferData, BufferTarget, BufferUploadMode, ClearOps};
-use pathfinder_gpu::{DepthFunc, Device, Primitive, RenderOptions, RenderState, RenderTarget};
+use pathfinder_gpu::{BlendFactor, BlendOp, BufferData, BufferTarget, BufferUploadMode, ClearOps, ComputeDimensions, ComputeState};
+use pathfinder_gpu::{DepthFunc, Device, Primitive, ProgramKind, RenderOptions, RenderState, RenderTarget};
 use pathfinder_gpu::{ShaderKind, StencilFunc, TextureData, TextureDataRef, TextureFormat};
 use pathfinder_gpu::{TextureSamplingFlags, UniformData, VertexAttrClass};
 use pathfinder_gpu::{VertexAttrDescriptor, VertexAttrType};
@@ -165,7 +165,7 @@ impl GLDevice {
                 UniformData::Vec4(data) => {
                     gl::Uniform4f(uniform.location, data.x(), data.y(), data.z(), data.w()); ck();
                 }
-                UniformData::TextureUnit(unit) => {
+                UniformData::TextureUnit(unit) | UniformData::ImageUnit(unit) => {
                     gl::Uniform1i(uniform.location, unit as GLint); ck();
                 }
             }
@@ -219,6 +219,7 @@ impl Device for GLDevice {
     type Framebuffer = GLFramebuffer;
     type Program = GLProgram;
     type Shader = GLShader;
+    type StorageBuffer = GLStorageBuffer;
     type Texture = GLTexture;
     type TextureDataReceiver = GLTextureDataReceiver;
     type TimerQuery = GLTimerQuery;
@@ -277,8 +278,9 @@ impl Device for GLDevice {
         let source = output;
 
         let gl_shader_kind = match kind {
-            ShaderKind::Vertex => gl::VERTEX_SHADER,
+            ShaderKind::Vertex   => gl::VERTEX_SHADER,
             ShaderKind::Fragment => gl::FRAGMENT_SHADER,
+            ShaderKind::Compute  => gl::COMPUTE_SHADER,
         };
 
         unsafe {
@@ -310,14 +312,23 @@ impl Device for GLDevice {
     fn create_program_from_shaders(&self,
                                    _resources: &dyn ResourceLoader,
                                    name: &str,
-                                   vertex_shader: GLShader,
-                                   fragment_shader: GLShader)
+                                   shaders: ProgramKind<GLShader>)
                                    -> GLProgram {
         let gl_program;
         unsafe {
             gl_program = gl::CreateProgram(); ck();
-            gl::AttachShader(gl_program, vertex_shader.gl_shader); ck();
-            gl::AttachShader(gl_program, fragment_shader.gl_shader); ck();
+            match shaders {
+                ProgramKind::Raster {
+                    vertex: ref vertex_shader,
+                    fragment: ref fragment_shader,
+                } => {
+                    gl::AttachShader(gl_program, vertex_shader.gl_shader); ck();
+                    gl::AttachShader(gl_program, fragment_shader.gl_shader); ck();
+                }
+                ProgramKind::Compute(ref compute_shader) => {
+                    gl::AttachShader(gl_program, compute_shader.gl_shader); ck();
+                }
+            }
             gl::LinkProgram(gl_program); ck();
 
             let mut link_status = 0;
@@ -335,8 +346,16 @@ impl Device for GLDevice {
             }
         }
 
-        GLProgram { gl_program, vertex_shader, fragment_shader }
+        match shaders {
+            ProgramKind::Raster { vertex: vertex_shader, fragment: fragment_shader } => {
+                GLProgram { gl_program, vertex_shader, fragment_shader }
+            }
+            ProgramKind::Compute(_) => unimplemented!(),
+        }
     }
+
+    #[inline]
+    fn set_compute_program_local_size(&self, _: &mut Self::Program, _: ComputeDimensions) {}
 
     #[inline]
     fn create_vertex_array(&self) -> GLVertexArray {
@@ -365,6 +384,10 @@ impl Device for GLDevice {
             gl::GetUniformLocation(program.gl_program, name.as_ptr() as *const GLchar)
         }; ck();
         GLUniform { location }
+    }
+
+    fn get_storage_buffer(&self, _: &Self::Program, _: &str, binding: u32) -> GLStorageBuffer {
+        GLStorageBuffer { location: binding as GLint }
     }
 
     fn configure_vertex_attr(&self,
@@ -437,10 +460,7 @@ impl Device for GLDevice {
                           data: BufferData<T>,
                           target: BufferTarget,
                           mode: BufferUploadMode) {
-        let target = match target {
-            BufferTarget::Vertex => gl::ARRAY_BUFFER,
-            BufferTarget::Index => gl::ELEMENT_ARRAY_BUFFER,
-        };
+        let target = target.to_gl_target();
         let (ptr, len) = match data {
             BufferData::Uninitialized(len) => (ptr::null(), len),
             BufferData::Memory(buffer) => (buffer.as_ptr() as *const GLvoid, buffer.len()),
@@ -627,6 +647,10 @@ impl Device for GLDevice {
         self.reset_render_state(render_state);
     }
 
+    fn dispatch_compute(&self, dimensions: ComputeDimensions, state: &ComputeState<Self>) {
+        // TODO(pcwalton)
+    }
+
     #[inline]
     fn create_timer_query(&self) -> GLTimerQuery {
         let mut query = GLTimerQuery { gl_query: 0 };
@@ -712,6 +736,7 @@ impl Device for GLDevice {
         let suffix = match kind {
             ShaderKind::Vertex => 'v',
             ShaderKind::Fragment => 'f',
+            ShaderKind::Compute => 'c',
         };
         let path = format!("shaders/gl3/{}.{}s.glsl", name, suffix);
         self.create_shader_from_source(name, &resources.slurp(&path).unwrap(), kind)
@@ -963,6 +988,11 @@ pub struct GLUniform {
     location: GLint,
 }
 
+#[derive(Debug)]
+pub struct GLStorageBuffer {
+    location: GLint,
+}
+
 pub struct GLProgram {
     pub gl_program: GLuint,
     #[allow(dead_code)]
@@ -1063,6 +1093,7 @@ impl BufferTargetExt for BufferTarget {
         match self {
             BufferTarget::Vertex => gl::ARRAY_BUFFER,
             BufferTarget::Index => gl::ELEMENT_ARRAY_BUFFER,
+            BufferTarget::Storage => gl::SHADER_STORAGE_BUFFER,
         }
     }
 }

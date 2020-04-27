@@ -229,6 +229,7 @@ impl<W> DemoApp<W> where W: Window {
             vertex_array: &self.ground_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &[],
+            images: &[],
             uniforms: &[
                 (&self.ground_program.transform_uniform,
                  UniformData::from_transform_3d(&transform)),

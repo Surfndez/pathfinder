@@ -34,12 +34,12 @@ use metal::{MTLColorWriteMask, MTLCompareFunction, MTLComputePipelineState, MTLD
 use metal::{MTLIndexType, MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion};
 use metal::{MTLRenderPipelineReflection, MTLRenderPipelineState, MTLResourceOptions};
 use metal::{MTLResourceUsage, MTLSamplerAddressMode, MTLSamplerMinMagFilter, MTLSize};
-use metal::{MTLStencilOperation, MTLStorageMode, MTLStoreAction, MTLTextureType, MTLTextureUsage};
+use metal::{MTLStencilOperation, MTLStorageMode, MTLStoreAction, MTLStructMember, MTLStructType, MTLTextureType, MTLTextureUsage};
 use metal::{MTLVertexFormat, MTLVertexStepFunction, MTLViewport, RenderCommandEncoder};
 use metal::{RenderCommandEncoderRef, RenderPassDescriptor, RenderPassDescriptorRef};
 use metal::{RenderPipelineColorAttachmentDescriptorRef, RenderPipelineDescriptor};
 use metal::{RenderPipelineReflection, RenderPipelineReflectionRef, RenderPipelineState};
-use metal::{SamplerDescriptor, SamplerState, StencilDescriptor, StructMemberRef, StructType};
+use metal::{SamplerDescriptor, SamplerState, StencilDescriptor, StructMember, StructMemberRef, StructType};
 use metal::{StructTypeRef, TextureDescriptor, Texture, TextureRef, VertexAttribute};
 use metal::{VertexAttributeRef, VertexDescriptor, VertexDescriptorRef};
 use objc::runtime::{Class, Object};
@@ -317,6 +317,7 @@ impl Device for MetalDevice {
             BufferTarget::Index => {
                 *vertex_array.index_buffer.borrow_mut() = Some((*buffer).clone())
             }
+            _ => panic!("Buffers bound to vertex arrays must be vertex or index buffers!"),
         }
     }
 
@@ -645,7 +646,7 @@ impl Device for MetalDevice {
         let command_buffers = self.command_buffers.borrow();
         let command_buffer = command_buffers.last().unwrap();
 
-        let mut encoder = command_buffer.new_compute_command_encoder();
+        let encoder = command_buffer.new_compute_command_encoder();
 
         let program = match compute_state.program {
             MetalProgram::Compute(ref compute_program) => compute_program,
@@ -661,12 +662,12 @@ impl Device for MetalDevice {
             let reflection_options = MTLPipelineOption::ArgumentInfo |
                 MTLPipelineOption::BufferTypeInfo;
             let mut error: *mut Object = ptr::null_mut();
-            let raw_compute_pipeline_state: *mut MTLComputePipelineState =
-                msg_send![self.device.as_ptr(),
-                          newComputePipelineWithDescriptor:compute_pipeline_descriptor.as_ptr()
-                                                   options:reflection_options
-                                                reflection:&mut reflection
-                                                     error:&mut error];
+            let raw_compute_pipeline_state: *mut MTLComputePipelineState = msg_send![
+                self.device.as_ptr(),
+                newComputePipelineStateWithDescriptor:compute_pipeline_descriptor.as_ptr()
+                                              options:reflection_options
+                                           reflection:&mut reflection
+                                                error:&mut error];
             compute_pipeline_state = ComputePipelineState::from_ptr(raw_compute_pipeline_state);
 
             self.populate_compute_shader_uniforms_if_necessary(&program.shader, reflection);
@@ -809,7 +810,34 @@ impl MetalDevice {
             ShaderArguments::NoArguments => return None,
             ShaderArguments::Arguments { ref struct_type, .. } => struct_type,
         };
-        struct_type.member_from_name(&format!("b{}", name)).map(|member| member.argument_index())
+
+        unsafe {
+            let members = struct_type.real_members();
+            for member_index in 0..members.len() {
+                let member = members.object_at(member_index);
+                println!("considering member: {}", member.name());
+                match member.data_type() {
+                    MTLDataType::Pointer => {}
+                    _ => continue,
+                }
+                let pointer_type = member.pointer_type();
+                let pointer_element_type: MTLDataType = msg_send![pointer_type, elementType];
+                match pointer_element_type {
+                    MTLDataType::Struct => {}
+                    _ => continue,
+                }
+                let buffer_struct_type: *mut MTLStructType = msg_send![pointer_type, elementStructType];
+                let buffer_struct_type = StructType::from_ptr(buffer_struct_type);
+                if let Some(buffer_member) =
+                        buffer_struct_type.member_from_name(&format!("i{}", name)) {
+                    println!("found buffer member: {} = {}",
+                             buffer_member.name(),
+                             member.argument_index());
+                    return Some(member.argument_index())
+                }
+            }
+            None
+        }
     }
 
     fn populate_uniform_indices_if_necessary(&self,
@@ -1201,7 +1229,10 @@ impl MetalDevice {
                     ..
                 } = *arguments {
                     let buffer = storage_buffer_binding.buffer.borrow();
-                    argument_encoder.set_buffer(buffer.as_ref().unwrap(), 0, index)
+                    let buffer = buffer.as_ref().unwrap();
+                    argument_encoder.set_buffer(buffer, 0, index);
+                    // FIXME(pcwalton): We don't always read!
+                    compute_command_encoder.use_resource(buffer, MTLResourceUsage::Read);
                 }
             }
 
@@ -1555,20 +1586,18 @@ impl IntoTexture for Texture {
 impl IntoTexture for IOSurfaceRef {
     #[inline]
     unsafe fn into_texture(self, metal_device: &metal::Device) -> Texture {
-        unsafe {
-            let width = IOSurfaceGetWidth(self);
-            let height = IOSurfaceGetHeight(self);
+        let width = IOSurfaceGetWidth(self);
+        let height = IOSurfaceGetHeight(self);
 
-            let descriptor = TextureDescriptor::new();
-            descriptor.set_texture_type(MTLTextureType::D2);
-            descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-            descriptor.set_width(width as u64);
-            descriptor.set_height(height as u64);
-            descriptor.set_storage_mode(MTLStorageMode::Managed);
-            descriptor.set_usage(MTLTextureUsage::Unknown);
+        let descriptor = TextureDescriptor::new();
+        descriptor.set_texture_type(MTLTextureType::D2);
+        descriptor.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        descriptor.set_width(width as u64);
+        descriptor.set_height(height as u64);
+        descriptor.set_storage_mode(MTLStorageMode::Managed);
+        descriptor.set_usage(MTLTextureUsage::Unknown);
 
-            msg_send![*metal_device, newTextureWithDescriptor:descriptor iosurface:self plane:0]
-        }
+        msg_send![*metal_device, newTextureWithDescriptor:descriptor iosurface:self plane:0]
     }
 }
 
@@ -1845,6 +1874,31 @@ impl ArgumentArray {
     }
 }
 
+struct StructMemberArray(*mut Object);
+
+impl Drop for StructMemberArray {
+    fn drop(&mut self) {
+        unsafe { msg_send![self.0, release] }
+    }
+}
+
+impl StructMemberArray {
+    unsafe fn from_ptr(object: *mut Object) -> StructMemberArray {
+        StructMemberArray(msg_send![object, retain])
+    }
+
+    fn len(&self) -> u64 {
+        unsafe { msg_send![self.0, count] }
+    }
+
+    fn object_at(&self, index: u64) -> StructMember {
+        unsafe {
+            let argument: *mut MTLStructMember = msg_send![self.0, objectAtIndex:index];
+            StructMember::from_ptr(msg_send![argument, retain])
+        }
+    }
+}
+
 struct SharedEvent(*mut Object);
 
 impl Drop for SharedEvent {
@@ -2039,11 +2093,26 @@ impl RenderPipelineReflectionExt for RenderPipelineReflectionRef {
 
 trait StructMemberExt {
     fn argument_index(&self) -> u64;
+    fn pointer_type(&self) -> *mut Object;
 }
 
 impl StructMemberExt for StructMemberRef {
     fn argument_index(&self) -> u64 {
         unsafe { msg_send![self.as_ptr(), argumentIndex] }
+    }
+
+    fn pointer_type(&self) -> *mut Object {
+        unsafe { msg_send![self.as_ptr(), pointerType] }
+    }
+}
+
+trait StructTypeExt {
+    fn real_members(&self) -> StructMemberArray;
+}
+
+impl StructTypeExt for StructType {
+    fn real_members(&self) -> StructMemberArray {
+        unsafe { StructMemberArray::from_ptr(msg_send![self.as_ptr(), members]) }
     }
 }
 

@@ -32,7 +32,7 @@ use pathfinder_geometry::transform3d::Transform4F;
 use pathfinder_geometry::util;
 use pathfinder_geometry::vector::{Vector2F, Vector2I, Vector4F, vec2f, vec2i};
 use pathfinder_gpu::{BlendFactor, BlendOp, BlendState, BufferData, BufferTarget, BufferUploadMode};
-use pathfinder_gpu::{ClearOps, DepthFunc, DepthState, Device, Primitive, RenderOptions};
+use pathfinder_gpu::{ClearOps, ComputeDimensions, ComputeState, DepthFunc, DepthState, Device, ImageAccess, ImageBinding, Primitive, RenderOptions};
 use pathfinder_gpu::{RenderState, RenderTarget, StencilFunc, StencilState, TextureDataRef};
 use pathfinder_gpu::{TextureFormat, UniformData};
 use pathfinder_resources::ResourceLoader;
@@ -103,7 +103,7 @@ where
     options: RendererOptions,
     blit_program: BlitProgram<D>,
     fill_raster_program: FillRasterProgram<D>,
-    fill_compute_program: Option<FillComputeProgram<D>>,
+    fill_compute_program: FillComputeProgram<D>,
     tile_program: TileProgram<D>,
     tile_copy_program: CopyTileProgram<D>,
     tile_clip_program: ClipTileProgram<D>,
@@ -117,6 +117,8 @@ where
     quads_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_length: usize,
     fill_vertex_array: FillVertexArray<D>,
+    fill_vertex_buffer: D::Buffer,
+    fill_ranges_buffer: D::Buffer,
     alpha_tile_pages: FxHashMap<u16, AlphaTilePage<D>>,
     dest_blend_framebuffer: D::Framebuffer,
     intermediate_dest_framebuffer: D::Framebuffer,
@@ -161,7 +163,8 @@ where
                options: RendererOptions)
                -> Renderer<D> {
         let blit_program = BlitProgram::new(&device, resources);
-        let fill_program = FillProgram::new(&device, resources);
+        let fill_raster_program = FillRasterProgram::new(&device, resources);
+        let fill_compute_program = FillComputeProgram::new(&device, resources);
         let tile_program = TileProgram::new(&device, resources);
         let tile_copy_program = CopyTileProgram::new(&device, resources);
         let tile_clip_program = ClipTileProgram::new(&device, resources);
@@ -191,6 +194,17 @@ where
         );
         let quads_vertex_indices_buffer = device.create_buffer();
         let tile_vertex_buffer = device.create_buffer();
+        let fill_ranges_buffer = device.create_buffer();
+
+        let fill_vertex_buffer = device.create_buffer();
+        let fill_vertex_buffer_data: BufferData<Fill> =
+            BufferData::Uninitialized(MAX_FILLS_PER_BATCH);
+        device.allocate_buffer(
+            &fill_vertex_buffer,
+            fill_vertex_buffer_data,
+            BufferTarget::Vertex,
+            BufferUploadMode::Dynamic,
+        );
 
         let blit_vertex_array = BlitVertexArray::new(
             &device,
@@ -200,7 +214,8 @@ where
         );
         let fill_vertex_array = FillVertexArray::new(
             &device,
-            &fill_program,
+            &fill_raster_program,
+            &fill_vertex_buffer,
             &quad_vertex_positions_buffer,
             &quad_vertex_indices_buffer,
         );
@@ -246,7 +261,8 @@ where
             dest_framebuffer,
             options,
             blit_program,
-            fill_program,
+            fill_raster_program,
+            fill_compute_program,
             tile_program,
             tile_copy_program,
             tile_clip_program,
@@ -260,6 +276,8 @@ where
             quads_vertex_indices_buffer,
             quads_vertex_indices_length: 0,
             fill_vertex_array,
+            fill_vertex_buffer,
+            fill_ranges_buffer,
             alpha_tile_pages: FxHashMap::default(),
             dest_blend_framebuffer,
             intermediate_dest_framebuffer,
@@ -584,6 +602,11 @@ where
     }
 
     fn draw_buffered_fills(&mut self, page: u16) {
+        self.draw_buffered_fills_via_compute(page)
+        //self.draw_buffered_fills_via_raster(page)
+    }
+
+    fn draw_buffered_fills_via_raster(&mut self, page: u16) {
         let mask_viewport = self.mask_viewport();
 
         let alpha_tile_page = self.alpha_tile_pages
@@ -594,12 +617,10 @@ where
             return;
         }
 
-        self.device.allocate_buffer(
-            &self.fill_vertex_array.vertex_buffer,
-            BufferData::Memory(&buffered_fills),
-            BufferTarget::Vertex,
-            BufferUploadMode::Dynamic,
-        );
+        self.device.allocate_buffer(&self.fill_vertex_buffer,
+                                    BufferData::Memory(&buffered_fills),
+                                    BufferTarget::Vertex,
+                                    BufferUploadMode::Dynamic);
 
         let mut clear_color = None;
         if !alpha_tile_page.must_preserve_framebuffer {
@@ -612,18 +633,19 @@ where
         debug_assert!(buffered_fills.len() <= u32::MAX as usize);
         self.device.draw_elements_instanced(6, buffered_fills.len() as u32, &RenderState {
             target: &RenderTarget::Framebuffer(&alpha_tile_page.framebuffer),
-            program: &self.fill_program.program,
+            program: &self.fill_raster_program.program,
             vertex_array: &self.fill_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &[&self.area_lut_texture],
             uniforms: &[
-                (&self.fill_program.framebuffer_size_uniform,
+                (&self.fill_raster_program.framebuffer_size_uniform,
                  UniformData::Vec2(F32x2::new(MASK_FRAMEBUFFER_WIDTH as f32,
                                               MASK_FRAMEBUFFER_HEIGHT as f32))),
-                (&self.fill_program.tile_size_uniform,
+                (&self.fill_raster_program.tile_size_uniform,
                  UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
-                (&self.fill_program.area_lut_uniform, UniformData::TextureUnit(0)),
+                (&self.fill_raster_program.area_lut_uniform, UniformData::TextureUnit(0)),
             ],
+            images: &[],
             viewport: mask_viewport,
             options: RenderOptions {
                 blend: Some(BlendState {
@@ -636,6 +658,73 @@ where
                 clear_ops: ClearOps { color: clear_color, ..ClearOps::default() },
                 ..RenderOptions::default()
             },
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
+
+        alpha_tile_page.must_preserve_framebuffer = true;
+        buffered_fills.clear();
+    }
+
+    fn draw_buffered_fills_via_compute(&mut self, page: u16) {
+        let alpha_tile_page = self.alpha_tile_pages
+                                  .get_mut(&page)
+                                  .expect("Where's the alpha tile page?");
+        let buffered_fills = &mut alpha_tile_page.buffered_fills;
+        if buffered_fills.is_empty() {
+            return;
+        }
+
+        // Sort and create ranges.
+        // TODO(pcwalton): Can we stop doing this?
+        // FIXME(pcwalton): This is inefficient!
+        buffered_fills.sort_by_key(|fill| fill.alpha_tile_index);
+        //println!("buffered fills={:?}", buffered_fills);
+        let first_alpha_tile_index = buffered_fills[0].alpha_tile_index as usize;
+        let mut buffered_fill_ranges: Vec<u32> = vec![0; first_alpha_tile_index];
+        for (fill_index, fill) in buffered_fills.iter().enumerate() {
+            let alpha_tile_index = fill.alpha_tile_index as usize;
+            while buffered_fill_ranges.len() != alpha_tile_index + 1 {
+                buffered_fill_ranges.push(fill_index as u32);
+            }
+        }
+        buffered_fill_ranges.push(buffered_fills.len() as u32);
+        //println!("{:?}", buffered_fill_ranges);
+        let end_tile_index = buffered_fill_ranges.len();
+
+        self.device.allocate_buffer(&self.fill_vertex_buffer,
+                                    BufferData::Memory(&buffered_fills),
+                                    BufferTarget::Storage,
+                                    BufferUploadMode::Dynamic);
+        self.device.allocate_buffer(&self.fill_ranges_buffer,
+                                    BufferData::Memory(&buffered_fill_ranges),
+                                    BufferTarget::Storage,
+                                    BufferUploadMode::Dynamic);
+
+        let image_binding = ImageBinding {
+            texture: self.device.framebuffer_texture(&alpha_tile_page.framebuffer),
+            access: ImageAccess::Write,
+        };
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        debug_assert!(buffered_fills.len() <= u32::MAX as usize);
+        //println!("end tile index={}", end_tile_index);
+        let dimensions = ComputeDimensions { x: 1, y: 1, z: (end_tile_index - 1) as u32 };
+        self.device.dispatch_compute(dimensions, &ComputeState {
+            program: &self.fill_compute_program.program,
+            textures: &[&self.area_lut_texture],
+            images: &[image_binding],
+            uniforms: &[
+                (&self.fill_compute_program.area_lut_uniform, UniformData::TextureUnit(0)),
+                (&self.fill_compute_program.dest_uniform, UniformData::ImageUnit(0)),
+            ],
+            storage_buffers: &[
+                (&self.fill_compute_program.fills_storage_buffer, &self.fill_vertex_buffer),
+                (&self.fill_compute_program.fill_ranges_storage_buffer, &self.fill_ranges_buffer),
+            ],
         });
 
         self.device.end_timer_query(&timer_query);
@@ -696,6 +785,7 @@ where
                 vertex_array: &self.tile_clip_vertex_array.vertex_array,
                 primitive: Primitive::Triangles,
                 textures: &[src_texture],
+                images: &[],
                 uniforms: &[(&self.tile_clip_program.src_uniform, UniformData::TextureUnit(0))],
                 viewport: mask_viewport,
                 options: RenderOptions {
@@ -816,6 +906,7 @@ where
             vertex_array: &self.tile_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &textures,
+            images: &[],
             uniforms: &uniforms,
             viewport: draw_viewport,
             options: RenderOptions {
@@ -861,6 +952,7 @@ where
             vertex_array: &self.tile_copy_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &textures,
+            images: &[],
             uniforms: &uniforms,
             viewport: draw_viewport,
             options: RenderOptions {
@@ -900,6 +992,7 @@ where
             vertex_array: &self.stencil_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &[],
+            images: &[],
             uniforms: &[],
             viewport: self.draw_viewport(),
             options: RenderOptions {
@@ -932,6 +1025,7 @@ where
             vertex_array: &self.reprojection_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &[texture],
+            images: &[],
             uniforms: &[
                 (&self.reprojection_program.old_transform_uniform,
                  UniformData::from_transform_3d(old_transform)),
@@ -1068,6 +1162,7 @@ where
             vertex_array: &self.blit_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &textures[..],
+            images: &[],
             uniforms: &uniforms[..],
             viewport: main_viewport,
             options: RenderOptions {

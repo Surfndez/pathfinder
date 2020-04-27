@@ -29,6 +29,7 @@ struct main0_in
     uint aTileIndex [[attribute(5)]];
 };
 
+static inline __attribute__((always_inline))
 float2 computeTileOffset(thread const uint& tileIndex, thread const float& stencilTextureWidth, thread float2 uTileSize)
 {
     uint tilesPerRow = uint(stencilTextureWidth / uTileSize.x);
@@ -47,15 +48,15 @@ vertex main0_out main0(main0_in in [[stage_in]], constant spvDescriptorSetBuffer
     float2 position;
     if (in.aTessCoord.x == 0u)
     {
-        position.x = floor(fast::min(from.x, to.x));
+        position.x = 0.0;
     }
     else
     {
-        position.x = ceil(fast::max(from.x, to.x));
+        position.x = 15.0;
     }
     if (in.aTessCoord.y == 0u)
     {
-        position.y = floor(fast::min(from.y, to.y));
+        position.y = 0.0;
     }
     else
     {

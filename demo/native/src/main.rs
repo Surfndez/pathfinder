@@ -99,7 +99,7 @@ fn main() {
         for scene_index in 0..scene_count {
             app.composite_scene(scene_index);
         }
-        app.finish_drawing_frame();
+        app.finish_drawing_frame(before);
 
         let after = Instant::now();
         //println!("frame time={}ms", (after - before).as_secs_f32() * 1000.0);

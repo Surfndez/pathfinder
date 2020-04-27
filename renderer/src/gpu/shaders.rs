@@ -9,7 +9,8 @@
 // except according to those terms.
 
 use crate::gpu_data::Fill;
-use pathfinder_gpu::{BufferData, BufferTarget, BufferUploadMode, Device, VertexAttrClass};
+use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
+use pathfinder_gpu::{BufferData, BufferTarget, BufferUploadMode, ComputeDimensions, Device, VertexAttrClass};
 use pathfinder_gpu::{VertexAttrDescriptor, VertexAttrType};
 use pathfinder_resources::ResourceLoader;
 
@@ -49,12 +50,8 @@ impl<D> BlitVertexArray<D> where D: Device {
     }
 }
 
-pub struct FillVertexArray<D>
-where
-    D: Device,
-{
+pub struct FillVertexArray<D> where D: Device {
     pub vertex_array: D::VertexArray,
-    pub vertex_buffer: D::Buffer,
 }
 
 impl<D> FillVertexArray<D>
@@ -63,20 +60,12 @@ where
 {
     pub fn new(
         device: &D,
-        fill_program: &FillProgram<D>,
+        fill_program: &FillRasterProgram<D>,
+        vertex_buffer: &D::Buffer,
         quad_vertex_positions_buffer: &D::Buffer,
         quad_vertex_indices_buffer: &D::Buffer,
     ) -> FillVertexArray<D> {
         let vertex_array = device.create_vertex_array();
-
-        let vertex_buffer = device.create_buffer();
-        let vertex_buffer_data: BufferData<Fill> = BufferData::Uninitialized(MAX_FILLS_PER_BATCH);
-        device.allocate_buffer(
-            &vertex_buffer,
-            vertex_buffer_data,
-            BufferTarget::Vertex,
-            BufferUploadMode::Dynamic,
-        );
 
         let tess_coord_attr = device.get_vertex_attr(&fill_program.program, "TessCoord").unwrap();
         let from_px_attr = device.get_vertex_attr(&fill_program.program, "FromPx").unwrap();
@@ -143,7 +132,7 @@ where
         });
         device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, BufferTarget::Index);
 
-        FillVertexArray { vertex_array, vertex_buffer }
+        FillVertexArray { vertex_array }
     }
 }
 
@@ -340,7 +329,7 @@ pub struct BlitProgram<D> where D: Device {
 
 impl<D> BlitProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> BlitProgram<D> {
-        let program = device.create_program(resources, "blit");
+        let program = device.create_raster_program(resources, "blit");
         let src_uniform = device.get_uniform(&program, "Src");
         BlitProgram { program, src_uniform }
     }
@@ -370,14 +359,29 @@ impl<D> FillRasterProgram<D> where D: Device {
 
 pub struct FillComputeProgram<D> where D: Device {
     pub program: D::Program,
+    pub dest_uniform: D::Uniform,
     pub area_lut_uniform: D::Uniform,
+    pub fills_storage_buffer: D::StorageBuffer,
+    pub fill_ranges_storage_buffer: D::StorageBuffer,
 }
 
 impl<D> FillComputeProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> FillComputeProgram<D> {
-        let program = device.create_compute_program(resources, "fill");
+        let mut program = device.create_compute_program(resources, "fill");
+        let local_size = ComputeDimensions { x: TILE_WIDTH, y: TILE_HEIGHT, z: 1 };
+        device.set_compute_program_local_size(&mut program, local_size);
+
+        let dest_uniform = device.get_uniform(&program, "Dest");
         let area_lut_uniform = device.get_uniform(&program, "AreaLUT");
-        FillComputeProgram { program, area_lut_uniform }
+        let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 0);
+        let fill_ranges_storage_buffer = device.get_storage_buffer(&program, "FillRanges", 1);
+        FillComputeProgram {
+            program,
+            dest_uniform,
+            area_lut_uniform,
+            fills_storage_buffer,
+            fill_ranges_storage_buffer,
+        }
     }
 }
 
@@ -402,7 +406,7 @@ pub struct TileProgram<D> where D: Device {
 
 impl<D> TileProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> TileProgram<D> {
-        let program = device.create_program(resources, "tile");
+        let program = device.create_raster_program(resources, "tile");
         let transform_uniform = device.get_uniform(&program, "Transform");
         let tile_size_uniform = device.get_uniform(&program, "TileSize");
         let texture_metadata_uniform = device.get_uniform(&program, "TextureMetadata");
@@ -449,7 +453,7 @@ pub struct CopyTileProgram<D> where D: Device {
 
 impl<D> CopyTileProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> CopyTileProgram<D> {
-        let program = device.create_program(resources, "tile_copy");
+        let program = device.create_raster_program(resources, "tile_copy");
         let transform_uniform = device.get_uniform(&program, "Transform");
         let tile_size_uniform = device.get_uniform(&program, "TileSize");
         let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
@@ -471,7 +475,7 @@ pub struct ClipTileProgram<D> where D: Device {
 
 impl<D> ClipTileProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> ClipTileProgram<D> {
-        let program = device.create_program(resources, "tile_clip");
+        let program = device.create_raster_program(resources, "tile_clip");
         let src_uniform = device.get_uniform(&program, "Src");
         ClipTileProgram { program, src_uniform }
     }
@@ -489,7 +493,7 @@ where
     D: Device,
 {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> StencilProgram<D> {
-        let program = device.create_program(resources, "stencil");
+        let program = device.create_raster_program(resources, "stencil");
         StencilProgram { program }
     }
 }
@@ -544,7 +548,7 @@ where
     D: Device,
 {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> ReprojectionProgram<D> {
-        let program = device.create_program(resources, "reproject");
+        let program = device.create_raster_program(resources, "reproject");
         let old_transform_uniform = device.get_uniform(&program, "OldTransform");
         let new_transform_uniform = device.get_uniform(&program, "NewTransform");
         let texture_uniform = device.get_uniform(&program, "Texture");
