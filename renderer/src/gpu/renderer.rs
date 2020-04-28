@@ -181,34 +181,23 @@ where
             TextureFormat::RGBA16F,
             Vector2I::new(TEXTURE_METADATA_TEXTURE_WIDTH, TEXTURE_METADATA_TEXTURE_HEIGHT));
 
-        let quad_vertex_positions_buffer = device.create_buffer();
-        device.allocate_buffer(
-            &quad_vertex_positions_buffer,
-            BufferData::Memory(&QUAD_VERTEX_POSITIONS),
-            BufferTarget::Vertex,
-            BufferUploadMode::Static,
-        );
-        let quad_vertex_indices_buffer = device.create_buffer();
-        device.allocate_buffer(
-            &quad_vertex_indices_buffer,
-            BufferData::Memory(&QUAD_VERTEX_INDICES),
-            BufferTarget::Index,
-            BufferUploadMode::Static,
-        );
-        let quads_vertex_indices_buffer = device.create_buffer();
-        let tile_vertex_buffer = device.create_buffer();
-        let next_fills_buffer = device.create_buffer();
-        let fill_tile_map_buffer = device.create_buffer();
+        let quad_vertex_positions_buffer = device.create_buffer(BufferUploadMode::Static);
+        device.allocate_buffer(&quad_vertex_positions_buffer,
+                               BufferData::Memory(&QUAD_VERTEX_POSITIONS),
+                               BufferTarget::Vertex);
+        let quad_vertex_indices_buffer = device.create_buffer(BufferUploadMode::Static);
+        device.allocate_buffer(&quad_vertex_indices_buffer,
+                               BufferData::Memory(&QUAD_VERTEX_INDICES),
+                               BufferTarget::Index);
+        let quads_vertex_indices_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let tile_vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let next_fills_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let fill_tile_map_buffer = device.create_buffer(BufferUploadMode::Dynamic);
 
-        let fill_vertex_buffer = device.create_buffer();
+        let fill_vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
         let fill_vertex_buffer_data: BufferData<Fill> =
             BufferData::Uninitialized(MAX_FILLS_PER_BATCH);
-        device.allocate_buffer(
-            &fill_vertex_buffer,
-            fill_vertex_buffer_data,
-            BufferTarget::Vertex,
-            BufferUploadMode::Dynamic,
-        );
+        device.allocate_buffer(&fill_vertex_buffer, fill_vertex_buffer_data, BufferTarget::Vertex);
 
         let blit_vertex_array = BlitVertexArray::new(
             &device,
@@ -555,8 +544,7 @@ where
     fn upload_tiles(&mut self, tiles: &[Tile]) {
         self.device.allocate_buffer(&self.tile_vertex_buffer,
                                     BufferData::Memory(&tiles),
-                                    BufferTarget::Vertex,
-                                    BufferUploadMode::Dynamic);
+                                    BufferTarget::Vertex);
         self.ensure_index_buffer(tiles.len());
     }
 
@@ -575,12 +563,9 @@ where
             ]);
         }
 
-        self.device.allocate_buffer(
-            &self.quads_vertex_indices_buffer,
-            BufferData::Memory(&indices),
-            BufferTarget::Index,
-            BufferUploadMode::Static,
-        );
+        self.device.allocate_buffer(&self.quads_vertex_indices_buffer,
+                                    BufferData::Memory(&indices),
+                                    BufferTarget::Index);
 
         self.quads_vertex_indices_length = length;
     }
@@ -632,8 +617,7 @@ where
 
         self.device.allocate_buffer(&self.fill_vertex_buffer,
                                     BufferData::Memory(&buffered_fills),
-                                    BufferTarget::Vertex,
-                                    BufferUploadMode::Dynamic);
+                                    BufferTarget::Vertex);
 
         let mut clear_color = None;
         if !alpha_tile_page.must_preserve_framebuffer {
@@ -708,16 +692,13 @@ where
 
         self.device.allocate_buffer(&self.fill_vertex_buffer,
                                     BufferData::Memory(&buffered_fills),
-                                    BufferTarget::Storage,
-                                    BufferUploadMode::Dynamic);
+                                    BufferTarget::Storage);
         self.device.allocate_buffer(&self.next_fills_buffer,
                                     BufferData::Memory(&self.next_fills),
-                                    BufferTarget::Storage,
-                                    BufferUploadMode::Dynamic);
+                                    BufferTarget::Storage);
         self.device.allocate_buffer(&self.fill_tile_map_buffer,
                                     BufferData::Memory(&self.fill_tile_map),
-                                    BufferTarget::Storage,
-                                    BufferUploadMode::Dynamic);
+                                    BufferTarget::Storage);
 
         let image_binding = ImageBinding {
             texture: self.device.framebuffer_texture(&alpha_tile_page.framebuffer),
@@ -763,8 +744,7 @@ where
 
         self.device.allocate_buffer(&self.tile_clip_vertex_array.vertex_buffer,
                                     BufferData::Memory(&batch.clips),
-                                    BufferTarget::Vertex,
-                                    BufferUploadMode::Dynamic);
+                                    BufferTarget::Vertex);
 
         if !self.alpha_tile_pages.contains_key(&dest_page) {
             self.alpha_tile_pages.insert(dest_page, AlphaTilePage::new(&mut self.device));
@@ -986,12 +966,9 @@ where
     }
 
     fn draw_stencil(&mut self, quad_positions: &[Vector4F]) {
-        self.device.allocate_buffer(
-            &self.stencil_vertex_array.vertex_buffer,
-            BufferData::Memory(quad_positions),
-            BufferTarget::Vertex,
-            BufferUploadMode::Dynamic,
-        );
+        self.device.allocate_buffer(&self.stencil_vertex_array.vertex_buffer,
+                                    BufferData::Memory(quad_positions),
+                                    BufferTarget::Vertex);
 
         // Create indices for a triangle fan. (This is OK because the clipped quad should always be
         // convex.)
@@ -999,12 +976,9 @@ where
         for index in 1..(quad_positions.len() as u32 - 1) {
             indices.extend_from_slice(&[0, index as u32, index + 1]);
         }
-        self.device.allocate_buffer(
-            &self.stencil_vertex_array.index_buffer,
-            BufferData::Memory(&indices),
-            BufferTarget::Index,
-            BufferUploadMode::Dynamic,
-        );
+        self.device.allocate_buffer(&self.stencil_vertex_array.index_buffer,
+                                    BufferData::Memory(&indices),
+                                    BufferTarget::Index);
 
         self.device.draw_elements(indices.len() as u32, &RenderState {
             target: &self.draw_render_target(),

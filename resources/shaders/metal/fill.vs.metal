@@ -48,15 +48,15 @@ vertex main0_out main0(main0_in in [[stage_in]], constant spvDescriptorSetBuffer
     float2 position;
     if (in.aTessCoord.x == 0u)
     {
-        position.x = 0.0;
+        position.x = floor(fast::min(from.x, to.x));
     }
     else
     {
-        position.x = 15.0;
+        position.x = ceil(fast::max(from.x, to.x));
     }
     if (in.aTessCoord.y == 0u)
     {
-        position.y = 0.0;
+        position.y = floor(fast::min(from.y, to.y));
     }
     else
     {

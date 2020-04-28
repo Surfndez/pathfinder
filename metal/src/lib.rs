@@ -62,6 +62,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const FIRST_VERTEX_BUFFER_INDEX: u64 = 1;
+const MINIMUM_BUFFER_SIZE_CLASS: usize = 10;    // 1024 bytes
 
 pub struct MetalDevice {
     device: metal::Device,
@@ -73,6 +74,7 @@ pub struct MetalDevice {
     shared_event: SharedEvent,
     shared_event_listener: SharedEventListener,
     next_timer_query_event_value: Cell<u64>,
+    free_auxiliary_buffers: FreeAuxiliaryBuffers,
 }
 
 pub enum MetalProgram {
@@ -93,6 +95,7 @@ pub struct MetalComputeProgram {
 #[derive(Clone)]
 pub struct MetalBuffer {
     buffer: Rc<RefCell<Option<Buffer>>>,
+    mode: BufferUploadMode,
 }
 
 impl MetalDevice {
@@ -148,6 +151,7 @@ impl MetalDevice {
             shared_event,
             shared_event_listener: SharedEventListener::new(),
             next_timer_query_event_value: Cell::new(1),
+            free_auxiliary_buffers: FreeAuxiliaryBuffers::new(),
         }
     }
 
@@ -484,21 +488,15 @@ impl Device for MetalDevice {
         MetalFramebuffer(texture)
     }
 
-    fn create_buffer(&self) -> MetalBuffer {
-        MetalBuffer { buffer: Rc::new(RefCell::new(None)) }
+    fn create_buffer(&self, mode: BufferUploadMode) -> MetalBuffer {
+        MetalBuffer { buffer: Rc::new(RefCell::new(None)), mode }
     }
 
     fn allocate_buffer<T>(&self,
                           buffer: &MetalBuffer,
                           data: BufferData<T>,
-                          _: BufferTarget,
-                          mode: BufferUploadMode) {
-        let mut options = match mode {
-            BufferUploadMode::Static => MTLResourceOptions::CPUCacheModeWriteCombined,
-            BufferUploadMode::Dynamic => MTLResourceOptions::CPUCacheModeDefaultCache,
-        };
-        options |= MTLResourceOptions::StorageModeManaged;
-
+                          _: BufferTarget) {
+        let options = buffer.mode.to_metal_resource_options();
         match data {
             BufferData::Uninitialized(size) => {
                 let size = (size * mem::size_of::<T>()) as u64;
@@ -513,6 +511,20 @@ impl Device for MetalDevice {
                 *buffer.buffer.borrow_mut() = Some(new_buffer);
             }
         }
+    }
+
+    fn upload_to_buffer<T>(&self,
+                           buffer: &MetalBuffer,
+                           start: usize,
+                           data: &[T],
+                           target: BufferTarget) {
+        /*
+        let mut buffer = buffer.buffer.borrow_mut();
+        let mut buffer = buffer.as_mut().unwrap();
+        self.upload_to_metal_buffer(buffer, start, data)
+        */
+        assert_eq!(start, 0);
+        self.allocate_buffer(buffer, BufferData::Memory(data), target)
     }
 
     #[inline]
@@ -673,7 +685,7 @@ impl Device for MetalDevice {
             self.populate_compute_shader_uniforms_if_necessary(&program.shader, reflection);
         }
 
-        self.set_compute_uniforms(&encoder, &compute_state);
+        self.set_compute_uniforms(&command_buffer, &encoder, &compute_state);
         encoder.set_compute_pipeline_state(&compute_pipeline_state);
 
         let local_size = match compute_state.program {
@@ -717,23 +729,19 @@ impl Device for MetalDevice {
     }
 
     fn begin_timer_query(&self, query: &MetalTimerQuery) {
-        /*
         self.command_buffers
             .borrow_mut()
             .last()
             .unwrap()
             .encode_signal_event(&self.shared_event, query.0.event_value);
-            */
     }
 
     fn end_timer_query(&self, query: &MetalTimerQuery) {
-        /*
         self.command_buffers
             .borrow_mut()
             .last()
             .unwrap()
             .encode_signal_event(&self.shared_event, query.0.event_value + 1);
-            */
     }
 
     fn try_recv_timer_query(&self, query: &MetalTimerQuery) -> Option<Duration> {
@@ -989,7 +997,7 @@ impl MetalDevice {
             encoder.use_resource(buffer, MTLResourceUsage::Read);
         }
 
-        self.set_raster_uniforms(&encoder, render_state);
+        self.set_raster_uniforms(&command_buffer, &encoder, render_state);
         encoder.set_render_pipeline_state(&render_pipeline_state);
         self.set_depth_stencil_state(&encoder, render_state);
         encoder
@@ -1053,7 +1061,7 @@ impl MetalDevice {
         *shader_arguments = ShaderArguments::Arguments { encoder, struct_type };
     }
 
-    fn create_argument_buffer(&self, shader: &MetalShader) -> Option<Buffer> {
+    fn allocate_argument_buffer(&self, shader: &MetalShader) -> Option<Buffer> {
         let uniforms = shader.arguments.borrow();
         let encoder = match *uniforms {
             ShaderArguments::Unknown => unreachable!(),
@@ -1061,14 +1069,13 @@ impl MetalDevice {
             ShaderArguments::Arguments { ref encoder, .. } => encoder,
         };
 
-        let buffer_options = MTLResourceOptions::CPUCacheModeDefaultCache |
-            MTLResourceOptions::StorageModeManaged;
-        let buffer = self.device.new_buffer(encoder.encoded_length(), buffer_options);
+        let buffer = self.allocate_auxiliary_buffer(encoder.encoded_length() as usize);
         encoder.set_argument_buffer(&buffer, 0);
         Some(buffer)
     }
 
     fn set_raster_uniforms(&self,
+                           command_buffer: &CommandBuffer,
                            render_command_encoder: &RenderCommandEncoderRef,
                            render_state: &RenderState<MetalDevice>) {
         let program = match render_state.program {
@@ -1076,8 +1083,8 @@ impl MetalDevice {
             _ => unreachable!(),
         };
 
-        let vertex_argument_buffer = self.create_argument_buffer(&program.vertex_shader);
-        let fragment_argument_buffer = self.create_argument_buffer(&program.fragment_shader);
+        let vertex_argument_buffer = self.allocate_argument_buffer(&program.vertex_shader);
+        let fragment_argument_buffer = self.allocate_argument_buffer(&program.fragment_shader);
 
         let vertex_arguments = program.vertex_shader.arguments.borrow();
         let fragment_arguments = program.fragment_shader.arguments.borrow();
@@ -1144,21 +1151,32 @@ impl MetalDevice {
 
         render_command_encoder.use_resource(&uniform_buffer.data_buffer, MTLResourceUsage::Read);
 
-        // Metal expects the data buffer to remain live. (Issue #199.)
-        // FIXME(pcwalton): When do we deallocate this? What are the expected lifetime semantics?
-        mem::forget(uniform_buffer);
-
-        if let Some(vertex_argument_buffer) = vertex_argument_buffer {
+        if let Some(ref vertex_argument_buffer) = vertex_argument_buffer {
             let range = NSRange::new(0, vertex_argument_buffer.length());
             vertex_argument_buffer.did_modify_range(range);
         }
-        if let Some(fragment_argument_buffer) = fragment_argument_buffer {
+        if let Some(ref fragment_argument_buffer) = fragment_argument_buffer {
             let range = NSRange::new(0, fragment_argument_buffer.length());
             fragment_argument_buffer.did_modify_range(range);
         }
+
+        // Allow the uniform and argument buffers to be reused when done.
+        let free_auxiliary_buffers = self.free_auxiliary_buffers.clone();
+        let uniform_data_buffer = uniform_buffer.data_buffer.clone();
+        let free_uniform_buffer_block = ConcreteBlock::new(move |_| {
+            free_auxiliary_buffers.free(uniform_data_buffer.clone());
+            if let Some(ref vertex_argument_buffer) = vertex_argument_buffer {
+                free_auxiliary_buffers.free((*vertex_argument_buffer).clone());
+            }
+            if let Some(ref fragment_argument_buffer) = fragment_argument_buffer {
+                free_auxiliary_buffers.free((*fragment_argument_buffer).clone());
+            }
+        });
+        command_buffer.add_completed_handler(free_uniform_buffer_block.copy());
     }
 
     fn set_compute_uniforms(&self,
+                            command_buffer: &CommandBuffer,
                             compute_command_encoder: &ComputeCommandEncoderRef,
                             compute_state: &ComputeState<MetalDevice>) {
         let program = match compute_state.program {
@@ -1166,20 +1184,14 @@ impl MetalDevice {
             _ => unreachable!(),
         };
 
-        let argument_buffer = self.create_argument_buffer(&program.shader);
-
         let arguments = program.shader.arguments.borrow();
-
-        let mut have_arguments = false;
-        if let ShaderArguments::Arguments { .. } = *arguments {
-            have_arguments = true;
-            let argument_buffer = argument_buffer.as_ref().unwrap();
-            compute_command_encoder.use_resource(argument_buffer, MTLResourceUsage::Read);
-            compute_command_encoder.set_buffer(0, Some(argument_buffer), 0);
-        }
-
-        if !have_arguments {
-            return;
+        let argument_buffer = self.allocate_argument_buffer(&program.shader);
+        match argument_buffer {
+            None => return,
+            Some(ref argument_buffer) => {
+                compute_command_encoder.use_resource(argument_buffer, MTLResourceUsage::Read);
+                compute_command_encoder.set_buffer(0, Some(argument_buffer), 0);
+            }
         }
 
         // Set uniforms.
@@ -1240,14 +1252,21 @@ impl MetalDevice {
 
         compute_command_encoder.use_resource(&uniform_buffer.data_buffer, MTLResourceUsage::Read);
 
-        // Metal expects the data buffer to remain live. (Issue #199.)
-        // FIXME(pcwalton): When do we deallocate this? What are the expected lifetime semantics?
-        mem::forget(uniform_buffer);
-
-        if let Some(argument_buffer) = argument_buffer {
+        if let Some(ref argument_buffer) = argument_buffer {
             let range = NSRange::new(0, argument_buffer.length());
             argument_buffer.did_modify_range(range);
         }
+
+        // Allow the uniform and argument buffers to be reused when done.
+        let free_auxiliary_buffers = self.free_auxiliary_buffers.clone();
+        let uniform_data_buffer = uniform_buffer.data_buffer.clone();
+        let free_uniform_buffer_block = ConcreteBlock::new(move |_| {
+            free_auxiliary_buffers.free(uniform_data_buffer.clone());
+            if let Some(ref argument_buffer) = argument_buffer {
+                free_auxiliary_buffers.free((*argument_buffer).clone());
+            }
+        });
+        command_buffer.add_completed_handler(free_uniform_buffer_block.copy());
     }
 
     fn create_uniform_buffer(&self, uniforms: &[(&MetalUniform, UniformData)]) -> UniformBuffer {
@@ -1305,14 +1324,10 @@ impl MetalDevice {
             uniform_buffer_ranges.push(start_index..end_index);
         }
 
-        let buffer_options = MTLResourceOptions::CPUCacheModeWriteCombined |
-            MTLResourceOptions::StorageModeManaged;
-        let data_buffer = self.device
-                              .new_buffer_with_data(uniform_buffer_data.as_ptr() as *const _,
-                                                    uniform_buffer_data.len() as u64,
-                                                    buffer_options);
-
-        UniformBuffer { data_buffer, ranges: uniform_buffer_ranges }
+        UniformBuffer {
+            data_buffer: self.allocate_auxiliary_buffer_with_data(&uniform_buffer_data[..]),
+            ranges: uniform_buffer_ranges,
+        }
     }
 
     fn set_raster_uniform(&self,
@@ -1530,13 +1545,68 @@ impl MetalDevice {
             let command_buffer = command_buffers.last().unwrap();
             let encoder = command_buffer.new_blit_command_encoder();
             encoder.synchronize_resource(&texture);
-            let () = msg_send![*command_buffer, addCompletedHandler:&*block];
+            command_buffer.add_completed_handler(block);
             encoder.end_encoding();
         }
 
         self.end_commands();
         self.begin_commands();
     }
+
+    fn allocate_auxiliary_buffer(&self, requested_size: usize) -> Buffer {
+        let mut size_class = (64 - (requested_size - 1).leading_zeros()) as usize;
+        let size_class = size_class.max(MINIMUM_BUFFER_SIZE_CLASS);
+        let rounded_size = 1 << size_class;
+        let bucket_index = size_class - MINIMUM_BUFFER_SIZE_CLASS;
+        /*
+        println!("allocating buffer, requested_size={} rounded_size={} size_class={} bucket_index={}",
+                 requested_size,
+                 rounded_size,
+                 size_class,
+                 bucket_index);
+        */
+        debug_assert!(rounded_size >= requested_size);
+
+        {
+            let mut free_buffers = self.free_auxiliary_buffers.0.lock().unwrap();
+            if size_class < free_buffers.len() {
+                if let Some(buffer) = free_buffers[bucket_index].pop() {
+                    return buffer;
+                }
+            }
+        }
+
+        let options = MTLResourceOptions::CPUCacheModeWriteCombined |
+            MTLResourceOptions::StorageModeManaged;
+        self.device.new_buffer(rounded_size as u64, options)
+    }
+
+    fn allocate_auxiliary_buffer_with_data<T>(&self, data: &[T]) -> Buffer {
+        let requested_size = data.len() * mem::size_of::<T>();
+        let buffer = self.allocate_auxiliary_buffer(requested_size);
+
+        unsafe {
+            ptr::copy_nonoverlapping(data.as_ptr() as *const u8,
+                                     buffer.contents() as *mut u8,
+                                     requested_size);
+            buffer.did_modify_range(NSRange::new(0, requested_size as u64));
+            buffer
+        }
+    }
+
+    /*
+    fn upload_to_metal_buffer<T>(&self, buffer: &Buffer, start: usize, data: &[T]) {
+        unsafe {
+            let start = (start * mem::size_of::<T>()) as u64;
+            let size = (data.len() * mem::size_of::<T>()) as u64;
+            assert!(start + size <= buffer.length());
+            ptr::copy_nonoverlapping(data.as_ptr() as *const u8,
+                                     (buffer.contents() as *mut u8).offset(start as isize),
+                                     size as usize);
+            buffer.did_modify_range(NSRange::new(start, size));
+        }
+    }*/
+
 }
 
 trait DeviceExtra {
@@ -1561,6 +1631,36 @@ impl DeviceExtra for metal::Device {
 struct UniformBuffer {
     data_buffer: Buffer,
     ranges: Vec<Range<usize>>,
+}
+
+#[derive(Clone)]
+struct FreeAuxiliaryBuffers(Arc<Mutex<Vec<Vec<Buffer>>>>);
+
+impl FreeAuxiliaryBuffers {
+    #[inline]
+    fn new() -> FreeAuxiliaryBuffers {
+        FreeAuxiliaryBuffers(Arc::new(Mutex::new(vec![])))
+    }
+
+    fn free(&self, buffer: Buffer) {
+        let buffer_size = buffer.length();
+        let size_class = (64 - (buffer_size - 1).leading_zeros()) as usize;
+        let bucket_index = size_class - MINIMUM_BUFFER_SIZE_CLASS;
+        /*
+        println!("freeing buffer: buffer_size={} size_class={} bucket_index={}",
+                 buffer_size,
+                 size_class,
+                 bucket_index);
+        */
+
+        {
+            let mut free_buffers = self.0.lock().unwrap();
+            while free_buffers.len() < size_class + 1 {
+                free_buffers.push(vec![]);
+            }
+            free_buffers[bucket_index].push(buffer);
+        }
+    }
 }
 
 // Miscellaneous extra public methods
@@ -1636,6 +1736,22 @@ impl BlendOpExt for BlendOp {
             BlendOp::Min => MTLBlendOperation::Min,
             BlendOp::Max => MTLBlendOperation::Max,
         }
+    }
+}
+
+trait BufferUploadModeExt {
+    fn to_metal_resource_options(self) -> MTLResourceOptions;
+}
+
+impl BufferUploadModeExt for BufferUploadMode {
+    #[inline]
+    fn to_metal_resource_options(self) -> MTLResourceOptions {
+        let mut options = match self {
+            BufferUploadMode::Static => MTLResourceOptions::CPUCacheModeWriteCombined,
+            BufferUploadMode::Dynamic => MTLResourceOptions::CPUCacheModeDefaultCache,
+        };
+        options |= MTLResourceOptions::StorageModeManaged;
+        options
     }
 }
 
@@ -1994,12 +2110,19 @@ impl CoreAnimationLayerExt for CoreAnimationLayer {
 
 trait CommandBufferExt {
     fn encode_signal_event(&self, event: &SharedEvent, value: u64);
+    fn add_completed_handler(&self, block: RcBlock<(*mut Object,), ()>);
 }
 
 impl CommandBufferExt for CommandBuffer {
     fn encode_signal_event(&self, event: &SharedEvent, value: u64) {
         unsafe {
             msg_send![self.as_ptr(), encodeSignalEvent:event.0 value:value]
+        }
+    }
+
+    fn add_completed_handler(&self, block: RcBlock<(*mut Object,), ()>) {
+        unsafe {
+            msg_send![self.as_ptr(), addCompletedHandler:&*block]
         }
     }
 }

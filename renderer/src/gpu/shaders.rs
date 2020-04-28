@@ -266,7 +266,7 @@ impl<D> ClipTileVertexArray<D> where D: Device {
                quad_vertex_indices_buffer: &D::Buffer)
                -> ClipTileVertexArray<D> {
         let vertex_array = device.create_vertex_array();
-        let vertex_buffer = device.create_buffer();
+        let vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
 
         let tile_offset_attr =
             device.get_vertex_attr(&clip_tile_program.program, "TileOffset").unwrap();
@@ -520,7 +520,8 @@ where
 {
     pub fn new(device: &D, stencil_program: &StencilProgram<D>) -> StencilVertexArray<D> {
         let vertex_array = device.create_vertex_array();
-        let (vertex_buffer, index_buffer) = (device.create_buffer(), device.create_buffer());
+        let vertex_buffer = device.create_buffer(BufferUploadMode::Static);
+        let index_buffer = device.create_buffer(BufferUploadMode::Static);
 
         let position_attr = device.get_vertex_attr(&stencil_program.program, "Position").unwrap();
 

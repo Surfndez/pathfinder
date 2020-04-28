@@ -13,7 +13,7 @@
 #[macro_use]
 extern crate log;
 
-use gl::types::{GLboolean, GLchar, GLenum, GLfloat, GLint, GLsizei, GLsizeiptr, GLsync};
+use gl::types::{GLboolean, GLchar, GLenum, GLfloat, GLint, GLintptr, GLsizei, GLsizeiptr, GLsync};
 use gl::types::{GLuint, GLvoid};
 use half::f16;
 use pathfinder_geometry::rect::RectI;
@@ -447,29 +447,44 @@ impl Device for GLDevice {
         GLFramebuffer { gl_framebuffer, texture }
     }
 
-    fn create_buffer(&self) -> GLBuffer {
+    fn create_buffer(&self, mode: BufferUploadMode) -> GLBuffer {
         unsafe {
             let mut gl_buffer = 0;
             gl::GenBuffers(1, &mut gl_buffer); ck();
-            GLBuffer { gl_buffer }
+            GLBuffer { gl_buffer, mode }
         }
     }
 
     fn allocate_buffer<T>(&self,
                           buffer: &GLBuffer,
                           data: BufferData<T>,
-                          target: BufferTarget,
-                          mode: BufferUploadMode) {
+                          target: BufferTarget) {
         let target = target.to_gl_target();
         let (ptr, len) = match data {
             BufferData::Uninitialized(len) => (ptr::null(), len),
             BufferData::Memory(buffer) => (buffer.as_ptr() as *const GLvoid, buffer.len()),
         };
         let len = (len * mem::size_of::<T>()) as GLsizeiptr;
-        let usage = mode.to_gl_usage();
+        let usage = buffer.mode.to_gl_usage();
         unsafe {
             gl::BindBuffer(target, buffer.gl_buffer); ck();
             gl::BufferData(target, len, ptr, usage); ck();
+        }
+    }
+
+    fn upload_to_buffer<T>(&self,
+                           buffer: &Self::Buffer,
+                           position: usize,
+                           data: &[T],
+                           target: BufferTarget) {
+        let target = target.to_gl_target();
+        let len = (data.len() * mem::size_of::<T>()) as GLsizeiptr;
+        unsafe {
+            gl::BindBuffer(target, buffer.gl_buffer); ck();
+            gl::BufferSubData(target,
+                              position as GLintptr,
+                              len,
+                              data.as_ptr() as *const GLvoid); ck();
         }
     }
 
@@ -973,6 +988,7 @@ impl Drop for GLFramebuffer {
 
 pub struct GLBuffer {
     pub gl_buffer: GLuint,
+    pub mode: BufferUploadMode,
 }
 
 impl Drop for GLBuffer {

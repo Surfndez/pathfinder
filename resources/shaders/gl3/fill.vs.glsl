@@ -42,14 +42,11 @@ void main(){
 
     vec2 position;
     if(aTessCoord . x == 0u)
-
-        position . x = 0.0;
+        position . x = floor(min(from . x, to . x));
     else
-
-        position . x = 15.0;
+        position . x = ceil(max(from . x, to . x));
     if(aTessCoord . y == 0u)
-
-        position . y = 0.0;
+        position . y = floor(min(from . y, to . y));
     else
         position . y = uTileSize . y;
 

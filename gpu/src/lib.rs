@@ -66,14 +66,16 @@ pub trait Device: Sized {
                              attr: &Self::VertexAttr,
                              descriptor: &VertexAttrDescriptor);
     fn create_framebuffer(&self, texture: Self::Texture) -> Self::Framebuffer;
-    fn create_buffer(&self) -> Self::Buffer;
-    fn allocate_buffer<T>(
-        &self,
-        buffer: &Self::Buffer,
-        data: BufferData<T>,
-        target: BufferTarget,
-        mode: BufferUploadMode,
-    );
+    fn create_buffer(&self, mode: BufferUploadMode) -> Self::Buffer;
+    fn allocate_buffer<T>(&self,
+                          buffer: &Self::Buffer,
+                          data: BufferData<T>,
+                          target: BufferTarget);
+    fn upload_to_buffer<T>(&self,
+                           buffer: &Self::Buffer,
+                           position: usize,
+                           data: &[T],
+                           target: BufferTarget);
     fn framebuffer_texture<'f>(&self, framebuffer: &'f Self::Framebuffer) -> &'f Self::Texture;
     fn destroy_framebuffer(&self, framebuffer: Self::Framebuffer) -> Self::Texture;
     fn texture_format(&self, texture: &Self::Texture) -> TextureFormat;
