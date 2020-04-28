@@ -585,19 +585,25 @@ where
 
         self.stats.fill_count += fill_batch.len();
 
+        // Make sure we don't split batches across draw calls.
+        let mut pages_to_flush = vec![];
         for fill_batch_entry in fill_batch {
             let page = fill_batch_entry.page;
             if !self.alpha_tile_pages.contains_key(&page) {
                 self.alpha_tile_pages.insert(page, AlphaTilePage::new(&mut self.device));
             }
             if self.alpha_tile_pages[&page].buffered_fills.len() == MAX_FILLS_PER_BATCH {
-                self.draw_buffered_fills(page);
+                pages_to_flush.push(page);
             }
             self.alpha_tile_pages
                 .get_mut(&page)
                 .unwrap()
                 .buffered_fills
                 .push(fill_batch_entry.fill);
+        }
+
+        for page in pages_to_flush {
+            self.draw_buffered_fills(page);
         }
     }
 
