@@ -6,9 +6,9 @@
 
 using namespace metal;
 
-struct bFillRanges
+struct bFillTileMap
 {
-    uint iFillRanges[1];
+    int iFillTileMap[1];
 };
 
 struct bFills
@@ -16,16 +16,22 @@ struct bFills
     uint2 iFills[1];
 };
 
+struct bNextFills
+{
+    int iNextFills[1];
+};
+
 constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(16u, 16u, 1u);
 
 struct spvDescriptorSetBuffer0
 {
     constant int* uFirstTileIndex [[id(0)]];
-    const device bFillRanges* m_164 [[id(1)]];
-    const device bFills* m_196 [[id(2)]];
+    const device bFillTileMap* m_165 [[id(1)]];
+    const device bFills* m_186 [[id(2)]];
     texture2d<float> uAreaLUT [[id(3)]];
     sampler uAreaLUTSmplr [[id(4)]];
-    texture2d<float, access::write> uDest [[id(5)]];
+    const device bNextFills* m_269 [[id(5)]];
+    texture2d<float, access::write> uDest [[id(6)]];
 };
 
 static inline __attribute__((always_inline))
@@ -49,23 +55,24 @@ kernel void main0(constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[buffer(0
     uint tileIndex = tileIndexOffset + uint((*spvDescriptorSet0.uFirstTileIndex));
     int2 tileOrigin = int2(int(tileIndex & 255u), int((tileIndex >> 8u) & 255u)) * int2(16);
     int2 destCoord = tileOrigin + tileSubCoord;
-    uint startFillIndex = (*spvDescriptorSet0.m_164).iFillRanges[tileIndexOffset];
-    uint endFillIndex = (*spvDescriptorSet0.m_164).iFillRanges[tileIndexOffset + 1u];
-    if (startFillIndex < endFillIndex)
+    int fillIndex = (*spvDescriptorSet0.m_165).iFillTileMap[tileIndex];
+    if (fillIndex < 0)
     {
-        float coverage = 0.0;
-        for (uint fillIndex = startFillIndex; fillIndex < endFillIndex; fillIndex++)
-        {
-            uint2 fill = (*spvDescriptorSet0.m_196).iFills[fillIndex];
-            float2 from = float2(float(fill.y & 15u), float((fill.y >> 4u) & 15u)) + (float2(float(fill.x & 255u), float((fill.x >> 8u) & 255u)) / float2(256.0));
-            float2 to = float2(float((fill.y >> 8u) & 15u), float((fill.y >> 12u) & 15u)) + (float2(float((fill.x >> 16u) & 255u), float((fill.x >> 24u) & 255u)) / float2(256.0));
-            from -= (float2(tileSubCoord) + float2(0.5));
-            to -= (float2(tileSubCoord) + float2(0.5));
-            float2 param = from;
-            float2 param_1 = to;
-            coverage += computeCoverage(param, param_1, spvDescriptorSet0.uAreaLUT, spvDescriptorSet0.uAreaLUTSmplr);
-        }
-        spvDescriptorSet0.uDest.write(float4(coverage), uint2(destCoord));
+        return;
     }
+    float coverage = 0.0;
+    do
+    {
+        uint2 fill = (*spvDescriptorSet0.m_186).iFills[fillIndex];
+        float2 from = float2(float(fill.y & 15u), float((fill.y >> 4u) & 15u)) + (float2(float(fill.x & 255u), float((fill.x >> 8u) & 255u)) / float2(256.0));
+        float2 to = float2(float((fill.y >> 8u) & 15u), float((fill.y >> 12u) & 15u)) + (float2(float((fill.x >> 16u) & 255u), float((fill.x >> 24u) & 255u)) / float2(256.0));
+        from -= (float2(tileSubCoord) + float2(0.5));
+        to -= (float2(tileSubCoord) + float2(0.5));
+        float2 param = from;
+        float2 param_1 = to;
+        coverage += computeCoverage(param, param_1, spvDescriptorSet0.uAreaLUT, spvDescriptorSet0.uAreaLUTSmplr);
+        fillIndex = (*spvDescriptorSet0.m_269).iNextFills[fillIndex];
+    } while (fillIndex >= 0);
+    spvDescriptorSet0.uDest.write(float4(coverage), uint2(destCoord));
 }
 

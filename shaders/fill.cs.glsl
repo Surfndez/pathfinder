@@ -27,8 +27,12 @@ layout(std430, binding = 0) buffer bFills {
     restrict readonly uvec2 iFills[];
 };
 
-layout(std430, binding = 1) buffer bFillRanges {
-    restrict readonly uint iFillRanges[];
+layout(std430, binding = 1) buffer bNextFills {
+    restrict readonly int iNextFills[];
+};
+
+layout(std430, binding = 2) buffer bFillTileMap {
+    restrict readonly int iFillTileMap[];
 };
 
 void main() {
@@ -39,23 +43,25 @@ void main() {
     ivec2 tileOrigin = ivec2(tileIndex & 0xff, (tileIndex >> 8u) & 0xff) * 16;
     ivec2 destCoord = tileOrigin + tileSubCoord;
 
-    uint startFillIndex = iFillRanges[tileIndexOffset];
-    uint endFillIndex = iFillRanges[tileIndexOffset + 1];
-    if (startFillIndex < endFillIndex) {
-        float coverage = 0.0;
-        for (uint fillIndex = startFillIndex; fillIndex < endFillIndex; fillIndex++) {
-            uvec2 fill = iFills[fillIndex];
-            vec2 from = vec2(fill.y & 0xf,           (fill.y >> 4u) & 0xf) +
-                        vec2(fill.x & 0xff,          (fill.x >> 8u) & 0xff) / 256.0;
-            vec2 to   = vec2((fill.y >> 8u) & 0xf,   (fill.y >> 12u) & 0xf) +
-                        vec2((fill.x >> 16u) & 0xff, (fill.x >> 24u) & 0xff) / 256.0;
+    int fillIndex = iFillTileMap[tileIndex];
+    if (fillIndex < 0)
+        return;
 
-            from -= vec2(tileSubCoord) + vec2(0.5);
-            to   -= vec2(tileSubCoord) + vec2(0.5);
+    float coverage = 0.0;
+    do {
+        uvec2 fill = iFills[fillIndex];
+        vec2 from = vec2(fill.y & 0xf,           (fill.y >> 4u) & 0xf) +
+                    vec2(fill.x & 0xff,          (fill.x >> 8u) & 0xff) / 256.0;
+        vec2 to   = vec2((fill.y >> 8u) & 0xf,   (fill.y >> 12u) & 0xf) +
+                    vec2((fill.x >> 16u) & 0xff, (fill.x >> 24u) & 0xff) / 256.0;
 
-            coverage += computeCoverage(from, to, uAreaLUT);
-        }
+        from -= vec2(tileSubCoord) + vec2(0.5);
+        to   -= vec2(tileSubCoord) + vec2(0.5);
 
-        imageStore(uDest, destCoord, vec4(coverage));
-    }
+        coverage += computeCoverage(from, to, uAreaLUT);
+
+        fillIndex = iNextFills[fillIndex];
+    } while (fillIndex >= 0);
+
+    imageStore(uDest, destCoord, vec4(coverage));
 }

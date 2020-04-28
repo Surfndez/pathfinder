@@ -118,7 +118,10 @@ where
     quads_vertex_indices_length: usize,
     fill_vertex_array: FillVertexArray<D>,
     fill_vertex_buffer: D::Buffer,
-    fill_ranges_buffer: D::Buffer,
+    next_fills: Vec<i32>,
+    next_fills_buffer: D::Buffer,
+    fill_tile_map: Vec<i32>,
+    fill_tile_map_buffer: D::Buffer,
     alpha_tile_pages: FxHashMap<u16, AlphaTilePage<D>>,
     dest_blend_framebuffer: D::Framebuffer,
     intermediate_dest_framebuffer: D::Framebuffer,
@@ -194,7 +197,8 @@ where
         );
         let quads_vertex_indices_buffer = device.create_buffer();
         let tile_vertex_buffer = device.create_buffer();
-        let fill_ranges_buffer = device.create_buffer();
+        let next_fills_buffer = device.create_buffer();
+        let fill_tile_map_buffer = device.create_buffer();
 
         let fill_vertex_buffer = device.create_buffer();
         let fill_vertex_buffer_data: BufferData<Fill> =
@@ -277,7 +281,10 @@ where
             quads_vertex_indices_length: 0,
             fill_vertex_array,
             fill_vertex_buffer,
-            fill_ranges_buffer,
+            next_fills: vec![],
+            next_fills_buffer,
+            fill_tile_map: vec![-1; 256 * 256],
+            fill_tile_map_buffer,
             alpha_tile_pages: FxHashMap::default(),
             dest_blend_framebuffer,
             intermediate_dest_framebuffer,
@@ -682,13 +689,28 @@ where
             return;
         }
 
-        // Sort and create ranges.
+        self.fill_tile_map.iter_mut().for_each(|entry| *entry = -1);
+        while self.next_fills.len() < buffered_fills.len() {
+            self.next_fills.push(-1);
+        }
+
+        // Create linked lists.
+        let (mut first_fill_tile, mut last_fill_tile) = (256 * 256, 0);
+        for (fill_index, fill) in buffered_fills.iter().enumerate() {
+            let fill_tile_index = fill.alpha_tile_index as usize;
+            self.next_fills[fill_index as usize] = self.fill_tile_map[fill_tile_index];
+            self.fill_tile_map[fill_tile_index] = fill_index as i32;
+            first_fill_tile = first_fill_tile.min(fill_tile_index as u32);
+            last_fill_tile = last_fill_tile.max(fill_tile_index as u32);
+        }
+        let fill_tile_count = last_fill_tile - first_fill_tile + 1;
+
+        /*
         // TODO(pcwalton): Can we stop doing this?
         // FIXME(pcwalton): This is inefficient!
         buffered_fills.sort_by_key(|fill| fill.alpha_tile_index);
         //println!("buffered fills={:?}", buffered_fills);
         let first_alpha_tile_index = buffered_fills[0].alpha_tile_index as usize;
-        let mut buffered_fill_ranges: Vec<u32> = vec![];
         for (fill_index, fill) in buffered_fills.iter().enumerate() {
             let alpha_tile_index_offset = fill.alpha_tile_index as usize - first_alpha_tile_index;
             while buffered_fill_ranges.len() != alpha_tile_index_offset + 1 {
@@ -698,13 +720,18 @@ where
         buffered_fill_ranges.push(buffered_fills.len() as u32);
         //println!("{:?}", buffered_fill_ranges);
         let end_tile_index_offset = buffered_fill_ranges.len();
+        */
 
         self.device.allocate_buffer(&self.fill_vertex_buffer,
                                     BufferData::Memory(&buffered_fills),
                                     BufferTarget::Storage,
                                     BufferUploadMode::Dynamic);
-        self.device.allocate_buffer(&self.fill_ranges_buffer,
-                                    BufferData::Memory(&buffered_fill_ranges),
+        self.device.allocate_buffer(&self.next_fills_buffer,
+                                    BufferData::Memory(&self.next_fills),
+                                    BufferTarget::Storage,
+                                    BufferUploadMode::Dynamic);
+        self.device.allocate_buffer(&self.fill_tile_map_buffer,
+                                    BufferData::Memory(&self.fill_tile_map),
                                     BufferTarget::Storage,
                                     BufferUploadMode::Dynamic);
 
@@ -718,7 +745,7 @@ where
 
         debug_assert!(buffered_fills.len() <= u32::MAX as usize);
         //println!("end tile index={}", end_tile_index);
-        let dimensions = ComputeDimensions { x: 1, y: 1, z: (end_tile_index_offset - 1) as u32 };
+        let dimensions = ComputeDimensions { x: 1, y: 1, z: fill_tile_count as u32 };
         self.device.dispatch_compute(dimensions, &ComputeState {
             program: &self.fill_compute_program.program,
             textures: &[&self.area_lut_texture],
@@ -727,11 +754,13 @@ where
                 (&self.fill_compute_program.area_lut_uniform, UniformData::TextureUnit(0)),
                 (&self.fill_compute_program.dest_uniform, UniformData::ImageUnit(0)),
                 (&self.fill_compute_program.first_tile_index_uniform,
-                 UniformData::Int(first_alpha_tile_index as i32)),
+                 UniformData::Int(first_fill_tile as i32)),
             ],
             storage_buffers: &[
                 (&self.fill_compute_program.fills_storage_buffer, &self.fill_vertex_buffer),
-                (&self.fill_compute_program.fill_ranges_storage_buffer, &self.fill_ranges_buffer),
+                (&self.fill_compute_program.next_fills_storage_buffer, &self.next_fills_buffer),
+                (&self.fill_compute_program.fill_tile_map_storage_buffer,
+                 &self.fill_tile_map_buffer),
             ],
         });
 

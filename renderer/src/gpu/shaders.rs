@@ -363,7 +363,8 @@ pub struct FillComputeProgram<D> where D: Device {
     pub area_lut_uniform: D::Uniform,
     pub first_tile_index_uniform: D::Uniform,
     pub fills_storage_buffer: D::StorageBuffer,
-    pub fill_ranges_storage_buffer: D::StorageBuffer,
+    pub next_fills_storage_buffer: D::StorageBuffer,
+    pub fill_tile_map_storage_buffer: D::StorageBuffer,
 }
 
 impl<D> FillComputeProgram<D> where D: Device {
@@ -376,7 +377,8 @@ impl<D> FillComputeProgram<D> where D: Device {
         let area_lut_uniform = device.get_uniform(&program, "AreaLUT");
         let first_tile_index_uniform = device.get_uniform(&program, "FirstTileIndex");
         let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 0);
-        let fill_ranges_storage_buffer = device.get_storage_buffer(&program, "FillRanges", 1);
+        let next_fills_storage_buffer = device.get_storage_buffer(&program, "NextFills", 1);
+        let fill_tile_map_storage_buffer = device.get_storage_buffer(&program, "FillTileMap", 2);
 
         FillComputeProgram {
             program,
@@ -384,7 +386,8 @@ impl<D> FillComputeProgram<D> where D: Device {
             area_lut_uniform,
             first_tile_index_uniform,
             fills_storage_buffer,
-            fill_ranges_storage_buffer,
+            next_fills_storage_buffer,
+            fill_tile_map_storage_buffer,
         }
     }
 }

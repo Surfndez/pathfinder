@@ -827,7 +827,7 @@ impl MetalDevice {
                     _ => continue,
                 }
                 let buffer_struct_type: *mut MTLStructType = msg_send![pointer_type, elementStructType];
-                let buffer_struct_type = StructType::from_ptr(buffer_struct_type);
+                let buffer_struct_type = StructType::from_ptr(msg_send![buffer_struct_type, retain]);
                 if let Some(buffer_member) =
                         buffer_struct_type.member_from_name(&format!("i{}", name)) {
                     println!("found buffer member: {} = {}",
