@@ -689,12 +689,13 @@ where
             return;
         }
 
+        // Initialize the tile map and fill linked list buffers.
         self.fill_tile_map.iter_mut().for_each(|entry| *entry = -1);
         while self.next_fills.len() < buffered_fills.len() {
             self.next_fills.push(-1);
         }
 
-        // Create linked lists.
+        // Create a linked list running through all our fills.
         let (mut first_fill_tile, mut last_fill_tile) = (256 * 256, 0);
         for (fill_index, fill) in buffered_fills.iter().enumerate() {
             let fill_tile_index = fill.alpha_tile_index as usize;
@@ -704,23 +705,6 @@ where
             last_fill_tile = last_fill_tile.max(fill_tile_index as u32);
         }
         let fill_tile_count = last_fill_tile - first_fill_tile + 1;
-
-        /*
-        // TODO(pcwalton): Can we stop doing this?
-        // FIXME(pcwalton): This is inefficient!
-        buffered_fills.sort_by_key(|fill| fill.alpha_tile_index);
-        //println!("buffered fills={:?}", buffered_fills);
-        let first_alpha_tile_index = buffered_fills[0].alpha_tile_index as usize;
-        for (fill_index, fill) in buffered_fills.iter().enumerate() {
-            let alpha_tile_index_offset = fill.alpha_tile_index as usize - first_alpha_tile_index;
-            while buffered_fill_ranges.len() != alpha_tile_index_offset + 1 {
-                buffered_fill_ranges.push(fill_index as u32);
-            }
-        }
-        buffered_fill_ranges.push(buffered_fills.len() as u32);
-        //println!("{:?}", buffered_fill_ranges);
-        let end_tile_index_offset = buffered_fill_ranges.len();
-        */
 
         self.device.allocate_buffer(&self.fill_vertex_buffer,
                                     BufferData::Memory(&buffered_fills),
@@ -744,7 +728,6 @@ where
         self.device.begin_timer_query(&timer_query);
 
         debug_assert!(buffered_fills.len() <= u32::MAX as usize);
-        //println!("end tile index={}", end_tile_index);
         let dimensions = ComputeDimensions { x: 1, y: 1, z: fill_tile_count as u32 };
         self.device.dispatch_compute(dimensions, &ComputeState {
             program: &self.fill_compute_program.program,
