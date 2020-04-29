@@ -525,13 +525,9 @@ impl Device for MetalDevice {
                            start: usize,
                            data: &[T],
                            target: BufferTarget) {
-        /*
         let mut buffer = buffer.buffer.borrow_mut();
         let mut buffer = buffer.as_mut().unwrap();
         self.upload_to_metal_buffer(buffer, start, data)
-        */
-        assert_eq!(start, 0);
-        self.allocate_buffer(buffer, BufferData::Memory(data), target)
     }
 
     #[inline]
@@ -1719,7 +1715,6 @@ impl MetalDevice {
         }
     }
 
-    /*
     fn upload_to_metal_buffer<T>(&self, buffer: &Buffer, start: usize, data: &[T]) {
         unsafe {
             let start = (start * mem::size_of::<T>()) as u64;
@@ -1730,8 +1725,7 @@ impl MetalDevice {
                                      size as usize);
             buffer.did_modify_range(NSRange::new(start, size));
         }
-    }*/
-
+    }
 }
 
 trait DeviceExtra {

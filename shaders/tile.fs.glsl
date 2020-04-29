@@ -564,6 +564,7 @@ void calculateColor(int tileCtrl, int ctrl) {
 
     // Sample color.
     vec4 color = vBaseColor;
+    /*
     int color0Combine = (ctrl >> COMBINER_CTRL_COLOR_COMBINE_SHIFT) &
         COMBINER_CTRL_COLOR_COMBINE_MASK;
     if (color0Combine != 0) {
@@ -580,13 +581,16 @@ void calculateColor(int tileCtrl, int ctrl) {
                                   color0Filter);
         color = combineColor0(color, color0, color0Combine);
     }
+    */
 
     // Apply mask.
     color.a *= maskAlpha;
 
+    /*
     // Apply composite.
     int compositeOp = (ctrl >> COMBINER_CTRL_COMPOSITE_SHIFT) & COMBINER_CTRL_COMPOSITE_MASK;
     color = composite(color, uDestTexture, uFramebufferSize, gl_FragCoord.xy, compositeOp);
+    */
 
     // Premultiply alpha.
     color.rgb *= color.a;

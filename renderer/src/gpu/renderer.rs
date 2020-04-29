@@ -116,7 +116,7 @@ where
     quad_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_length: usize,
-    fill_vertex_storage: FillVertexStorage<D>,
+    fill_vertex_storage_allocator: FillVertexStorageAllocator<D>,
     next_fills: Vec<i32>,
     fill_tile_map: Vec<i32>,
     alpha_tile_pages: FxHashMap<u16, AlphaTilePage<D>>,
@@ -189,10 +189,7 @@ where
         let quads_vertex_indices_buffer = device.create_buffer(BufferUploadMode::Dynamic);
         let tile_vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
 
-        let fill_vertex_storage = FillVertexStorage::new(&device,
-                                                         &fill_raster_program,
-                                                         &quad_vertex_positions_buffer,
-                                                         &quad_vertex_indices_buffer);
+        let fill_vertex_storage_allocator = FillVertexStorageAllocator::new(&device);
 
         let blit_vertex_array = BlitVertexArray::new(
             &device,
@@ -251,7 +248,7 @@ where
             tile_vertex_array,
             tile_copy_vertex_array,
             tile_clip_vertex_array,
-            fill_vertex_storage,
+            fill_vertex_storage_allocator,
             tile_vertex_buffer,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
@@ -356,6 +353,7 @@ where
 
         self.device.end_commands();
 
+        self.fill_vertex_storage_allocator.end_frame();
         if let Some(timer) = self.current_timer.take() {
             self.pending_timers.push_back(timer);
         }
@@ -604,9 +602,16 @@ where
             return;
         }
 
-        self.device.allocate_buffer(&self.fill_vertex_storage.vertex_buffer,
-                                    BufferData::Memory(&buffered_fills),
-                                    BufferTarget::Vertex);
+        let fill_vertex_storage =
+            self.fill_vertex_storage_allocator.allocate(&self.device,
+                                                        &self.fill_raster_program,
+                                                        &self.quad_vertex_positions_buffer,
+                                                        &self.quad_vertex_indices_buffer);
+
+        self.device.upload_to_buffer(&fill_vertex_storage.vertex_buffer,
+                                     0,
+                                     &buffered_fills,
+                                     BufferTarget::Vertex);
 
         let mut clear_color = None;
         if !alpha_tile_page.must_preserve_framebuffer {
@@ -620,7 +625,7 @@ where
         self.device.draw_elements_instanced(6, buffered_fills.len() as u32, &RenderState {
             target: &RenderTarget::Framebuffer(&alpha_tile_page.framebuffer),
             program: &self.fill_raster_program.program,
-            vertex_array: &self.fill_vertex_storage.vertex_array.vertex_array,
+            vertex_array: &fill_vertex_storage.vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &[&self.area_lut_texture],
             uniforms: &[
@@ -1255,11 +1260,44 @@ where
     }
 }
 
+struct FillVertexStorageAllocator<D> where D: Device {
+    free: Vec<FillVertexStorage<D>>,
+    in_use: Vec<FillVertexStorage<D>>,
+}
+
 struct FillVertexStorage<D> where D: Device {
     vertex_array: FillVertexArray<D>,
     vertex_buffer: D::Buffer,
     next_fills_buffer: D::Buffer,
     tile_map_buffer: D::Buffer,
+}
+
+impl<D> FillVertexStorageAllocator<D> where D: Device {
+    fn new(_: &D) -> FillVertexStorageAllocator<D> {
+        FillVertexStorageAllocator { free: vec![], in_use: vec![] }
+    }
+
+    fn allocate(&mut self,
+                device: &D,
+                fill_raster_program: &FillRasterProgram<D>,
+                quad_vertex_positions_buffer: &D::Buffer,
+                quad_vertex_indices_buffer: &D::Buffer)
+                -> &FillVertexStorage<D> {
+        match self.free.pop() {
+            Some(storage) => self.in_use.push(storage),
+            None => {
+                self.in_use.push(FillVertexStorage::new(device,
+                                                        fill_raster_program,
+                                                        quad_vertex_positions_buffer,
+                                                        quad_vertex_indices_buffer));
+            }
+        }
+        self.in_use.last().unwrap()
+    }
+
+    fn end_frame(&mut self) {
+        self.free.extend(mem::replace(&mut self.in_use, vec![]).into_iter())
+    }
 }
 
 impl<D> FillVertexStorage<D> where D: Device {
@@ -1269,7 +1307,8 @@ impl<D> FillVertexStorage<D> where D: Device {
            quad_vertex_indices_buffer: &D::Buffer)
            -> FillVertexStorage<D> {
         let vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-        let vertex_buffer_data: BufferData<Fill> = BufferData::Uninitialized(MAX_FILLS_PER_BATCH);
+        // FIXME(pcwalton): * 2 is a hack; fix.
+        let vertex_buffer_data: BufferData<Fill> = BufferData::Uninitialized(MAX_FILLS_PER_BATCH * 2);
         device.allocate_buffer(&vertex_buffer, vertex_buffer_data, BufferTarget::Vertex);
 
         let vertex_array = FillVertexArray::new(device,
