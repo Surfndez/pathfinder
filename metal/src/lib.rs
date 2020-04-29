@@ -1069,7 +1069,8 @@ impl MetalDevice {
             ShaderArguments::Arguments { ref encoder, .. } => encoder,
         };
 
-        let buffer = self.allocate_auxiliary_buffer(encoder.encoded_length() as usize);
+        //let buffer = self.allocate_auxiliary_buffer(encoder.encoded_length() as usize);
+        let buffer = self.device.new_buffer(encoder.encoded_length() as u64, BufferUploadMode::Dynamic.to_metal_resource_options());
         encoder.set_argument_buffer(&buffer, 0);
         Some(buffer)
     }
@@ -1162,17 +1163,33 @@ impl MetalDevice {
 
         // Allow the uniform and argument buffers to be reused when done.
         let free_auxiliary_buffers = self.free_auxiliary_buffers.clone();
-        let uniform_data_buffer = uniform_buffer.data_buffer.clone();
+        let raster_argument_buffers = Mutex::new(RasterArgumentBuffers {
+            uniform: Some(uniform_buffer.data_buffer),
+            vertex: vertex_argument_buffer,
+            fragment: fragment_argument_buffer,
+        });
         let free_uniform_buffer_block = ConcreteBlock::new(move |_| {
-            free_auxiliary_buffers.free(uniform_data_buffer.clone());
-            if let Some(ref vertex_argument_buffer) = vertex_argument_buffer {
-                free_auxiliary_buffers.free((*vertex_argument_buffer).clone());
+            //println!("freeing blocks");
+            let mut buffers = raster_argument_buffers.lock().unwrap();
+            if let Some(uniform_data_buffer) = buffers.uniform.take() {
+                free_auxiliary_buffers.free(uniform_data_buffer);
             }
-            if let Some(ref fragment_argument_buffer) = fragment_argument_buffer {
-                free_auxiliary_buffers.free((*fragment_argument_buffer).clone());
+            /*
+            if let Some(vertex_argument_buffer) = buffers.vertex.take() {
+                free_auxiliary_buffers.free(vertex_argument_buffer);
             }
+            if let Some(fragment_argument_buffer) = buffers.fragment.take() {
+                free_auxiliary_buffers.free(fragment_argument_buffer);
+            }
+            */
         });
         command_buffer.add_completed_handler(free_uniform_buffer_block.copy());
+
+        struct RasterArgumentBuffers {
+            uniform: Option<Buffer>,
+            vertex: Option<Buffer>,
+            fragment: Option<Buffer>,
+        }
     }
 
     fn set_compute_uniforms(&self,

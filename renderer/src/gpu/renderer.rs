@@ -359,7 +359,10 @@ where
                                 batch.blend_mode,
                                 batch.filter)
             }
-            RenderCommand::Finish { cpu_build_time } => self.stats.cpu_build_time = cpu_build_time,
+            RenderCommand::Finish { cpu_build_time } => {
+                println!("--- end frame ---");
+                self.stats.cpu_build_time = cpu_build_time;
+            }
         }
     }
 
@@ -379,6 +382,7 @@ where
                        bounding_quad: BoundingQuad,
                        path_count: usize,
                        mut needs_readable_framebuffer: bool) {
+        println!("--- begin frame ---");
         if let DestFramebuffer::Other(_) = self.dest_framebuffer {
             needs_readable_framebuffer = false;
         }
@@ -600,8 +604,8 @@ where
     }
 
     fn draw_buffered_fills(&mut self, page: u16) {
-        self.draw_buffered_fills_via_compute(page)
-        //self.draw_buffered_fills_via_raster(page)
+        //self.draw_buffered_fills_via_compute(page)
+        self.draw_buffered_fills_via_raster(page)
     }
 
     fn draw_buffered_fills_via_raster(&mut self, page: u16) {
