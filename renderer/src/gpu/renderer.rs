@@ -100,7 +100,7 @@ pub struct Renderer<D> where D: Device {
     options: RendererOptions,
     blit_program: BlitProgram<D>,
     fill_raster_program: FillRasterProgram<D>,
-    //fill_compute_program: FillComputeProgram<D>,
+    fill_compute_program: FillComputeProgram<D>,
     tile_program: TileProgram<D>,
     tile_copy_program: CopyTileProgram<D>,
     tile_clip_program: ClipTileProgram<D>,
@@ -162,7 +162,7 @@ impl<D> Renderer<D> where D: Device {
                -> Renderer<D> {
         let blit_program = BlitProgram::new(&device, resources);
         let fill_raster_program = FillRasterProgram::new(&device, resources);
-        //let fill_compute_program = FillComputeProgram::new(&device, resources);
+        let fill_compute_program = FillComputeProgram::new(&device, resources);
         let tile_program = TileProgram::new(&device, resources);
         let tile_copy_program = CopyTileProgram::new(&device, resources);
         let tile_clip_program = ClipTileProgram::new(&device, resources);
@@ -214,7 +214,7 @@ impl<D> Renderer<D> where D: Device {
             options,
             blit_program,
             fill_raster_program,
-            //fill_compute_program,
+            fill_compute_program,
             tile_program,
             tile_copy_program,
             tile_clip_program,
@@ -563,8 +563,8 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn draw_buffered_fills(&mut self, page: u16) {
-        //self.draw_buffered_fills_via_compute(page)
-        self.draw_buffered_fills_via_raster(page)
+        self.draw_buffered_fills_via_compute(page)
+        //self.draw_buffered_fills_via_raster(page)
     }
 
     fn draw_buffered_fills_via_raster(&mut self, page: u16) {
@@ -636,15 +636,22 @@ impl<D> Renderer<D> where D: Device {
         buffered_fills.clear();
     }
 
-    /*
     fn draw_buffered_fills_via_compute(&mut self, page: u16) {
-        let alpha_tile_page = self.alpha_tile_pages
+        let alpha_tile_page = self.back_frame
+                                  .alpha_tile_pages
                                   .get_mut(&page)
                                   .expect("Where's the alpha tile page?");
         let buffered_fills = &mut alpha_tile_page.buffered_fills;
         if buffered_fills.is_empty() {
             return;
         }
+
+        let fill_vertex_storage = self.back_frame
+                                      .fill_vertex_storage_allocator
+                                      .allocate(&self.device,
+                                                &self.fill_raster_program,
+                                                &self.quad_vertex_positions_buffer,
+                                                &self.quad_vertex_indices_buffer);
 
         // Initialize the tile map and fill linked list buffers.
         self.fill_tile_map.iter_mut().for_each(|entry| *entry = -1);
@@ -663,13 +670,13 @@ impl<D> Renderer<D> where D: Device {
         }
         let fill_tile_count = last_fill_tile - first_fill_tile + 1;
 
-        self.device.allocate_buffer(&self.fill_vertex_buffer,
+        self.device.allocate_buffer(&fill_vertex_storage.vertex_buffer,
                                     BufferData::Memory(&buffered_fills),
                                     BufferTarget::Storage);
-        self.device.allocate_buffer(&self.next_fills_buffer,
+        self.device.allocate_buffer(&fill_vertex_storage.next_fills_buffer,
                                     BufferData::Memory(&self.next_fills),
                                     BufferTarget::Storage);
-        self.device.allocate_buffer(&self.fill_tile_map_buffer,
+        self.device.allocate_buffer(&fill_vertex_storage.tile_map_buffer,
                                     BufferData::Memory(&self.fill_tile_map),
                                     BufferTarget::Storage);
 
@@ -694,10 +701,12 @@ impl<D> Renderer<D> where D: Device {
                  UniformData::Int(first_fill_tile as i32)),
             ],
             storage_buffers: &[
-                (&self.fill_compute_program.fills_storage_buffer, &self.fill_vertex_buffer),
-                (&self.fill_compute_program.next_fills_storage_buffer, &self.next_fills_buffer),
+                (&self.fill_compute_program.fills_storage_buffer,
+                  &fill_vertex_storage.vertex_buffer),
+                (&self.fill_compute_program.next_fills_storage_buffer,
+                 &fill_vertex_storage.next_fills_buffer),
                 (&self.fill_compute_program.fill_tile_map_storage_buffer,
-                 &self.fill_tile_map_buffer),
+                 &fill_vertex_storage.tile_map_buffer),
             ],
         });
 
@@ -707,7 +716,6 @@ impl<D> Renderer<D> where D: Device {
         alpha_tile_page.must_preserve_framebuffer = true;
         buffered_fills.clear();
     }
-    */
 
     fn draw_clip_batch(&mut self, batch: &ClipBatch) {
         if batch.clips.is_empty() {

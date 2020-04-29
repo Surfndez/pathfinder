@@ -29,7 +29,7 @@ use libc::size_t;
 use metal::{self, Argument, ArgumentEncoder, Buffer, CommandBuffer, CommandBufferRef};
 use metal::{CommandQueue, CompileOptions, ComputeCommandEncoderRef, ComputePipelineDescriptor, ComputePipelineState, CoreAnimationDrawable, CoreAnimationDrawableRef};
 use metal::{CoreAnimationLayer, CoreAnimationLayerRef, DepthStencilDescriptor, Function, Library};
-use metal::{MTLArgument, MTLArgumentEncoder, MTLBlendFactor, MTLBlendOperation, MTLClearColor};
+use metal::{MTLArgument, MTLArgumentEncoder, MTLArgumentType, MTLBlendFactor, MTLBlendOperation, MTLClearColor};
 use metal::{MTLColorWriteMask, MTLCompareFunction, MTLComputePipelineState, MTLDataType, MTLDevice, MTLFunctionType};
 use metal::{MTLIndexType, MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType, MTLRegion};
 use metal::{MTLRenderPipelineReflection, MTLRenderPipelineState, MTLResourceOptions};
@@ -862,43 +862,40 @@ impl MetalDevice {
     }
 
     fn get_storage_buffer_index(&self, shader: &MetalShader, name: &str) -> Option<u64> {
-        /*
         let uniforms = shader.arguments.borrow();
-        let struct_type = match *uniforms {
-            ShaderArguments::Unknown => panic!("get_uniform_index() called before reflection!"),
-            ShaderArguments::NoArguments => return None,
-            ShaderArguments::Arguments { ref struct_type, .. } => struct_type,
-        };
-
-        unsafe {
-            let members = struct_type.real_members();
-            for member_index in 0..members.len() {
-                let member = members.object_at(member_index);
-                println!("considering member: {}", member.name());
-                match member.data_type() {
-                    MTLDataType::Pointer => {}
-                    _ => continue,
-                }
-                let pointer_type = member.pointer_type();
-                let pointer_element_type: MTLDataType = msg_send![pointer_type, elementType];
-                match pointer_element_type {
-                    MTLDataType::Struct => {}
-                    _ => continue,
-                }
-                let buffer_struct_type: *mut MTLStructType = msg_send![pointer_type, elementStructType];
-                let buffer_struct_type = StructType::from_ptr(msg_send![buffer_struct_type, retain]);
-                if let Some(buffer_member) =
-                        buffer_struct_type.member_from_name(&format!("i{}", name)) {
-                    println!("found buffer member: {} = {}",
-                             buffer_member.name(),
-                             member.argument_index());
-                    return Some(member.argument_index())
-                }
+        let arguments = match *uniforms {
+            ShaderArguments::Unknown => {
+                panic!("get_storage_buffer_index() called before reflection!")
             }
-            None
-        }*/
-        // TODO(pcwalton)
-        None
+            ShaderArguments::NoArguments => return None,
+            ShaderArguments::Arguments(ref arguments) => arguments,
+        };
+        let main_name = format!("i{}", name);
+        let mut main_argument = None;
+        println!("--- get_storage_buffer_index({}, {}) ---", shader.name, name);
+        for argument_index in 0..arguments.len() {
+            let argument = arguments.object_at(argument_index);
+            let argument_name = argument.name();
+            println!("argument {} = \"{}\" ({})", argument_index, argument_name, argument.index());
+            match argument.type_() {
+                MTLArgumentType::Buffer => {}
+                _ => continue,
+            }
+            match argument.buffer_data_type() {
+                MTLDataType::Struct => {}
+                _ => continue,
+            }
+            let struct_type = argument.buffer_struct_type();
+            if struct_type.member_from_name(&main_name).is_some() {
+                main_argument = Some(argument.index());
+            }
+        }
+        let storage_buffer_index = match main_argument {
+            None => None,
+            Some(main) => Some(main),
+        };
+        println!("get_storage_buffer_index({}) = {:?}", name, storage_buffer_index);
+        storage_buffer_index
     }
 
     fn populate_uniform_indices_if_necessary(&self,
@@ -1147,30 +1144,15 @@ impl MetalDevice {
             _ => unreachable!(),
         };
 
-        /*
-        let vertex_argument_buffer = self.allocate_argument_buffer(&program.vertex_shader);
-        let fragment_argument_buffer = self.allocate_argument_buffer(&program.fragment_shader);
-        */
-
         let vertex_arguments = program.vertex_shader.arguments.borrow();
         let fragment_arguments = program.fragment_shader.arguments.borrow();
 
         let (mut have_vertex_arguments, mut have_fragment_arguments) = (false, false);
         if let ShaderArguments::Arguments { .. } = *vertex_arguments {
             have_vertex_arguments = true;
-            /*
-            let vertex_argument_buffer = vertex_argument_buffer.as_ref().unwrap();
-            render_command_encoder.use_resource(vertex_argument_buffer, MTLResourceUsage::Read);
-            render_command_encoder.set_vertex_buffer(0, Some(vertex_argument_buffer), 0);
-            */
         }
         if let ShaderArguments::Arguments { .. } = *fragment_arguments {
             have_fragment_arguments = true;
-            /*
-            let fragment_argument_buffer = fragment_argument_buffer.as_ref().unwrap();
-            render_command_encoder.use_resource(fragment_argument_buffer, MTLResourceUsage::Read);
-            render_command_encoder.set_fragment_buffer(0, Some(fragment_argument_buffer), 0);
-            */
         }
 
         if !have_vertex_arguments && !have_fragment_arguments {
@@ -1184,7 +1166,6 @@ impl MetalDevice {
 
             let indices = uniform.indices.borrow_mut();
             let indices = indices.as_ref().unwrap();
-            //println!("uniform indices for {} are {:?}", uniform.name, indices);
             let (vertex_indices, fragment_indices) = match indices.0 {
                 ProgramKind::Raster { ref vertex, ref fragment } => (vertex, fragment),
                 _ => unreachable!(),
@@ -1213,61 +1194,72 @@ impl MetalDevice {
                 }
             }
         }
-
-        //render_command_encoder.use_resource(&uniform_buffer.data_buffer, MTLResourceUsage::Read);
-
-        /*
-        if let Some(ref vertex_argument_buffer) = vertex_argument_buffer {
-            let range = NSRange::new(0, vertex_argument_buffer.length());
-            vertex_argument_buffer.did_modify_range(range);
-        }
-        if let Some(ref fragment_argument_buffer) = fragment_argument_buffer {
-            let range = NSRange::new(0, fragment_argument_buffer.length());
-            fragment_argument_buffer.did_modify_range(range);
-        }
-        */
-
-        // Allow the uniform and argument buffers to be reused when done.
-        let free_auxiliary_buffers = self.free_auxiliary_buffers.clone();
-        /*
-        let raster_argument_buffers = Mutex::new(RasterArgumentBuffers {
-            uniform: Some(uniform_buffer.data_buffer),
-            /*
-            vertex: vertex_argument_buffer,
-            fragment: fragment_argument_buffer,
-            */
-        });
-        let free_uniform_buffer_block = ConcreteBlock::new(move |_| {
-            //println!("freeing blocks");
-            let mut buffers = raster_argument_buffers.lock().unwrap();
-            if let Some(uniform_data_buffer) = buffers.uniform.take() {
-                free_auxiliary_buffers.free(uniform_data_buffer);
-            }
-            /*
-            if let Some(vertex_argument_buffer) = buffers.vertex.take() {
-                free_auxiliary_buffers.free(vertex_argument_buffer);
-            }
-            if let Some(fragment_argument_buffer) = buffers.fragment.take() {
-                free_auxiliary_buffers.free(fragment_argument_buffer);
-            }
-            */
-        });
-        command_buffer.add_completed_handler(free_uniform_buffer_block.copy());
-        */
-
-        struct RasterArgumentBuffers {
-            uniform: Option<Buffer>,
-            /*
-            vertex: Option<Buffer>,
-            fragment: Option<Buffer>,
-            */
-        }
     }
 
     fn set_compute_uniforms(&self,
                             command_buffer: &CommandBuffer,
                             compute_command_encoder: &ComputeCommandEncoderRef,
                             compute_state: &ComputeState<MetalDevice>) {
+        let compute_program = match compute_state.program {
+            MetalProgram::Compute(ref compute_program) => compute_program,
+            _ => unreachable!(),
+        };
+
+        let arguments = compute_program.shader.arguments.borrow();
+
+        let mut have_arguments = false;
+        if let ShaderArguments::Arguments { .. } = *arguments {
+            have_arguments = true;
+        }
+
+        if !have_arguments {
+            return;
+        }
+
+        let uniform_buffer = self.create_uniform_buffer(&compute_state.uniforms);
+        for (&(uniform, ref uniform_data), buffer_range) in
+                compute_state.uniforms.iter().zip(uniform_buffer.ranges.iter()) {
+            self.populate_uniform_indices_if_necessary(uniform, &compute_state.program);
+
+            let indices = uniform.indices.borrow_mut();
+            let indices = indices.as_ref().unwrap();
+            let indices = match indices.0 {
+                ProgramKind::Compute(ref indices) => indices,
+                _ => unreachable!(),
+            };
+
+            if let Some(index) = *indices {
+                if let ShaderArguments::Arguments(ref arguments) = *arguments {
+                    self.set_compute_uniform(index,
+                                             arguments,
+                                             uniform_data,
+                                             &uniform_buffer.data,
+                                             buffer_range,
+                                             compute_command_encoder,
+                                             compute_state);
+                 }
+            }
+        }
+
+        // Set storage buffers.
+        for &(storage_buffer_id, storage_buffer_binding) in compute_state.storage_buffers {
+            self.populate_storage_buffer_indices_if_necessary(storage_buffer_id,
+                                                              &compute_state.program);
+
+            let indices = storage_buffer_id.indices.borrow_mut();
+            let indices = indices.as_ref().unwrap();
+            let indices = match indices.0 {
+                ProgramKind::Compute(ref indices) => indices,
+                _ => unreachable!(),
+            };
+
+            if let Some(index) = *indices {
+                if let Some(ref buffer) = *storage_buffer_binding.buffer.borrow() {
+                    compute_command_encoder.set_buffer(index, Some(buffer), 0);
+                }
+            }
+
+        }
                                 /*
                                 TODO(pcwalton)
         let program = match compute_state.program {
@@ -1465,13 +1457,13 @@ impl MetalDevice {
     }
 
     fn set_fragment_uniform(&self,
-                          argument_index: MetalUniformIndex,
-                          arguments: &ArgumentArray,
-                          uniform_data: &UniformData,
-                          buffer: &[u8],
-                          buffer_range: &Range<usize>,
-                          render_command_encoder: &RenderCommandEncoderRef,
-                          render_state: &RenderState<MetalDevice>) {
+                            argument_index: MetalUniformIndex,
+                            arguments: &ArgumentArray,
+                            uniform_data: &UniformData,
+                            buffer: &[u8],
+                            buffer_range: &Range<usize>,
+                            render_command_encoder: &RenderCommandEncoderRef,
+                            render_state: &RenderState<MetalDevice>) {
         //println!("setting FRAGMENT argument index {:?} to buffer offset {}", argument_index, buffer_range.start);
         match *uniform_data {
             UniformData::TextureUnit(unit) => {
@@ -1497,31 +1489,32 @@ impl MetalDevice {
 
     fn set_compute_uniform(&self,
                            argument_index: MetalUniformIndex,
-                           argument_encoder: &ArgumentEncoder,
+                           arguments: &ArgumentArray,
                            uniform_data: &UniformData,
-                           buffer: &Buffer,
-                           buffer_offset: u64,
+                           buffer: &[u8],
+                           buffer_range: &Range<usize>,
                            compute_command_encoder: &ComputeCommandEncoderRef,
                            compute_state: &ComputeState<MetalDevice>) {
-                               /*
-                               TODO(pcwalton)
+        //println!("setting COMPUTE argument index {:?} to buffer offset {}", argument_index, buffer_range.start);
         match *uniform_data {
             UniformData::TextureUnit(unit) => {
                 let texture = compute_state.textures[unit as usize];
-                let resource_usage = self.encode_texture_uniform(argument_index,
-                                                                 argument_encoder,
-                                                                 texture);
-                compute_command_encoder.use_resource(&texture.texture, resource_usage);
+                let resource_usage = self.encode_compute_texture_uniform(argument_index,
+                                                                         compute_command_encoder,
+                                                                         texture);
             }
             UniformData::ImageUnit(unit) => {
                 let image = &compute_state.images[unit as usize];
-                argument_encoder.set_texture(&image.texture.texture, argument_index.main);
-                let resource_usage = image.access.to_metal_resource_usage();
-                compute_command_encoder.use_resource(&image.texture.texture, resource_usage);
+                compute_command_encoder.set_texture(argument_index.main,
+                                                    Some(&image.texture.texture));
             }
-            _ => argument_encoder.set_buffer(buffer, buffer_offset, argument_index.main),
+            _ => {
+                compute_command_encoder.set_bytes(
+                    argument_index.main,
+                    (buffer_range.end - buffer_range.start) as u64,
+                    &buffer[buffer_range.start as usize] as *const u8 as *const _)
+            }
         }
-        */
     }
 
     fn encode_vertex_texture_uniform(&self,
@@ -1551,6 +1544,22 @@ impl MetalDevice {
         if let Some(sampler_index) = argument_index.sampler {
             let sampler = &self.samplers[texture.sampling_flags.get().bits() as usize];
             render_command_encoder.set_fragment_sampler_state(sampler_index, Some(sampler));
+            resource_usage |= MTLResourceUsage::Sample;
+        }
+        resource_usage
+    }
+
+    fn encode_compute_texture_uniform(&self,
+                                      argument_index: MetalUniformIndex,
+                                      compute_command_encoder: &ComputeCommandEncoderRef,
+                                      texture: &MetalTexture)
+                                      -> MTLResourceUsage {
+        //println!("encoding compute texture uniform {:?}", argument_index);
+        compute_command_encoder.set_texture(argument_index.main, Some(&texture.texture));
+        let mut resource_usage = MTLResourceUsage::Read;
+        if let Some(sampler_index) = argument_index.sampler {
+            let sampler = &self.samplers[texture.sampling_flags.get().bits() as usize];
+            compute_command_encoder.set_sampler_state(sampler_index, Some(sampler));
             resource_usage |= MTLResourceUsage::Sample;
         }
         resource_usage
