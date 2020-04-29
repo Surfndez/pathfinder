@@ -351,6 +351,8 @@ where
     pub fn end_scene(&mut self) {
         self.blit_intermediate_dest_framebuffer_if_necessary();
 
+        let fence = self.device.add_fence();
+
         self.device.end_commands();
 
         self.fill_vertex_storage_allocator.end_frame();
@@ -359,6 +361,8 @@ where
         }
 
         self.current_cpu_build_time = None;
+
+        self.device.wait_for_fence(&fence);
     }
 
     fn start_rendering(&mut self,
@@ -851,25 +855,33 @@ where
 
         // TODO(pcwalton): Refactor.
         let mut ctrl = 0;
-        if let Some(color_texture) = color_texture_0 {
-            let color_texture_page = self.texture_page(color_texture.page);
-            let color_texture_size = self.device.texture_size(color_texture_page).to_f32();
-            self.device.set_texture_sampling_mode(color_texture_page,
-                                                  color_texture.sampling_flags);
-            uniforms.push((&self.tile_program.color_texture_0_uniform,
-                           UniformData::TextureUnit(textures.len() as u32)));
-            uniforms.push((&self.tile_program.color_texture_0_size_uniform,
-                           UniformData::Vec2(color_texture_size.0)));
-            textures.push(color_texture_page);
+        match color_texture_0 {
+            Some(color_texture) => {
+                println!("have color texture 0");
+                let color_texture_page = self.texture_page(color_texture.page);
+                let color_texture_size = self.device.texture_size(color_texture_page).to_f32();
+                self.device.set_texture_sampling_mode(color_texture_page,
+                                                    color_texture.sampling_flags);
+                uniforms.push((&self.tile_program.color_texture_0_uniform,
+                            UniformData::TextureUnit(textures.len() as u32)));
+                uniforms.push((&self.tile_program.color_texture_0_size_uniform,
+                            UniformData::Vec2(color_texture_size.0)));
+                textures.push(color_texture_page);
 
-            ctrl |= color_texture.composite_op.to_combine_mode() <<
-                COMBINER_CTRL_COLOR_COMBINE_SHIFT;
+                ctrl |= color_texture.composite_op.to_combine_mode() <<
+                    COMBINER_CTRL_COLOR_COMBINE_SHIFT;
+            }
+            None => {
+                uniforms.push((&self.tile_program.color_texture_0_size_uniform,
+                               UniformData::Vec2(F32x2::default())));
+            }
         }
 
         ctrl |= blend_mode.to_composite_ctrl() << COMBINER_CTRL_COMPOSITE_SHIFT;
 
+
         match filter {
-            Filter::None => {}
+            Filter::None => self.set_uniforms_for_no_filter(&mut uniforms),
             Filter::RadialGradient { line, radii, uv_origin } => {
                 ctrl |= COMBINER_CTRL_FILTER_RADIAL_GRADIENT << COMBINER_CTRL_COLOR_FILTER_SHIFT;
                 self.set_uniforms_for_radial_gradient_filter(&mut uniforms, line, radii, uv_origin)
@@ -1065,6 +1077,15 @@ where
         self.render_target_stack.pop().expect("Render target stack underflow!");
     }
 
+    fn set_uniforms_for_no_filter<'a>(&'a self,
+                                      uniforms: &mut Vec<(&'a D::Uniform, UniformData)>) {
+        uniforms.extend_from_slice(&[
+            (&self.tile_program.filter_params_0_uniform, UniformData::Vec4(F32x4::default())),
+            (&self.tile_program.filter_params_1_uniform, UniformData::Vec4(F32x4::default())),
+            (&self.tile_program.filter_params_2_uniform, UniformData::Vec4(F32x4::default())),
+        ]);
+    }
+
     fn set_uniforms_for_radial_gradient_filter<'a>(
             &'a self,
             uniforms: &mut Vec<(&'a D::Uniform, UniformData)>,
@@ -1076,6 +1097,7 @@ where
              UniformData::Vec4(line.from().0.concat_xy_xy(line.vector().0))),
             (&self.tile_program.filter_params_1_uniform,
              UniformData::Vec4(radii.concat_xy_xy(uv_origin.0))),
+            (&self.tile_program.filter_params_2_uniform, UniformData::Vec4(F32x4::default())),
         ]);
     }
 
@@ -1133,6 +1155,7 @@ where
              UniformData::Vec4(src_offset.0.concat_xy_xy(F32x2::new(support, 0.0)))),
             (&self.tile_program.filter_params_1_uniform,
              UniformData::Vec4(F32x4::new(gauss_coeff_x, gauss_coeff_y, gauss_coeff_z, 0.0))),
+            (&self.tile_program.filter_params_2_uniform, UniformData::Vec4(F32x4::default())),
         ]);
     }
 

@@ -245,6 +245,20 @@ pub struct MetalUniformIndex {
 #[derive(Clone, Copy)]
 pub struct MetalStorageBufferIndices(ProgramKind<Option<u64>>);
 
+#[derive(Clone)]
+pub struct MetalFence(Arc<MetalFenceInfo>);
+
+struct MetalFenceInfo {
+    mutex: Mutex<MetalFenceStatus>,
+    cond: Condvar,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum MetalFenceStatus {
+    Pending,
+    Resolved,
+}
+
 pub struct MetalVertexArray {
     descriptor: VertexDescriptor,
     vertex_buffers: RefCell<Vec<MetalBuffer>>,
@@ -253,6 +267,7 @@ pub struct MetalVertexArray {
 
 impl Device for MetalDevice {
     type Buffer = MetalBuffer;
+    type Fence = MetalFence;
     type Framebuffer = MetalFramebuffer;
     type Program = MetalProgram;
     type Shader = MetalShader;
@@ -791,6 +806,29 @@ impl Device for MetalDevice {
         };
         let path = format!("shaders/metal/{}.{}s.metal", name, suffix);
         self.create_shader_from_source(name, &resources.slurp(&path).unwrap(), kind)
+    }
+
+    fn add_fence(&self) -> MetalFence {
+        let fence = MetalFence(Arc::new(MetalFenceInfo {
+            mutex: Mutex::new(MetalFenceStatus::Pending),
+            cond: Condvar::new(),
+        }));
+        let captured_fence = fence.clone();
+        let block = ConcreteBlock::new(move |_| {
+            *captured_fence.0.mutex.lock().unwrap() = MetalFenceStatus::Resolved;
+            captured_fence.0.cond.notify_all();
+        });
+        self.command_buffers.borrow_mut().last().unwrap().add_completed_handler(block.copy());
+        self.end_commands();
+        self.begin_commands();
+        fence
+    }
+
+    fn wait_for_fence(&self, fence: &MetalFence) {
+        let mut guard = fence.0.mutex.lock().unwrap();
+        while let MetalFenceStatus::Pending = *guard {
+            guard = fence.0.cond.wait(guard).unwrap();
+        }
     }
 }
 

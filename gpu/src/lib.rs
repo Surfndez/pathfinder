@@ -26,6 +26,7 @@ use std::time::Duration;
 
 pub trait Device: Sized {
     type Buffer;
+    type Fence;
     type Framebuffer;
     type Program;
     type Shader;
@@ -93,6 +94,8 @@ pub trait Device: Sized {
                                instance_count: u32,
                                render_state: &RenderState<Self>);
     fn dispatch_compute(&self, dimensions: ComputeDimensions, state: &ComputeState<Self>);
+    fn add_fence(&self) -> Self::Fence;
+    fn wait_for_fence(&self, fence: &Self::Fence);
     fn create_timer_query(&self) -> Self::TimerQuery;
     fn begin_timer_query(&self, query: &Self::TimerQuery);
     fn end_timer_query(&self, query: &Self::TimerQuery);

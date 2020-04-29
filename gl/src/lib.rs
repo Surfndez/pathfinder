@@ -216,6 +216,7 @@ impl GLDevice {
 
 impl Device for GLDevice {
     type Buffer = GLBuffer;
+    type Fence = GLFence;
     type Framebuffer = GLFramebuffer;
     type Program = GLProgram;
     type Shader = GLShader;
@@ -756,6 +757,15 @@ impl Device for GLDevice {
         let path = format!("shaders/gl3/{}.{}s.glsl", name, suffix);
         self.create_shader_from_source(name, &resources.slurp(&path).unwrap(), kind)
     }
+
+    fn add_fence(&self) -> Self::Fence {
+        // TODO(pcwalton)
+        GLFence
+    }
+
+    fn wait_for_fence(&self, fence: &Self::Fence) {
+        // TODO(pcwalton)
+    }
 }
 
 impl GLDevice {
@@ -972,6 +982,9 @@ impl GLVertexAttr {
         }
     }
 }
+
+// TODO(pcwalton)
+pub struct GLFence;
 
 pub struct GLFramebuffer {
     pub gl_framebuffer: GLuint,
