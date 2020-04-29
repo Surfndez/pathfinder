@@ -131,9 +131,6 @@ impl<W> DemoApp<W> where W: Window {
 
         let resources = window.resource_loader();
 
-        // Read command line options.
-        options.command_line_overrides();
-
         // Set up the executor.
         let executor = DemoExecutor::new(options.jobs);
 
@@ -645,6 +642,7 @@ pub struct Options {
     pub input_path: SVGPath,
     pub ui: UIVisibility,
     pub background_color: BackgroundColor,
+    pub high_performance_gpu: bool,
     hidden_field_for_future_proofing: (),
 }
 
@@ -656,13 +654,14 @@ impl Default for Options {
             input_path: SVGPath::Default,
             ui: UIVisibility::All,
             background_color: BackgroundColor::Light,
+            high_performance_gpu: false,
             hidden_field_for_future_proofing: (),
         }
     }
 }
 
 impl Options {
-    fn command_line_overrides(&mut self) {
+    pub fn command_line_overrides(&mut self) {
         let matches = App::new("tile-svg")
             .arg(
                 Arg::with_name("jobs")
@@ -703,6 +702,12 @@ impl Options {
                     .help("The background color to use"),
             )
             .arg(
+                Arg::with_name("high-performance-gpu")
+                    .short("g")
+                    .long("high-performance-gpu")
+                    .help("Use the high-performance (discrete) GPU, if available")
+            )
+            .arg(
                 Arg::with_name("INPUT")
                     .help("Path to the SVG file to render")
                     .index(1),
@@ -733,6 +738,10 @@ impl Options {
                 "dark" => BackgroundColor::Dark,
                 _ => BackgroundColor::Transparent,
             };
+        }
+
+        if matches.is_present("high-performance-gpu") {
+            self.high_performance_gpu = true;
         }
 
         if let Some(path) = matches.value_of("INPUT") {

@@ -71,9 +71,13 @@ fn main() {
     color_backtrace::install();
     pretty_env_logger::init();
 
-    let window = WindowImpl::new();
+    // Read command line options.
+    let mut options = Options::default();
+    options.command_line_overrides();
+
+    let window = WindowImpl::new(&options);
     let window_size = window.size();
-    let options = Options::default();
+
     let mut app = DemoApp::new(window, window_size, options);
 
     while !app.should_exit {
@@ -252,7 +256,7 @@ impl Window for WindowImpl {
 
 impl WindowImpl {
     #[cfg(any(not(target_os = "macos"), feature = "pf-gl"))]
-    fn new() -> WindowImpl {
+    fn new(options: &Options) -> WindowImpl {
         let mut event_loop = EventsLoop::new();
         let dpi = event_loop.get_primary_monitor().get_hidpi_factor();
         let window_size = Size2D::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
@@ -265,7 +269,13 @@ impl WindowImpl {
 
         let connection = Connection::from_winit_window(&window).unwrap();
         let native_widget = connection.create_native_widget_from_winit_window(&window).unwrap();
-        let adapter = connection.create_low_power_adapter().unwrap();
+
+        let adapter = if options.high_performance_gpu {
+            connection.create_hardware_adapter().unwrap()
+        } else {
+            connection.create_low_power_adapter().unwrap()
+        };
+
         let mut device = connection.create_device(&adapter).unwrap();
 
         let context_attributes = ContextAttributes {
@@ -305,7 +315,7 @@ impl WindowImpl {
     }
 
     #[cfg(all(target_os = "macos", not(feature = "pf-gl")))]
-    fn new() -> WindowImpl {
+    fn new(options: &Options) -> WindowImpl {
         let event_loop = EventsLoop::new();
         let window_size = Size2D::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
         let logical_size = LogicalSize::new(window_size.width as f64, window_size.height as f64);
@@ -317,7 +327,13 @@ impl WindowImpl {
 
         let connection = SystemConnection::from_winit_window(&window).unwrap();
         let native_widget = connection.create_native_widget_from_winit_window(&window).unwrap();
-        let adapter = connection.create_low_power_adapter().unwrap();
+
+        let adapter = if options.high_performance_gpu {
+            connection.create_hardware_adapter().unwrap()
+        } else {
+            connection.create_low_power_adapter().unwrap()
+        };
+
         let mut device = connection.create_device(&adapter).unwrap();
         let native_device = device.native_device();
 

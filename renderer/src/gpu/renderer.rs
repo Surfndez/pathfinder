@@ -91,10 +91,7 @@ const COMBINER_CTRL_COLOR_FILTER_SHIFT: i32 =       4;
 const COMBINER_CTRL_COLOR_COMBINE_SHIFT: i32 =      6;
 const COMBINER_CTRL_COMPOSITE_SHIFT: i32 =          8;
 
-pub struct Renderer<D>
-where
-    D: Device,
-{
+pub struct Renderer<D> where D: Device {
     // Device
     pub device: D,
 
@@ -107,38 +104,24 @@ where
     tile_program: TileProgram<D>,
     tile_copy_program: CopyTileProgram<D>,
     tile_clip_program: ClipTileProgram<D>,
-    blit_vertex_array: BlitVertexArray<D>,
-    tile_vertex_array: TileVertexArray<D>,
-    tile_copy_vertex_array: CopyTileVertexArray<D>,
-    tile_clip_vertex_array: ClipTileVertexArray<D>,
-    tile_vertex_buffer: D::Buffer,
+    stencil_program: StencilProgram<D>,
+    reprojection_program: ReprojectionProgram<D>,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
-    quads_vertex_indices_buffer: D::Buffer,
-    quads_vertex_indices_length: usize,
-    fill_vertex_storage_allocator: FillVertexStorageAllocator<D>,
     next_fills: Vec<i32>,
     fill_tile_map: Vec<i32>,
-    alpha_tile_pages: FxHashMap<u16, AlphaTilePage<D>>,
-    dest_blend_framebuffer: D::Framebuffer,
-    intermediate_dest_framebuffer: D::Framebuffer,
     texture_pages: Vec<Option<TexturePage<D>>>,
     render_targets: Vec<RenderTargetInfo>,
     render_target_stack: Vec<RenderTargetId>,
-    texture_metadata_texture: D::Texture,
     area_lut_texture: D::Texture,
     gamma_lut_texture: D::Texture,
 
-    // Stencil shader
-    stencil_program: StencilProgram<D>,
-    stencil_vertex_array: StencilVertexArray<D>,
-
-    // Reprojection shader
-    reprojection_program: ReprojectionProgram<D>,
-    reprojection_vertex_array: ReprojectionVertexArray<D>,
+    // Frames
+    front_frame: Frame<D>,
+    back_frame: Frame<D>,
+    front_frame_fence: Option<D::Fence>,
 
     // Rendering state
-    framebuffer_flags: FramebufferFlags,
     texture_cache: TextureCache<D>,
 
     // Debug
@@ -153,10 +136,25 @@ where
     flags: RendererFlags,
 }
 
-impl<D> Renderer<D>
-where
-    D: Device,
-{
+struct Frame<D> where D: Device {
+    framebuffer_flags: FramebufferFlags,
+    blit_vertex_array: BlitVertexArray<D>,
+    tile_vertex_array: TileVertexArray<D>,
+    tile_vertex_buffer: D::Buffer,
+    fill_vertex_storage_allocator: FillVertexStorageAllocator<D>,
+    quads_vertex_indices_buffer: D::Buffer,
+    quads_vertex_indices_length: usize,
+    alpha_tile_pages: FxHashMap<u16, AlphaTilePage<D>>,
+    tile_copy_vertex_array: CopyTileVertexArray<D>,
+    tile_clip_vertex_array: ClipTileVertexArray<D>,
+    stencil_vertex_array: StencilVertexArray<D>,
+    reprojection_vertex_array: ReprojectionVertexArray<D>,
+    dest_blend_framebuffer: D::Framebuffer,
+    intermediate_dest_framebuffer: D::Framebuffer,
+    texture_metadata_texture: D::Texture,
+}
+
+impl<D> Renderer<D> where D: Device {
     pub fn new(device: D,
                resources: &dyn ResourceLoader,
                dest_framebuffer: DestFramebuffer<D>,
@@ -174,10 +172,6 @@ where
         let area_lut_texture = device.create_texture_from_png(resources, "area-lut");
         let gamma_lut_texture = device.create_texture_from_png(resources, "gamma-lut");
 
-        let texture_metadata_texture = device.create_texture(
-            TextureFormat::RGBA16F,
-            Vector2I::new(TEXTURE_METADATA_TEXTURE_WIDTH, TEXTURE_METADATA_TEXTURE_HEIGHT));
-
         let quad_vertex_positions_buffer = device.create_buffer(BufferUploadMode::Static);
         device.allocate_buffer(&quad_vertex_positions_buffer,
                                BufferData::Memory(&QUAD_VERTEX_POSITIONS),
@@ -186,52 +180,32 @@ where
         device.allocate_buffer(&quad_vertex_indices_buffer,
                                BufferData::Memory(&QUAD_VERTEX_INDICES),
                                BufferTarget::Index);
-        let quads_vertex_indices_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-        let tile_vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-
-        let fill_vertex_storage_allocator = FillVertexStorageAllocator::new(&device);
-
-        let blit_vertex_array = BlitVertexArray::new(
-            &device,
-            &blit_program,
-            &quad_vertex_positions_buffer,
-            &quad_vertex_indices_buffer,
-        );
-        let tile_vertex_array = TileVertexArray::new(
-            &device,
-            &tile_program,
-            &tile_vertex_buffer,
-            &quad_vertex_positions_buffer,
-            &quad_vertex_indices_buffer,
-        );
-        let tile_copy_vertex_array = CopyTileVertexArray::new(
-            &device,
-            &tile_copy_program,
-            &tile_vertex_buffer,
-            &quads_vertex_indices_buffer,
-        );
-        let tile_clip_vertex_array = ClipTileVertexArray::new(
-            &device,
-            &tile_clip_program,
-            &quad_vertex_positions_buffer,
-            &quad_vertex_indices_buffer,
-        );
-        let stencil_vertex_array = StencilVertexArray::new(&device, &stencil_program);
-        let reprojection_vertex_array = ReprojectionVertexArray::new(
-            &device,
-            &reprojection_program,
-            &quad_vertex_positions_buffer,
-            &quad_vertex_indices_buffer,
-        );
 
         let window_size = dest_framebuffer.window_size(&device);
-        let dest_blend_texture = device.create_texture(TextureFormat::RGBA8, window_size);
-        let dest_blend_framebuffer = device.create_framebuffer(dest_blend_texture);
-        let intermediate_dest_texture = device.create_texture(TextureFormat::RGBA8, window_size);
-        let intermediate_dest_framebuffer = device.create_framebuffer(intermediate_dest_texture);
 
         let timer_query_cache = TimerQueryCache::new(&device);
         let debug_ui_presenter = DebugUIPresenter::new(&device, resources, window_size);
+
+        let front_frame = Frame::new(&device,
+                                     &blit_program,
+                                     &tile_program,
+                                     &tile_copy_program,
+                                     &tile_clip_program,
+                                     &reprojection_program,
+                                     &stencil_program,
+                                     &quad_vertex_positions_buffer,
+                                     &quad_vertex_indices_buffer,
+                                     window_size);
+        let back_frame = Frame::new(&device,
+                                    &blit_program,
+                                    &tile_program,
+                                    &tile_copy_program,
+                                    &tile_clip_program,
+                                    &reprojection_program,
+                                    &stencil_program,
+                                    &quad_vertex_positions_buffer,
+                                    &quad_vertex_indices_buffer,
+                                    window_size);
 
         Renderer {
             device,
@@ -244,34 +218,24 @@ where
             tile_program,
             tile_copy_program,
             tile_clip_program,
-            blit_vertex_array,
-            tile_vertex_array,
-            tile_copy_vertex_array,
-            tile_clip_vertex_array,
-            fill_vertex_storage_allocator,
-            tile_vertex_buffer,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
-            quads_vertex_indices_buffer,
-            quads_vertex_indices_length: 0,
             next_fills: vec![],
             fill_tile_map: vec![-1; 256 * 256],
-            alpha_tile_pages: FxHashMap::default(),
-            dest_blend_framebuffer,
-            intermediate_dest_framebuffer,
             texture_pages: vec![],
             render_targets: vec![],
             render_target_stack: vec![],
 
+            front_frame,
+            back_frame,
+            front_frame_fence: None,
+
             area_lut_texture,
             gamma_lut_texture,
-            texture_metadata_texture,
 
             stencil_program,
-            stencil_vertex_array,
 
             reprojection_program,
-            reprojection_vertex_array,
 
             stats: RenderStats::default(),
             current_cpu_build_time: None,
@@ -280,7 +244,6 @@ where
             timer_query_cache,
             debug_ui_presenter,
 
-            framebuffer_flags: FramebufferFlags::empty(),
             texture_cache: TextureCache::new(),
 
             flags: RendererFlags::empty(),
@@ -288,8 +251,8 @@ where
     }
 
     pub fn begin_scene(&mut self) {
-        self.framebuffer_flags = FramebufferFlags::empty();
-        for alpha_tile_page in self.alpha_tile_pages.values_mut() {
+        self.back_frame.framebuffer_flags = FramebufferFlags::empty();
+        for alpha_tile_page in self.back_frame.alpha_tile_pages.values_mut() {
             alpha_tile_page.must_preserve_framebuffer = false;
         }
 
@@ -318,7 +281,8 @@ where
             }
             RenderCommand::AddFills(ref fills) => self.add_fills(fills),
             RenderCommand::FlushFills => {
-                let page_indices: Vec<_> = self.alpha_tile_pages.keys().cloned().collect();
+                let page_indices: Vec<_> =
+                    self.back_frame.alpha_tile_pages.keys().cloned().collect();
                 for page_index in page_indices {
                     self.draw_buffered_fills(page_index)
                 }
@@ -351,18 +315,21 @@ where
     pub fn end_scene(&mut self) {
         self.blit_intermediate_dest_framebuffer_if_necessary();
 
-        let fence = self.device.add_fence();
-
+        let old_front_frame_fence = self.front_frame_fence.take();
+        self.front_frame_fence = Some(self.device.add_fence());
         self.device.end_commands();
 
-        self.fill_vertex_storage_allocator.end_frame();
+        self.back_frame.fill_vertex_storage_allocator.end_frame();
         if let Some(timer) = self.current_timer.take() {
             self.pending_timers.push_back(timer);
         }
-
         self.current_cpu_build_time = None;
 
-        self.device.wait_for_fence(&fence);
+        if let Some(old_front_frame_fence) = old_front_frame_fence {
+            self.device.wait_for_fence(&old_front_frame_fence);
+        }
+
+        mem::swap(&mut self.front_frame, &mut self.back_frame);
     }
 
     fn start_rendering(&mut self,
@@ -525,7 +492,7 @@ where
             texels.push(f16::default())
         }
 
-        let texture = &mut self.texture_metadata_texture;
+        let texture = &mut self.back_frame.texture_metadata_texture;
         let width = TEXTURE_METADATA_TEXTURE_WIDTH;
         let height = texels.len() as i32 / (4 * TEXTURE_METADATA_TEXTURE_WIDTH);
         let rect = RectI::new(Vector2I::zero(), Vector2I::new(width, height));
@@ -533,7 +500,7 @@ where
     }
 
     fn upload_tiles(&mut self, tiles: &[Tile]) {
-        self.device.allocate_buffer(&self.tile_vertex_buffer,
+        self.device.allocate_buffer(&self.back_frame.tile_vertex_buffer,
                                     BufferData::Memory(&tiles),
                                     BufferTarget::Vertex);
         self.ensure_index_buffer(tiles.len());
@@ -541,7 +508,7 @@ where
 
     fn ensure_index_buffer(&mut self, mut length: usize) {
         length = length.next_power_of_two();
-        if self.quads_vertex_indices_length >= length {
+        if self.back_frame.quads_vertex_indices_length >= length {
             return;
         }
 
@@ -554,11 +521,11 @@ where
             ]);
         }
 
-        self.device.allocate_buffer(&self.quads_vertex_indices_buffer,
+        self.device.allocate_buffer(&self.back_frame.quads_vertex_indices_buffer,
                                     BufferData::Memory(&indices),
                                     BufferTarget::Index);
 
-        self.quads_vertex_indices_length = length;
+        self.back_frame.quads_vertex_indices_length = length;
     }
 
     fn add_fills(&mut self, fill_batch: &[FillBatchEntry]) {
@@ -572,13 +539,18 @@ where
         let mut pages_to_flush = vec![];
         for fill_batch_entry in fill_batch {
             let page = fill_batch_entry.page;
-            if !self.alpha_tile_pages.contains_key(&page) {
-                self.alpha_tile_pages.insert(page, AlphaTilePage::new(&mut self.device));
+            if !self.back_frame.alpha_tile_pages.contains_key(&page) {
+                let alpha_tile_page = AlphaTilePage::new(&mut self.device);
+                self.back_frame.alpha_tile_pages.insert(page, alpha_tile_page);
             }
-            if self.alpha_tile_pages[&page].buffered_fills.len() == MAX_FILLS_PER_BATCH {
+            if self.back_frame
+                   .alpha_tile_pages[&page]
+                   .buffered_fills
+                   .len() == MAX_FILLS_PER_BATCH {
                 pages_to_flush.push(page);
             }
-            self.alpha_tile_pages
+            self.back_frame
+                .alpha_tile_pages
                 .get_mut(&page)
                 .unwrap()
                 .buffered_fills
@@ -598,7 +570,8 @@ where
     fn draw_buffered_fills_via_raster(&mut self, page: u16) {
         let mask_viewport = self.mask_viewport();
 
-        let alpha_tile_page = self.alpha_tile_pages
+        let alpha_tile_page = self.back_frame
+                                  .alpha_tile_pages
                                   .get_mut(&page)
                                   .expect("Where's the alpha tile page?");
         let buffered_fills = &mut alpha_tile_page.buffered_fills;
@@ -606,11 +579,12 @@ where
             return;
         }
 
-        let fill_vertex_storage =
-            self.fill_vertex_storage_allocator.allocate(&self.device,
-                                                        &self.fill_raster_program,
-                                                        &self.quad_vertex_positions_buffer,
-                                                        &self.quad_vertex_indices_buffer);
+        let fill_vertex_storage = self.back_frame
+                                      .fill_vertex_storage_allocator
+                                      .allocate(&self.device,
+                                                &self.fill_raster_program,
+                                                &self.quad_vertex_positions_buffer,
+                                                &self.quad_vertex_indices_buffer);
 
         self.device.upload_to_buffer(&fill_vertex_storage.vertex_buffer,
                                      0,
@@ -742,16 +716,17 @@ where
 
         let ClipBatchKey { dest_page, src_page, kind } = batch.key;
 
-        self.device.allocate_buffer(&self.tile_clip_vertex_array.vertex_buffer,
+        self.device.allocate_buffer(&self.back_frame.tile_clip_vertex_array.vertex_buffer,
                                     BufferData::Memory(&batch.clips),
                                     BufferTarget::Vertex);
 
-        if !self.alpha_tile_pages.contains_key(&dest_page) {
-            self.alpha_tile_pages.insert(dest_page, AlphaTilePage::new(&mut self.device));
+        if !self.back_frame.alpha_tile_pages.contains_key(&dest_page) {
+            let alpha_tile_page = AlphaTilePage::new(&mut self.device);
+            self.back_frame.alpha_tile_pages.insert(dest_page, alpha_tile_page);
         }
 
         let mut clear_color = None;
-        if !self.alpha_tile_pages[&dest_page].must_preserve_framebuffer {
+        if !self.back_frame.alpha_tile_pages[&dest_page].must_preserve_framebuffer {
             clear_color = Some(ColorF::default());
         };
 
@@ -774,15 +749,15 @@ where
         self.device.begin_timer_query(&timer_query);
 
         {
-            let dest_framebuffer = &self.alpha_tile_pages[&dest_page].framebuffer;
-            let src_framebuffer = &self.alpha_tile_pages[&src_page].framebuffer;
+            let dest_framebuffer = &self.back_frame.alpha_tile_pages[&dest_page].framebuffer;
+            let src_framebuffer = &self.back_frame.alpha_tile_pages[&src_page].framebuffer;
             let src_texture = self.device.framebuffer_texture(&src_framebuffer);
 
             debug_assert!(batch.clips.len() <= u32::MAX as usize);
             self.device.draw_elements_instanced(6, batch.clips.len() as u32, &RenderState {
                 target: &RenderTarget::Framebuffer(dest_framebuffer),
                 program: &self.tile_clip_program.program,
-                vertex_array: &self.tile_clip_vertex_array.vertex_array,
+                vertex_array: &self.back_frame.tile_clip_vertex_array.vertex_array,
                 primitive: Primitive::Triangles,
                 textures: &[src_texture],
                 images: &[],
@@ -799,7 +774,11 @@ where
             self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
         }
 
-        self.alpha_tile_pages.get_mut(&dest_page).unwrap().must_preserve_framebuffer = true;
+        self.back_frame
+            .alpha_tile_pages
+            .get_mut(&dest_page)
+            .unwrap()
+            .must_preserve_framebuffer = true;
     }
 
     fn tile_transform(&self) -> Transform4F {
@@ -827,7 +806,7 @@ where
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
-        let mut textures = vec![&self.texture_metadata_texture];
+        let mut textures = vec![&self.back_frame.texture_metadata_texture];
         let mut uniforms = vec![
             (&self.tile_program.transform_uniform,
              UniformData::Mat4(self.tile_transform().to_columns())),
@@ -844,10 +823,11 @@ where
         if needs_readable_framebuffer {
             uniforms.push((&self.tile_program.dest_texture_uniform,
                            UniformData::TextureUnit(textures.len() as u32)));
-            textures.push(self.device.framebuffer_texture(&self.dest_blend_framebuffer));
+            textures.push(self.device
+                              .framebuffer_texture(&self.back_frame.dest_blend_framebuffer));
         }
 
-        if let Some(alpha_tile_page) = self.alpha_tile_pages.get(&tile_page) {
+        if let Some(alpha_tile_page) = self.back_frame.alpha_tile_pages.get(&tile_page) {
             uniforms.push((&self.tile_program.mask_texture_0_uniform,
                         UniformData::TextureUnit(textures.len() as u32)));
             textures.push(self.device.framebuffer_texture(&alpha_tile_page.framebuffer));
@@ -857,7 +837,6 @@ where
         let mut ctrl = 0;
         match color_texture_0 {
             Some(color_texture) => {
-                println!("have color texture 0");
                 let color_texture_page = self.texture_page(color_texture.page);
                 let color_texture_size = self.device.texture_size(color_texture_page).to_f32();
                 self.device.set_texture_sampling_mode(color_texture_page,
@@ -911,7 +890,7 @@ where
         self.device.draw_elements_instanced(6, tile_count, &RenderState {
             target: &self.draw_render_target(),
             program: &self.tile_program.program,
-            vertex_array: &self.tile_vertex_array.vertex_array,
+            vertex_array: &self.back_frame.tile_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &textures,
             images: &[],
@@ -955,9 +934,9 @@ where
                        UniformData::Vec2(draw_viewport.size().to_f32().0)));
 
         self.device.draw_elements(tile_count * 6, &RenderState {
-            target: &RenderTarget::Framebuffer(&self.dest_blend_framebuffer),
+            target: &RenderTarget::Framebuffer(&self.back_frame.dest_blend_framebuffer),
             program: &self.tile_copy_program.program,
-            vertex_array: &self.tile_copy_vertex_array.vertex_array,
+            vertex_array: &self.back_frame.tile_copy_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &textures,
             images: &[],
@@ -974,7 +953,7 @@ where
     }
 
     fn draw_stencil(&mut self, quad_positions: &[Vector4F]) {
-        self.device.allocate_buffer(&self.stencil_vertex_array.vertex_buffer,
+        self.device.allocate_buffer(&self.back_frame.stencil_vertex_array.vertex_buffer,
                                     BufferData::Memory(quad_positions),
                                     BufferTarget::Vertex);
 
@@ -984,14 +963,14 @@ where
         for index in 1..(quad_positions.len() as u32 - 1) {
             indices.extend_from_slice(&[0, index as u32, index + 1]);
         }
-        self.device.allocate_buffer(&self.stencil_vertex_array.index_buffer,
+        self.device.allocate_buffer(&self.back_frame.stencil_vertex_array.index_buffer,
                                     BufferData::Memory(&indices),
                                     BufferTarget::Index);
 
         self.device.draw_elements(indices.len() as u32, &RenderState {
             target: &self.draw_render_target(),
             program: &self.stencil_program.program,
-            vertex_array: &self.stencil_vertex_array.vertex_array,
+            vertex_array: &self.back_frame.stencil_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &[],
             images: &[],
@@ -1024,7 +1003,7 @@ where
         self.device.draw_elements(6, &RenderState {
             target: &self.draw_render_target(),
             program: &self.reprojection_program.program,
-            vertex_array: &self.reprojection_vertex_array.vertex_array,
+            vertex_array: &self.back_frame.reprojection_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &[texture],
             images: &[],
@@ -1056,7 +1035,7 @@ where
             }
             None => {
                 if self.flags.contains(RendererFlags::INTERMEDIATE_DEST_FRAMEBUFFER_NEEDED) {
-                    RenderTarget::Framebuffer(&self.intermediate_dest_framebuffer)
+                    RenderTarget::Framebuffer(&self.back_frame.intermediate_dest_framebuffer)
                 } else {
                     match self.dest_framebuffer {
                         DestFramebuffer::Default { .. } => RenderTarget::Default,
@@ -1167,12 +1146,14 @@ where
         let main_viewport = self.main_viewport();
 
         let uniforms = [(&self.blit_program.src_uniform, UniformData::TextureUnit(0))];
-        let textures = [(self.device.framebuffer_texture(&self.intermediate_dest_framebuffer))];
+        let textures = [
+            (self.device.framebuffer_texture(&self.back_frame.intermediate_dest_framebuffer))
+        ];
 
         self.device.draw_elements(6, &RenderState {
             target: &RenderTarget::Default,
             program: &self.blit_program.program,
-            vertex_array: &self.blit_vertex_array.vertex_array,
+            vertex_array: &self.back_frame.blit_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &textures[..],
             images: &[],
@@ -1214,7 +1195,8 @@ where
                     .must_preserve_contents
             }
             None => {
-                self.framebuffer_flags
+                self.back_frame
+                    .framebuffer_flags
                     .contains(FramebufferFlags::MUST_PRESERVE_DEST_FRAMEBUFFER_CONTENTS)
             }
         };
@@ -1238,7 +1220,8 @@ where
                     .must_preserve_contents = true;
             }
             None => {
-                self.framebuffer_flags
+                self.back_frame
+                    .framebuffer_flags
                     .insert(FramebufferFlags::MUST_PRESERVE_DEST_FRAMEBUFFER_CONTENTS);
             }
         }
@@ -1280,6 +1263,78 @@ where
 
     fn texture_page(&self, id: TexturePageId) -> &D::Texture {
         self.device.framebuffer_texture(&self.texture_page_framebuffer(id))
+    }
+}
+
+impl<D> Frame<D> where D: Device {
+    // FIXME(pcwalton): This signature shouldn't be so big. Make a struct.
+    fn new(device: &D,
+           blit_program: &BlitProgram<D>,
+           tile_program: &TileProgram<D>,
+           tile_copy_program: &CopyTileProgram<D>,
+           tile_clip_program: &ClipTileProgram<D>,
+           reprojection_program: &ReprojectionProgram<D>,
+           stencil_program: &StencilProgram<D>,
+           quad_vertex_positions_buffer: &D::Buffer,
+           quad_vertex_indices_buffer: &D::Buffer,
+           window_size: Vector2I)
+           -> Frame<D> {
+        let tile_vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let quads_vertex_indices_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+
+        let blit_vertex_array = BlitVertexArray::new(device,
+                                                     &blit_program,
+                                                     &quad_vertex_positions_buffer,
+                                                     &quad_vertex_indices_buffer);
+        let tile_vertex_array = TileVertexArray::new(device,
+                                                     &tile_program,
+                                                     &tile_vertex_buffer,
+                                                     &quad_vertex_positions_buffer,
+                                                     &quad_vertex_indices_buffer);
+        let tile_copy_vertex_array = CopyTileVertexArray::new(device,
+                                                              &tile_copy_program,
+                                                              &tile_vertex_buffer,
+                                                              &quads_vertex_indices_buffer);
+        let tile_clip_vertex_array = ClipTileVertexArray::new(device,
+                                                              &tile_clip_program,
+                                                              &quad_vertex_positions_buffer,
+                                                              &quad_vertex_indices_buffer);
+        let reprojection_vertex_array = ReprojectionVertexArray::new(device,
+                                                                     &reprojection_program,
+                                                                     &quad_vertex_positions_buffer,
+                                                                     &quad_vertex_indices_buffer);
+        let stencil_vertex_array = StencilVertexArray::new(device, &stencil_program);
+
+        let fill_vertex_storage_allocator = FillVertexStorageAllocator::new(device);
+
+        let texture_metadata_texture_size = vec2i(TEXTURE_METADATA_TEXTURE_WIDTH,
+                                                  TEXTURE_METADATA_TEXTURE_HEIGHT);
+        let texture_metadata_texture = device.create_texture(TextureFormat::RGBA16F,
+                                                             texture_metadata_texture_size);
+
+        let intermediate_dest_texture = device.create_texture(TextureFormat::RGBA8, window_size);
+        let intermediate_dest_framebuffer = device.create_framebuffer(intermediate_dest_texture);
+
+        let dest_blend_texture = device.create_texture(TextureFormat::RGBA8, window_size);
+        let dest_blend_framebuffer = device.create_framebuffer(dest_blend_texture);
+
+        Frame {
+            blit_vertex_array,
+            tile_vertex_array,
+            tile_copy_vertex_array,
+            tile_clip_vertex_array,
+            reprojection_vertex_array,
+            stencil_vertex_array,
+            fill_vertex_storage_allocator,
+            tile_vertex_buffer,
+            quads_vertex_indices_buffer,
+            quads_vertex_indices_length: 0,
+            alpha_tile_pages: FxHashMap::default(),
+            texture_metadata_texture,
+            intermediate_dest_framebuffer,
+            dest_blend_framebuffer,
+            framebuffer_flags: FramebufferFlags::empty(),
+        }
     }
 }
 
