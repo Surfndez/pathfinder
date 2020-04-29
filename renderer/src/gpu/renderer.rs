@@ -103,7 +103,7 @@ where
     options: RendererOptions,
     blit_program: BlitProgram<D>,
     fill_raster_program: FillRasterProgram<D>,
-    fill_compute_program: FillComputeProgram<D>,
+    //fill_compute_program: FillComputeProgram<D>,
     tile_program: TileProgram<D>,
     tile_copy_program: CopyTileProgram<D>,
     tile_clip_program: ClipTileProgram<D>,
@@ -167,7 +167,7 @@ where
                -> Renderer<D> {
         let blit_program = BlitProgram::new(&device, resources);
         let fill_raster_program = FillRasterProgram::new(&device, resources);
-        let fill_compute_program = FillComputeProgram::new(&device, resources);
+        //let fill_compute_program = FillComputeProgram::new(&device, resources);
         let tile_program = TileProgram::new(&device, resources);
         let tile_copy_program = CopyTileProgram::new(&device, resources);
         let tile_clip_program = ClipTileProgram::new(&device, resources);
@@ -255,7 +255,7 @@ where
             options,
             blit_program,
             fill_raster_program,
-            fill_compute_program,
+            //fill_compute_program,
             tile_program,
             tile_copy_program,
             tile_clip_program,
@@ -668,6 +668,7 @@ where
         buffered_fills.clear();
     }
 
+    /*
     fn draw_buffered_fills_via_compute(&mut self, page: u16) {
         let alpha_tile_page = self.alpha_tile_pages
                                   .get_mut(&page)
@@ -738,6 +739,7 @@ where
         alpha_tile_page.must_preserve_framebuffer = true;
         buffered_fills.clear();
     }
+    */
 
     fn draw_clip_batch(&mut self, batch: &ClipBatch) {
         if batch.clips.is_empty() {

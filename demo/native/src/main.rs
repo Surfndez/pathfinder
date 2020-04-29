@@ -317,7 +317,7 @@ impl WindowImpl {
 
         let connection = SystemConnection::from_winit_window(&window).unwrap();
         let native_widget = connection.create_native_widget_from_winit_window(&window).unwrap();
-        let adapter = connection.create_low_power_adapter().unwrap();
+        let adapter = connection.create_hardware_adapter().unwrap();
         let mut device = connection.create_device(&adapter).unwrap();
         let native_device = device.native_device();
 
