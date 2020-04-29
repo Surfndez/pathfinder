@@ -61,7 +61,7 @@ use std::slice;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-const FIRST_VERTEX_BUFFER_INDEX: u64 = 1;
+const FIRST_VERTEX_BUFFER_INDEX: u64 = 16;
 const MINIMUM_BUFFER_SIZE_CLASS: usize = 10;    // 1024 bytes
 
 pub struct MetalDevice {
@@ -233,7 +233,7 @@ pub struct MetalStorageBuffer {
     name: String,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct MetalUniformIndices(ProgramKind<Option<MetalUniformIndex>>);
 
 #[derive(Clone, Copy, Debug)]
@@ -372,7 +372,7 @@ impl Device for MetalDevice {
             let attribute = attributes.object_at(attribute_index);
             let this_name = attribute.name().as_bytes();
             if this_name[0] == b'a' && this_name[1..] == *name.as_bytes() {
-                println!("found attribute: \"{}\"", name);
+                //println!("found attribute: \"{}\"", name);
                 return Some(attribute.retain())
             }
         }
@@ -808,10 +808,10 @@ impl MetalDevice {
         };
         let (main_name, sampler_name) = (format!("u{}", name), format!("u{}Smplr", name));
         let (mut main_argument, mut sampler_argument) = (None, None);
-        println!("--- get_uniform_index({}, {}) ---", shader.name, name);
+        //println!("--- get_uniform_index({}, {}) ---", shader.name, name);
         for argument_index in 0..arguments.len() {
             let argument = arguments.object_at(argument_index);
-            println!("argument {}: name={} index={}", argument_index, argument.name(), argument.index());
+            //println!("argument {}: name={} index={}", argument_index, argument.name(), argument.index());
             let argument_name = argument.name();
             if argument_name == &main_name {
                 main_argument = Some(argument.index());
@@ -823,7 +823,7 @@ impl MetalDevice {
             None => None,
             Some(main) => Some(MetalUniformIndex { main, sampler: sampler_argument }),
         };
-        println!("get_uniform_index({}) = {:?}", name, uniform_index);
+        //println!("get_uniform_index({}) = {:?}", name, uniform_index);
         uniform_index
     }
 
@@ -1150,6 +1150,7 @@ impl MetalDevice {
 
             let indices = uniform.indices.borrow_mut();
             let indices = indices.as_ref().unwrap();
+            //println!("uniform indices for {} are {:?}", uniform.name, indices);
             let (vertex_indices, fragment_indices) = match indices.0 {
                 ProgramKind::Raster { ref vertex, ref fragment } => (vertex, fragment),
                 _ => unreachable!(),
@@ -1160,8 +1161,8 @@ impl MetalDevice {
                     self.set_vertex_uniform(vertex_index,
                                             arguments,
                                             uniform_data,
-                                            &uniform_buffer.data_buffer,
-                                            buffer_range.start as u64,
+                                            &uniform_buffer.data,
+                                            buffer_range,
                                             render_command_encoder,
                                             render_state);
                 }
@@ -1171,8 +1172,8 @@ impl MetalDevice {
                     self.set_fragment_uniform(fragment_index,
                                               arguments,
                                               uniform_data,
-                                              &uniform_buffer.data_buffer,
-                                              buffer_range.start as u64,
+                                              &uniform_buffer.data,
+                                              buffer_range,
                                               render_command_encoder,
                                               render_state);
                 }
@@ -1194,6 +1195,7 @@ impl MetalDevice {
 
         // Allow the uniform and argument buffers to be reused when done.
         let free_auxiliary_buffers = self.free_auxiliary_buffers.clone();
+        /*
         let raster_argument_buffers = Mutex::new(RasterArgumentBuffers {
             uniform: Some(uniform_buffer.data_buffer),
             /*
@@ -1217,6 +1219,7 @@ impl MetalDevice {
             */
         });
         command_buffer.add_completed_handler(free_uniform_buffer_block.copy());
+        */
 
         struct RasterArgumentBuffers {
             uniform: Option<Buffer>,
@@ -1391,7 +1394,7 @@ impl MetalDevice {
         }
 
         UniformBuffer {
-            data_buffer: self.allocate_auxiliary_buffer_with_data(&uniform_buffer_data[..]),
+            data: uniform_buffer_data,
             ranges: uniform_buffer_ranges,
         }
     }
@@ -1400,11 +1403,11 @@ impl MetalDevice {
                           argument_index: MetalUniformIndex,
                           arguments: &ArgumentArray,
                           uniform_data: &UniformData,
-                          buffer: &Buffer,
-                          buffer_offset: u64,
+                          buffer: &[u8],
+                          buffer_range: &Range<usize>,
                           render_command_encoder: &RenderCommandEncoderRef,
                           render_state: &RenderState<MetalDevice>) {
-        println!("setting VERTEX argument index {:?} to buffer offset {}", argument_index, buffer_offset);
+        //println!("setting VERTEX argument index {:?} to buffer offset {}", argument_index, buffer_range.start);
         match *uniform_data {
             UniformData::TextureUnit(unit) => {
                 let texture = render_state.textures[unit as usize];
@@ -1419,9 +1422,10 @@ impl MetalDevice {
                                                           Some(&image.texture.texture));
             }
             _ => {
-                render_command_encoder.set_vertex_buffer(argument_index.main,
-                                                         Some(buffer),
-                                                         buffer_offset)
+                render_command_encoder.set_vertex_bytes(
+                    argument_index.main,
+                    (buffer_range.end - buffer_range.start) as u64,
+                    &buffer[buffer_range.start as usize] as *const u8 as *const _)
             }
         }
     }
@@ -1430,11 +1434,11 @@ impl MetalDevice {
                           argument_index: MetalUniformIndex,
                           arguments: &ArgumentArray,
                           uniform_data: &UniformData,
-                          buffer: &Buffer,
-                          buffer_offset: u64,
+                          buffer: &[u8],
+                          buffer_range: &Range<usize>,
                           render_command_encoder: &RenderCommandEncoderRef,
                           render_state: &RenderState<MetalDevice>) {
-        println!("setting FRAGMENT argument index {:?} to buffer offset {}", argument_index, buffer_offset);
+        //println!("setting FRAGMENT argument index {:?} to buffer offset {}", argument_index, buffer_range.start);
         match *uniform_data {
             UniformData::TextureUnit(unit) => {
                 let texture = render_state.textures[unit as usize];
@@ -1449,9 +1453,10 @@ impl MetalDevice {
                                                             Some(&image.texture.texture));
             }
             _ => {
-                render_command_encoder.set_fragment_buffer(argument_index.main,
-                                                           Some(buffer),
-                                                           buffer_offset)
+                render_command_encoder.set_fragment_bytes(
+                    argument_index.main,
+                    (buffer_range.end - buffer_range.start) as u64,
+                    &buffer[buffer_range.start as usize] as *const u8 as *const _)
             }
         }
     }
@@ -1490,7 +1495,7 @@ impl MetalDevice {
                                      render_command_encoder: &RenderCommandEncoderRef,
                                      texture: &MetalTexture)
                                      -> MTLResourceUsage {
-        println!("encoding vertex texture uniform {:?}", argument_index);
+        //println!("encoding vertex texture uniform {:?}", argument_index);
         render_command_encoder.set_vertex_texture(argument_index.main, Some(&texture.texture));
         let mut resource_usage = MTLResourceUsage::Read;
         if let Some(sampler_index) = argument_index.sampler {
@@ -1506,7 +1511,7 @@ impl MetalDevice {
                                        render_command_encoder: &RenderCommandEncoderRef,
                                        texture: &MetalTexture)
                                        -> MTLResourceUsage {
-        println!("encoding fragment texture uniform {:?}", argument_index);
+        //println!("encoding fragment texture uniform {:?}", argument_index);
         render_command_encoder.set_fragment_texture(argument_index.main, Some(&texture.texture));
         let mut resource_usage = MTLResourceUsage::Read;
         if let Some(sampler_index) = argument_index.sampler {
@@ -1749,7 +1754,7 @@ impl DeviceExtra for metal::Device {
 // Helper types
 
 struct UniformBuffer {
-    data_buffer: Buffer,
+    data: Vec<u8>,
     ranges: Vec<Range<usize>>,
 }
 

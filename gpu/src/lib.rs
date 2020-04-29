@@ -185,7 +185,7 @@ pub enum ShaderKind {
     Compute,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum ProgramKind<T> {
     Raster {
         vertex: T,
