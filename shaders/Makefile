@@ -47,7 +47,7 @@ GLSLANGFLAGS=--auto-map-locations -I.
 GLSLANGFLAGS_METAL=$(GLSLANGFLAGS) -DPF_ORIGIN_UPPER_LEFT=1
 
 SPIRVCROSS?=spirv-cross
-SPIRVCROSSFLAGS=--msl --msl-version 020100 --msl-argument-buffers
+SPIRVCROSSFLAGS=--msl --msl-version 020100
 
 GLSL_VERSION_HEADER="\#version {{version}}"
 HEADER="// Automatically generated from files in pathfinder/shaders/. Do not edit!"
