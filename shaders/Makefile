@@ -23,14 +23,20 @@ SHADERS=\
 	tile_clip.vs.glsl \
 	tile_copy.fs.glsl \
 	tile_copy.vs.glsl \
+	tile_fill.fs.glsl \
+	tile_fill.vs.glsl \
 	$(EMPTY)
 
 COMPUTE_SHADERS=\
 	fill.cs.glsl \
+	tile_fill.cs.glsl \
 	$(EMPTY)
 
 INCLUDES=\
 	fill.inc.glsl \
+	fill_compute.inc.glsl \
+	tile.inc.glsl \
+	tile_vertex.inc.glsl \
 	$(EMPTY)
 
 OUT=\

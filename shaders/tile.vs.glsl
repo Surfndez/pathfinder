@@ -10,6 +10,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#extension GL_GOOGLE_include_directive : enable
+
 precision highp float;
 precision highp sampler2D;
 
@@ -30,22 +32,21 @@ out vec2 vColorTexCoord0;
 out vec4 vBaseColor;
 out float vTileCtrl;
 
+#include "tile_vertex.inc.glsl"
+
 void main() {
     vec2 tileOrigin = vec2(aTileOrigin), tileOffset = vec2(aTileOffset);
     vec2 position = (tileOrigin + tileOffset) * uTileSize;
 
-    vec2 maskTexCoord0 = (vec2(aMaskTexCoord0) + tileOffset) * uTileSize;
+    vec2 maskTexCoord0 = vec2(aMaskTexCoord0);
+    maskTexCoord0 = (maskTexCoord0 + tileOffset) * uTileSize;
 
-    vec2 textureMetadataScale = vec2(1.0) / vec2(uTextureMetadataSize);
-    vec2 metadataEntryCoord = vec2(aColor % 128 * 4, aColor / 128);
-    vec2 colorTexMatrix0Coord = (metadataEntryCoord + vec2(0.5, 0.5)) * textureMetadataScale;
-    vec2 colorTexOffsetsCoord = (metadataEntryCoord + vec2(1.5, 0.5)) * textureMetadataScale;
-    vec2 baseColorCoord = (metadataEntryCoord + vec2(2.5, 0.5)) * textureMetadataScale;
-    vec4 colorTexMatrix0 = texture(uTextureMetadata, colorTexMatrix0Coord);
-    vec4 colorTexOffsets = texture(uTextureMetadata, colorTexOffsetsCoord);
-    vec4 baseColor = texture(uTextureMetadata, baseColorCoord);
+    mat2 colorTexMatrix0;
+    vec4 colorTexOffsets;
+    vec4 baseColor;
+    lookupTextureMetadata(aColor, colorTexMatrix0, colorTexOffsets, baseColor);
 
-    vColorTexCoord0 = mat2(colorTexMatrix0) * position + colorTexOffsets.xy;
+    vColorTexCoord0 = colorTexMatrix0 * position + colorTexOffsets.xy;
     vMaskTexCoord0 = vec3(maskTexCoord0, float(aMaskBackdrop.x));
     vBaseColor = baseColor;
     vTileCtrl = float(aTileCtrl);

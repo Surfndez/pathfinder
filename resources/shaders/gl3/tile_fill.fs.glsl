@@ -1,27 +1,6 @@
 #version {{version}}
 // Automatically generated from files in pathfinder/shaders/. Do not edit!
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#version 430
 
 
 
@@ -42,20 +21,103 @@ uniform sampler2D uColorTexture0;
 uniform sampler2D uMaskTexture0;
 uniform sampler2D uDestTexture;
 uniform sampler2D uGammaLUT;
-uniform vec2 uColorTextureSize0;
-uniform vec2 uMaskTextureSize0;
 uniform vec4 uFilterParams0;
 uniform vec4 uFilterParams1;
 uniform vec4 uFilterParams2;
 uniform vec2 uFramebufferSize;
+uniform vec2 uColorTextureSize0;
 uniform int uCtrl;
+uniform sampler2D uAreaLUT;
 
-in vec3 vMaskTexCoord0;
+layout(std430, binding = 0)buffer bFills {
+    restrict readonly uvec2 iFills[];
+};
+
+layout(std430, binding = 1)buffer bNextFills {
+    restrict readonly int iNextFills[];
+};
+
+layout(std430, binding = 2)buffer bFillTileMap {
+    restrict readonly int iFillTileMap[];
+};
+
+in vec2 vTileSubCoord;
+flat in uint vMaskTileIndex0;
+flat in int vMaskTileBackdrop0;
 in vec2 vColorTexCoord0;
 in vec4 vBaseColor;
 in float vTileCtrl;
 
 out vec4 oFragColor;
+
+
+
+
+
+
+
+
+
+
+
+
+vec4 computeCoverage(vec2 from, vec2 to, sampler2D areaLUT){
+
+    vec2 left = from . x < to . x ? from : to, right = from . x < to . x ? to : from;
+
+
+    vec2 window = clamp(vec2(from . x, to . x), - 0.5, 0.5);
+    float offset = mix(window . x, window . y, 0.5)- left . x;
+    float t = offset /(right . x - left . x);
+
+
+    float y = mix(left . y, right . y, t);
+    float d =(right . y - left . y)/(right . x - left . x);
+
+
+    float dX = window . x - window . y;
+    return texture(areaLUT, vec2(y + 8.0, abs(d * dX))/ 16.0)* dX;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+vec4 computeCoverage(vec2 from, vec2 to, sampler2D areaLUT);
+
+ivec2 calculateTileOrigin(uint tileIndex){
+    return ivec2(tileIndex & 0xff,(tileIndex >> 8u)& 0xff)* 16;
+}
+
+vec4 calculateFillAlpha(ivec2 tileSubCoord, uint tileIndex){
+    int fillIndex = iFillTileMap[tileIndex];
+    if(fillIndex < 0)
+        return vec4(0.0);
+
+    vec4 coverages = vec4(0.0);
+    do {
+        uvec2 fill = iFills[fillIndex];
+        vec2 from = vec2(fill . y & 0xf,(fill . y >> 4u)& 0xf)+
+                    vec2(fill . x & 0xff,(fill . x >> 8u)& 0xff)/ 256.0;
+        vec2 to = vec2((fill . y >> 8u)& 0xf,(fill . y >> 12u)& 0xf)+
+                    vec2((fill . x >> 16u)& 0xff,(fill . x >> 24u)& 0xff)/ 256.0;
+
+        coverages += computeCoverage(from -(vec2(tileSubCoord)+ vec2(0.5)),
+                                     to -(vec2(tileSubCoord)+ vec2(0.5)),
+                                     uAreaLUT);
+
+        fillIndex = iNextFills[fillIndex];
+    } while(fillIndex >= 0);
+
+    return coverages;
+}
 
 
 
@@ -619,10 +681,15 @@ vec4 calculateColorWithMaskAlpha(float maskAlpha,
 
 
 vec4 calculateColor(int tileCtrl, int ctrl){
-
-    int maskCtrl0 =(tileCtrl >> 0)& 0x3;
     float maskAlpha = 1.0;
-    maskAlpha = sampleMask(maskAlpha, uMaskTexture0, uMaskTextureSize0, vMaskTexCoord0, maskCtrl0);
+    int maskCtrl0 =(ctrl >> 0)& 0x1;
+    int maskTileCtrl0 =(tileCtrl >> 0)& 0x3;
+    uint maskTileIndex0 = vMaskTileIndex0;
+    if(maskCtrl0 != 0 && maskTileCtrl0 != 0){
+        ivec2 tileSubCoord = ivec2(floor(vTileSubCoord));
+        vec4 alphas = calculateFillAlpha(tileSubCoord, maskTileIndex0)+ float(vMaskTileBackdrop0);
+        maskAlpha = alphas . x;
+    }
     return calculateColorWithMaskAlpha(maskAlpha,
                                        vBaseColor,
                                        vColorTexCoord0,
@@ -636,5 +703,6 @@ vec4 calculateColor(int tileCtrl, int ctrl){
 
 void main(){
     oFragColor = calculateColor(int(vTileCtrl), uCtrl);
+
 }
 

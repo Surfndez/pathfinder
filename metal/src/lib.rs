@@ -887,6 +887,7 @@ impl MetalDevice {
             None => None,
             Some(main) => Some(main),
         };
+        println!("get_storage_buffer_index({}) = {:?}", name, storage_buffer_index);
         storage_buffer_index
     }
 
@@ -1072,6 +1073,7 @@ impl MetalDevice {
             return;
         }
 
+        // Set uniforms.
         let uniform_buffer = self.create_uniform_buffer(&render_state.uniforms);
         for (&(uniform, ref uniform_data), buffer_range) in
                 render_state.uniforms.iter().zip(uniform_buffer.ranges.iter()) {
@@ -1099,6 +1101,33 @@ impl MetalDevice {
                                           buffer_range,
                                           render_command_encoder,
                                           render_state);
+            }
+        }
+
+        // Set storage buffers.
+        for &(storage_buffer_id, storage_buffer_binding) in render_state.storage_buffers {
+            self.populate_storage_buffer_indices_if_necessary(storage_buffer_id,
+                                                              &render_state.program);
+
+            let indices = storage_buffer_id.indices.borrow_mut();
+            let indices = indices.as_ref().unwrap();
+            let (vertex_indices, fragment_indices) = match indices.0 {
+                ProgramKind::Raster { ref vertex, ref fragment } => (vertex, fragment),
+                _ => unreachable!(),
+            };
+
+            //println!("shader storage buffer bindings: V {:?} F {:?}", vertex_indices, fragment_indices);
+
+            if let Some(vertex_index) = *vertex_indices {
+                if let Some(ref buffer) = *storage_buffer_binding.buffer.borrow() {
+                    render_command_encoder.set_vertex_buffer(vertex_index, Some(buffer), 0);
+                }
+            }
+            if let Some(fragment_index) = *fragment_indices {
+                if let Some(ref buffer) = *storage_buffer_binding.buffer.borrow() {
+                    //println!("setting fragment shader storage binding to buffer index {}", fragment_index);
+                    render_command_encoder.set_fragment_buffer(fragment_index, Some(buffer), 0);
+                }
             }
         }
     }
@@ -1145,7 +1174,6 @@ impl MetalDevice {
                     compute_command_encoder.set_buffer(index, Some(buffer), 0);
                 }
             }
-
         }
     }
 

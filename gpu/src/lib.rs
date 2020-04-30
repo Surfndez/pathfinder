@@ -247,6 +247,7 @@ pub struct RenderState<'a, D> where D: Device {
     pub uniforms: &'a [(&'a D::Uniform, UniformData)],
     pub textures: &'a [&'a D::Texture],
     pub images: &'a [ImageBinding<'a, D>],
+    pub storage_buffers: &'a [(&'a D::StorageBuffer, &'a D::Buffer)],
     pub viewport: RectI,
     pub options: RenderOptions,
 }

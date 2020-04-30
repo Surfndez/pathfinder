@@ -20,8 +20,8 @@ pub(crate) const TILE_INSTANCE_SIZE: usize = 12;
 const FILL_INSTANCE_SIZE: usize = 8;
 const CLIP_TILE_INSTANCE_SIZE: usize = 8;
 
-pub const MAX_FILLS_PER_BATCH: usize = 0x10000;
-pub const MAX_TILES_PER_BATCH: usize = MASK_TILES_ACROSS as usize * MASK_TILES_DOWN as usize;
+//pub const MAX_FILLS_PER_BATCH: usize = 0x1000000;
+//pub const MAX_TILES_PER_BATCH: usize = MASK_TILES_ACROSS as usize * MASK_TILES_DOWN as usize;
 
 pub struct BlitVertexArray<D> where D: Device {
     pub vertex_array: D::VertexArray,
@@ -152,15 +152,16 @@ impl<D> TileVertexArray<D> where D: Device {
         let vertex_array = device.create_vertex_array();
 
         let tile_offset_attr =
-            device.get_vertex_attr(&tile_program.program, "TileOffset").unwrap();
+            device.get_vertex_attr(&tile_program.common.program, "TileOffset").unwrap();
         let tile_origin_attr =
-            device.get_vertex_attr(&tile_program.program, "TileOrigin").unwrap();
+            device.get_vertex_attr(&tile_program.common.program, "TileOrigin").unwrap();
         let mask_0_tex_coord_attr =
-            device.get_vertex_attr(&tile_program.program, "MaskTexCoord0").unwrap();
+            device.get_vertex_attr(&tile_program.common.program, "MaskTexCoord0").unwrap();
         let mask_backdrop_attr =
-            device.get_vertex_attr(&tile_program.program, "MaskBackdrop").unwrap();
-        let color_attr = device.get_vertex_attr(&tile_program.program, "Color").unwrap();
-        let tile_ctrl_attr = device.get_vertex_attr(&tile_program.program, "TileCtrl").unwrap();
+            device.get_vertex_attr(&tile_program.common.program, "MaskBackdrop").unwrap();
+        let color_attr = device.get_vertex_attr(&tile_program.common.program, "Color").unwrap();
+        let tile_ctrl_attr = device.get_vertex_attr(&tile_program.common.program, "TileCtrl")
+                                   .unwrap();
 
         device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, BufferTarget::Vertex);
         device.configure_vertex_attr(&vertex_array, &tile_offset_attr, &VertexAttrDescriptor {
@@ -378,8 +379,8 @@ impl<D> FillRasterProgram<D> where D: Device {
 pub struct FillComputeProgram<D> where D: Device {
     pub program: D::Program,
     pub dest_uniform: D::Uniform,
-    pub area_lut_uniform: D::Uniform,
     pub first_tile_index_uniform: D::Uniform,
+    pub area_lut_uniform: D::Uniform,
     pub fills_storage_buffer: D::StorageBuffer,
     pub next_fills_storage_buffer: D::StorageBuffer,
     pub fill_tile_map_storage_buffer: D::StorageBuffer,
@@ -410,18 +411,15 @@ impl<D> FillComputeProgram<D> where D: Device {
     }
 }
 
-pub struct TileProgram<D> where D: Device {
+pub struct TileProgramCommon<D> where D: Device {
     pub program: D::Program,
     pub transform_uniform: D::Uniform,
     pub tile_size_uniform: D::Uniform,
     pub texture_metadata_uniform: D::Uniform,
     pub texture_metadata_size_uniform: D::Uniform,
-    pub dest_texture_uniform: D::Uniform,
     pub color_texture_0_uniform: D::Uniform,
     pub color_texture_size_0_uniform: D::Uniform,
     pub color_texture_1_uniform: D::Uniform,
-    pub mask_texture_0_uniform: D::Uniform,
-    pub mask_texture_size_0_uniform: D::Uniform,
     pub gamma_lut_uniform: D::Uniform,
     pub filter_params_0_uniform: D::Uniform,
     pub filter_params_1_uniform: D::Uniform,
@@ -430,43 +428,96 @@ pub struct TileProgram<D> where D: Device {
     pub ctrl_uniform: D::Uniform,
 }
 
-impl<D> TileProgram<D> where D: Device {
-    pub fn new(device: &D, resources: &dyn ResourceLoader) -> TileProgram<D> {
-        let program = device.create_raster_program(resources, "tile");
+pub struct TileProgram<D> where D: Device {
+    pub common: TileProgramCommon<D>,
+    pub mask_texture_0_uniform: D::Uniform,
+    pub dest_texture_uniform: D::Uniform,
+}
+
+pub struct FillTileProgram<D> where D: Device {
+    pub common: TileProgramCommon<D>,
+    pub area_lut_uniform: D::Uniform,
+    pub dest_image_uniform: D::Uniform,
+    pub fills_storage_buffer: D::StorageBuffer,
+    pub next_fills_storage_buffer: D::StorageBuffer,
+    pub fill_tile_map_storage_buffer: D::StorageBuffer,
+    pub tiles_storage_buffer: D::StorageBuffer,
+    pub next_tiles_storage_buffer: D::StorageBuffer,
+    pub first_tiles_storage_buffer: D::StorageBuffer,
+}
+
+impl<D> TileProgramCommon<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader, program: D::Program)
+               -> TileProgramCommon<D> {
         let transform_uniform = device.get_uniform(&program, "Transform");
         let tile_size_uniform = device.get_uniform(&program, "TileSize");
         let texture_metadata_uniform = device.get_uniform(&program, "TextureMetadata");
         let texture_metadata_size_uniform = device.get_uniform(&program, "TextureMetadataSize");
-        let dest_texture_uniform = device.get_uniform(&program, "DestTexture");
         let color_texture_0_uniform = device.get_uniform(&program, "ColorTexture0");
         let color_texture_size_0_uniform = device.get_uniform(&program, "ColorTextureSize0");
         let color_texture_1_uniform = device.get_uniform(&program, "ColorTexture1");
-        let mask_texture_0_uniform = device.get_uniform(&program, "MaskTexture0");
-        let mask_texture_size_0_uniform = device.get_uniform(&program, "MaskTextureSize0");
         let gamma_lut_uniform = device.get_uniform(&program, "GammaLUT");
         let filter_params_0_uniform = device.get_uniform(&program, "FilterParams0");
         let filter_params_1_uniform = device.get_uniform(&program, "FilterParams1");
         let filter_params_2_uniform = device.get_uniform(&program, "FilterParams2");
         let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
         let ctrl_uniform = device.get_uniform(&program, "Ctrl");
-        TileProgram {
+        TileProgramCommon {
             program,
             transform_uniform,
             tile_size_uniform,
             texture_metadata_uniform,
             texture_metadata_size_uniform,
-            dest_texture_uniform,
             color_texture_0_uniform,
             color_texture_size_0_uniform,
             color_texture_1_uniform,
-            mask_texture_0_uniform,
-            mask_texture_size_0_uniform,
             gamma_lut_uniform,
             filter_params_0_uniform,
             filter_params_1_uniform,
             filter_params_2_uniform,
             framebuffer_size_uniform,
             ctrl_uniform,
+        }
+    }
+}
+
+impl<D> TileProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> TileProgram<D> {
+        let program = device.create_raster_program(resources, "tile");
+        let common = TileProgramCommon::new(device, resources, program);
+        let dest_texture_uniform = device.get_uniform(&common.program, "DestTexture");
+        let mask_texture_0_uniform = device.get_uniform(&common.program, "MaskTexture0");
+        TileProgram { common, dest_texture_uniform, mask_texture_0_uniform }
+    }
+}
+
+impl<D> FillTileProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> FillTileProgram<D> {
+        let mut program = device.create_compute_program(resources, "tile_fill");
+        let local_size = ComputeDimensions { x: TILE_WIDTH, y: TILE_HEIGHT / 4, z: 1 };
+        device.set_compute_program_local_size(&mut program, local_size);
+
+        let common = TileProgramCommon::new(device, resources, program);
+        let dest_image_uniform = device.get_uniform(&common.program, "DestImage");
+        let area_lut_uniform = device.get_uniform(&common.program, "AreaLUT");
+        let fills_storage_buffer = device.get_storage_buffer(&common.program, "Fills", 0);
+        let next_fills_storage_buffer = device.get_storage_buffer(&common.program, "NextFills", 1);
+        let fill_tile_map_storage_buffer =
+            device.get_storage_buffer(&common.program, "FillTileMap", 2);
+        let tiles_storage_buffer = device.get_storage_buffer(&common.program, "Tiles", 3);
+        let next_tiles_storage_buffer = device.get_storage_buffer(&common.program, "NextTiles", 4);
+        let first_tiles_storage_buffer =
+            device.get_storage_buffer(&common.program, "FirstTiles", 5);
+        FillTileProgram {
+            common,
+            dest_image_uniform,
+            area_lut_uniform,
+            fills_storage_buffer,
+            next_fills_storage_buffer,
+            fill_tile_map_storage_buffer,
+            tiles_storage_buffer,
+            next_tiles_storage_buffer,
+            first_tiles_storage_buffer,
         }
     }
 }
