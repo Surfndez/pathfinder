@@ -135,7 +135,10 @@ impl<W> DemoApp<W> where W: Window {
         let executor = DemoExecutor::new(options.jobs);
 
         let mut ui_model = DemoUIModel::new(&options);
-        let render_options = RendererOptions { background_color: None };
+        let render_options = RendererOptions {
+            background_color: None,
+            use_compute: options.compute,
+        };
 
         let filter = build_filter(&ui_model);
 
@@ -643,6 +646,7 @@ pub struct Options {
     pub ui: UIVisibility,
     pub background_color: BackgroundColor,
     pub high_performance_gpu: bool,
+    pub compute: bool,
     hidden_field_for_future_proofing: (),
 }
 
@@ -655,6 +659,7 @@ impl Default for Options {
             ui: UIVisibility::All,
             background_color: BackgroundColor::Light,
             high_performance_gpu: false,
+            compute: false,
             hidden_field_for_future_proofing: (),
         }
     }
@@ -708,6 +713,12 @@ impl Options {
                     .help("Use the high-performance (discrete) GPU, if available")
             )
             .arg(
+                Arg::with_name("compute")
+                    .short("c")
+                    .long("compute")
+                    .help("Use compute shaders for certain tasks, if available")
+            )
+            .arg(
                 Arg::with_name("INPUT")
                     .help("Path to the SVG file to render")
                     .index(1),
@@ -742,6 +753,10 @@ impl Options {
 
         if matches.is_present("high-performance-gpu") {
             self.high_performance_gpu = true;
+        }
+
+        if matches.is_present("compute") {
+            self.compute = true;
         }
 
         if let Some(path) = matches.value_of("INPUT") {

@@ -8,6 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use crate::gpu::options::RendererOptions;
 use crate::gpu_data::Fill;
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
 use pathfinder_gpu::{BufferData, BufferTarget, BufferUploadMode, ComputeDimensions, Device, VertexAttrClass};
@@ -332,6 +333,22 @@ impl<D> BlitProgram<D> where D: Device {
         let program = device.create_raster_program(resources, "blit");
         let src_uniform = device.get_uniform(&program, "Src");
         BlitProgram { program, src_uniform }
+    }
+}
+
+pub enum FillProgram<D> where D: Device {
+    Raster(FillRasterProgram<D>),
+    Compute(FillComputeProgram<D>),
+}
+
+impl<D> FillProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader, options: &RendererOptions)
+               -> FillProgram<D> {
+        if options.use_compute {
+            FillProgram::Compute(FillComputeProgram::new(device, resources))
+        } else {
+            FillProgram::Raster(FillRasterProgram::new(device, resources))
+        }
     }
 }
 

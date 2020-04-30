@@ -89,7 +89,10 @@ impl<W> DemoApp<W> where W: Window {
             Mode::ThreeD => None,
             Mode::VR => Some(ColorF::transparent_black()),
         };
-        self.renderer.set_options(RendererOptions { background_color: clear_color });
+        self.renderer.set_options(RendererOptions {
+            background_color: clear_color,
+            use_compute: self.options.compute,
+        });
 
         scene_count
     }
