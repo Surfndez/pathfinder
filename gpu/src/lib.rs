@@ -21,6 +21,7 @@ use pathfinder_geometry::transform3d::Transform4F;
 use pathfinder_geometry::vector::{Vector2I, vec2i};
 use pathfinder_resources::ResourceLoader;
 use pathfinder_simd::default::{F32x2, F32x4, I32x2};
+use std::ops::Range;
 use std::os::raw::c_void;
 use std::time::Duration;
 
@@ -90,6 +91,9 @@ pub trait Device: Sized {
     fn upload_to_texture(&self, texture: &Self::Texture, rect: RectI, data: TextureDataRef);
     fn read_pixels(&self, target: &RenderTarget<Self>, viewport: RectI)
                    -> Self::TextureDataReceiver;
+    // TODO(pcwalton): Make this async.
+    fn read_buffer(&self, buffer: &Self::Buffer, target: BufferTarget, range: Range<usize>)
+                   -> Vec<u32>;
     fn begin_commands(&self);
     fn end_commands(&self);
     fn draw_arrays(&self, index_count: u32, render_state: &RenderState<Self>);
@@ -287,6 +291,7 @@ pub struct RenderOptions {
     pub stencil: Option<StencilState>,
     pub clear_ops: ClearOps,
     pub color_mask: bool,
+    pub conservative_rasterization: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -366,6 +371,7 @@ impl Default for RenderOptions {
             stencil: None,
             clear_ops: ClearOps::default(),
             color_mask: true,
+            conservative_rasterization: false,
         }
     }
 }

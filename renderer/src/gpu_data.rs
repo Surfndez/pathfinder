@@ -17,7 +17,7 @@ use crate::tile_map::DenseTileMap;
 use pathfinder_color::ColorU;
 use pathfinder_content::effects::{BlendMode, Filter};
 use pathfinder_content::render_target::RenderTargetId;
-use pathfinder_geometry::line_segment::LineSegmentU16;
+use pathfinder_geometry::line_segment::{LineSegment2F, LineSegmentU16};
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::Vector2I;
@@ -63,6 +63,12 @@ pub enum RenderCommand {
 
     // Upload texture metadata.
     UploadTextureMetadata(Vec<TextureMetadataEntry>),
+
+    // Bin paths into tiles.
+    BinPaths {
+        segments: Vec<LineSegment2F>,
+        path_tile_bounds: Vec<RectI>,
+    },
 
     // Adds fills to the queue.
     AddFills(Vec<Fill>),
@@ -357,6 +363,9 @@ impl Debug for RenderCommand {
             }
             RenderCommand::UploadTextureMetadata(ref metadata) => {
                 write!(formatter, "UploadTextureMetadata(x{})", metadata.len())
+            }
+            RenderCommand::BinPaths { ref segments, ref path_tile_bounds } => {
+                write!(formatter, "BinPaths(Sx{}, Tx{})", segments.len(), path_tile_bounds.len())
             }
             RenderCommand::AddFills(ref fills) => {
                 write!(formatter, "AddFills(x{})", fills.len())

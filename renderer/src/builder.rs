@@ -28,7 +28,9 @@ use fxhash::FxHashMap;
 use instant::Instant;
 use pathfinder_content::effects::{BlendMode, Filter};
 use pathfinder_content::fill::FillRule;
+use pathfinder_content::outline::ContourIterFlags;
 use pathfinder_content::render_target::RenderTargetId;
+use pathfinder_content::segment::Segment;
 use pathfinder_geometry::line_segment::{LineSegment2F, LineSegmentU16};
 use pathfinder_geometry::rect::{RectF, RectI};
 use pathfinder_geometry::transform2d::Transform2F;
@@ -165,13 +167,40 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
             })
         });
 
-        /*
-        let mut dense_tile_count = 0;
-        for path in &built_draw_paths {
-            dense_tile_count += path.path.tiles.data.len();
+        let (mut segments, mut path_tile_bounds) = (vec![], vec![]);
+        for path_index in 0..draw_path_count {
+            let path_object = &self.scene.paths[path_index];
+            let outline = self.scene.apply_render_options(path_object.outline(),
+                                                          &self.built_options);
+
+            path_tile_bounds.push(tiles::round_rect_out_to_tile_bounds(outline.bounds()));
+
+            for contour in outline.contours() {
+                for segment in contour.iter(ContourIterFlags::empty()) {
+                    flatten_segment(&mut segments, &segment);
+                }
+            }
+
+            fn flatten_segment(segments: &mut Vec<LineSegment2F>, segment: &Segment) {
+                // TODO(pcwalton): Stop degree elevating.
+                if segment.is_quadratic() {
+                    let cubic = segment.to_cubic();
+                    return flatten_segment(segments, &cubic);
+                }
+
+                if segment.is_line() ||
+                        (segment.is_cubic() && segment.as_cubic_segment().is_flat(0.25)) {
+                    segments.push(segment.baseline);
+                    return;
+                }
+
+                // TODO(pcwalton): Use a smarter flattening algorithm.
+                let (prev, next) = segment.split(0.5);
+                flatten_segment(segments, &prev);
+                flatten_segment(segments, &next);
+            }
         }
-        println!("dense tile count={}", dense_tile_count);
-        */
+        self.listener.send(RenderCommand::BinPaths { segments, path_tile_bounds });
 
         self.finish_building(&paint_metadata, built_draw_paths, built_clip_paths);
 

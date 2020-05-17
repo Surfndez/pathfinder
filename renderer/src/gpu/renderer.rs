@@ -10,7 +10,7 @@
 
 use crate::gpu::debug::DebugUIPresenter;
 use crate::gpu::options::{DestFramebuffer, RendererGPUFeatures, RendererOptions};
-use crate::gpu::shaders::{BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
+use crate::gpu::shaders::{BinProgram, BinVertexArray, BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
 use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram, ClipTileCopyVertexArray};
 use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
@@ -40,7 +40,7 @@ use pathfinder_gpu::{FeatureLevel, ImageAccess, Primitive, RenderOptions, Render
 use pathfinder_gpu::{StencilFunc, StencilState, TextureBinding, TextureDataRef, TextureFormat};
 use pathfinder_gpu::{TextureSamplingFlags, UniformBinding, UniformData};
 use pathfinder_resources::ResourceLoader;
-use pathfinder_simd::default::{F32x2, F32x4, I32x2};
+use pathfinder_simd::default::{F32x2, F32x4, I32x2, I32x4};
 use std::collections::VecDeque;
 use std::f32;
 use std::marker::PhantomData;
@@ -120,6 +120,7 @@ pub struct Renderer<D> where D: Device {
     tile_post_programs: Option<TilePostPrograms<D>>,
     stencil_program: StencilProgram<D>,
     reprojection_program: ReprojectionProgram<D>,
+    bin_program: BinProgram<D>,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
     fill_tile_map: Vec<i32>,
@@ -171,7 +172,13 @@ struct Frame<D> where D: Device {
     allocated_alpha_tile_page_count: u32,
     mask_framebuffer: Option<D::Framebuffer>,
     stencil_vertex_array: StencilVertexArray<D>,
+    bin_vertex_array: BinVertexArray<D>,
     reprojection_vertex_array: ReprojectionVertexArray<D>,
+    bin_path_tile_info_buffer: D::Buffer,
+    bin_metadata_buffer: D::Buffer,
+    bin_fills_buffer: D::Buffer,
+    bin_alpha_tiles_buffer: D::Buffer,
+    bin_alpha_tile_map_buffer: D::Buffer,
     dest_blend_framebuffer: D::Framebuffer,
     intermediate_dest_framebuffer: D::Framebuffer,
     texture_metadata_texture: D::Texture,
@@ -204,6 +211,7 @@ impl<D> Renderer<D> where D: Device {
             (true, FeatureLevel::D3D11) => Some(TilePostPrograms::new(&device, resources)),
             _ => None,
         };
+        let bin_program = BinProgram::new(&device, resources);
 
         let area_lut_texture =
             device.create_texture_from_png(resources, "area-lut", TextureFormat::RGBA8);
@@ -232,6 +240,7 @@ impl<D> Renderer<D> where D: Device {
                                      &tile_clip_copy_program,
                                      &reprojection_program,
                                      &stencil_program,
+                                     &bin_program,
                                      &quad_vertex_positions_buffer,
                                      &quad_vertex_indices_buffer,
                                      window_size);
@@ -243,6 +252,7 @@ impl<D> Renderer<D> where D: Device {
                                     &tile_clip_copy_program,
                                     &reprojection_program,
                                     &stencil_program,
+                                    &bin_program,
                                     &quad_vertex_positions_buffer,
                                     &quad_vertex_indices_buffer,
                                     window_size);
@@ -260,6 +270,7 @@ impl<D> Renderer<D> where D: Device {
             tile_clip_combine_program,
             tile_clip_copy_program,
             tile_post_programs,
+            bin_program,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             fill_tile_map: vec![],
@@ -331,6 +342,9 @@ impl<D> Renderer<D> where D: Device {
             }
             RenderCommand::UploadTextureMetadata(ref metadata) => {
                 self.upload_texture_metadata(metadata)
+            }
+            RenderCommand::BinPaths { ref segments, ref path_tile_bounds } => {
+                self.bin_segments(segments, path_tile_bounds);
             }
             RenderCommand::AddFills(ref fills) => self.add_fills(fills),
             RenderCommand::FlushFills => {
@@ -687,6 +701,103 @@ impl<D> Renderer<D> where D: Device {
                                     BufferTarget::Index);
 
         self.back_frame.quads_vertex_indices_length = length;
+    }
+
+    fn bin_segments(&mut self, segments: &[LineSegment2F], path_tile_bounds: &[RectI]) {
+        self.device.allocate_buffer(&self.back_frame.bin_vertex_array.vertex_buffer,
+                                    BufferData::Memory(segments),
+                                    BufferTarget::Vertex);
+
+        //println!("{:?}", segments);
+
+        let main_viewport = self.main_viewport();
+
+        let (mut path_tile_info, mut tile_map) = (vec![], vec![]);
+        for tile_bounds in path_tile_bounds {
+            path_tile_info.push(PathTileInfo {
+                tile_bounds: *tile_bounds,
+                tile_start_index: tile_map.len() as u32,
+                pad0: 0,
+                pad1: 0,
+                pad2: 0,
+            });
+            for _ in 0..(tile_bounds.width() as usize * tile_bounds.height() as usize) {
+                tile_map.push(0);
+            }
+        }
+
+        self.device.allocate_buffer(&self.back_frame.bin_path_tile_info_buffer,
+                                    BufferData::Memory(&path_tile_info),
+                                    BufferTarget::Storage);
+        self.device.allocate_buffer::<u32>(&self.back_frame.bin_metadata_buffer,
+                                           BufferData::Memory(&[0; 4]),
+                                           BufferTarget::Storage);
+        self.device.allocate_buffer::<u32>(&self.back_frame.bin_fills_buffer,
+                                           BufferData::Uninitialized(3 * 4 * 1024 * 1024),
+                                           BufferTarget::Storage);
+        self.device.allocate_buffer::<I32x4>(&self.back_frame.bin_alpha_tiles_buffer,
+                                             BufferData::Uninitialized(tile_map.len()),
+                                             BufferTarget::Storage);
+        self.device.allocate_buffer(&self.back_frame.bin_alpha_tile_map_buffer,
+                                    BufferData::Memory(&tile_map),
+                                    BufferTarget::Storage);
+
+        println!("main_viewport={:?}", main_viewport);
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        self.device.draw_elements_instanced(6, segments.len() as u32, &RenderState {
+            target: &RenderTarget::Default,
+            program: &self.bin_program.program,
+            vertex_array: &self.back_frame.bin_vertex_array.vertex_array,
+            primitive: Primitive::Triangles,
+            textures: &[],
+            uniforms: &[
+                (&self.bin_program.framebuffer_size_uniform,
+                 UniformData::IVec2(main_viewport.size().0)),
+            ],
+            images: &[],
+            storage_buffers: &[
+                (&self.bin_program.path_tile_info_storage_buffer,
+                 &self.back_frame.bin_path_tile_info_buffer),
+                (&self.bin_program.metadata_storage_buffer, &self.back_frame.bin_metadata_buffer),
+                (&self.bin_program.fills_storage_buffer, &self.back_frame.bin_fills_buffer),
+                (&self.bin_program.alpha_tiles_storage_buffer,
+                 &self.back_frame.bin_alpha_tiles_buffer),
+                (&self.bin_program.alpha_tile_map_storage_buffer,
+                 &self.back_frame.bin_alpha_tile_map_buffer),
+            ],
+            viewport: main_viewport,
+            options: RenderOptions::default(),
+        });
+
+        self.device.end_timer_query(&timer_query);
+
+        //let duration = self.device.recv_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().tile_times.push(TimerFuture::new(timer_query));
+
+                                                      /*
+        let metadata_buffer = self.device.read_buffer(&self.back_frame.bin_metadata_buffer,
+                                                      BufferTarget::Storage,
+                                                      0..4);
+        println!("GPU binning: fill count={} alpha tile count={}",
+                 metadata_buffer[0],
+                 metadata_buffer[1]);
+
+        println!("binning {} segments took {} ms",
+                 segments.len(),
+                 duration.as_secs_f64() * 1000.0);
+                 */
+
+        #[repr(C)]
+        struct PathTileInfo {
+            tile_bounds: RectI,
+            tile_start_index: u32,
+            pad0: u32,
+            pad1: u32,
+            pad2: u32,
+        }
     }
 
     fn add_fills(&mut self, fill_batch: &[Fill]) {
@@ -1727,6 +1838,7 @@ impl<D> Frame<D> where D: Device {
            tile_clip_copy_program: &ClipTileCopyProgram<D>,
            reprojection_program: &ReprojectionProgram<D>,
            stencil_program: &StencilProgram<D>,
+           bin_program: &BinProgram<D>,
            quad_vertex_positions_buffer: &D::Buffer,
            quad_vertex_indices_buffer: &D::Buffer,
            window_size: Vector2I)
@@ -1750,6 +1862,10 @@ impl<D> Frame<D> where D: Device {
                                                                      &quad_vertex_positions_buffer,
                                                                      &quad_vertex_indices_buffer);
         let stencil_vertex_array = StencilVertexArray::new(device, &stencil_program);
+        let bin_vertex_array = BinVertexArray::new(device,
+                                                   &bin_program,
+                                                   &quad_vertex_positions_buffer,
+                                                   &quad_vertex_indices_buffer);
 
         let fill_vertex_storage_allocator = StorageAllocator::new(MIN_FILL_STORAGE_CLASS);
         let fill_tile_map_storage_allocator =
@@ -1786,6 +1902,12 @@ impl<D> Frame<D> where D: Device {
                                       BufferData::Uninitialized(z_buffer_length),
                                       BufferTarget::Storage);
 
+        let bin_path_tile_info_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let bin_metadata_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let bin_fills_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let bin_alpha_tiles_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let bin_alpha_tile_map_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+
         Frame {
             blit_vertex_array,
             blit_buffer_vertex_array,
@@ -1797,6 +1919,7 @@ impl<D> Frame<D> where D: Device {
             clip_vertex_storage_allocator,
             reprojection_vertex_array,
             stencil_vertex_array,
+            bin_vertex_array,
             quads_vertex_indices_buffer,
             quads_vertex_indices_length: 0,
             texture_metadata_texture,
@@ -1806,6 +1929,11 @@ impl<D> Frame<D> where D: Device {
             allocated_alpha_tile_page_count: 0,
             tile_batch_info: VecMap::new(),
             mask_framebuffer: None,
+            bin_path_tile_info_buffer,
+            bin_metadata_buffer,
+            bin_fills_buffer,
+            bin_alpha_tiles_buffer,
+            bin_alpha_tile_map_buffer,
             intermediate_dest_framebuffer,
             dest_blend_framebuffer,
             backdrops_buffer,

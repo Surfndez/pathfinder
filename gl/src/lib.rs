@@ -21,19 +21,22 @@ use pathfinder_geometry::vector::Vector2I;
 use pathfinder_gpu::{BlendFactor, BlendOp, BufferData, BufferTarget, BufferUploadMode, ClearOps};
 use pathfinder_gpu::{ComputeDimensions, ComputeState, DepthFunc, Device, FeatureLevel};
 use pathfinder_gpu::{ImageAccess, ImageBinding, Primitive, ProgramKind, RenderOptions};
-use pathfinder_gpu::{RenderState, RenderTarget, ShaderKind, StencilFunc, TextureBinding, TextureData};
-use pathfinder_gpu::{TextureDataRef, TextureFormat, TextureSamplingFlags, UniformData};
+use pathfinder_gpu::{RenderState, RenderTarget, ShaderKind, StencilFunc, TextureBinding};
+use pathfinder_gpu::{TextureData, TextureDataRef, TextureFormat, TextureSamplingFlags, UniformData};
 use pathfinder_gpu::{VertexAttrClass, VertexAttrDescriptor, VertexAttrType};
 use pathfinder_resources::ResourceLoader;
 use pathfinder_simd::default::F32x4;
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::mem;
+use std::ops::Range;
 use std::ptr;
 use std::str;
 use std::time::Duration;
 
 const DUMMY_TEXTURE_LENGTH: i32 = 16;
+
+const GL_CONSERVATIVE_RASTERIZATION_NV: GLenum = 0x9346;
 
 pub struct GLDevice {
     version: GLVersion,
@@ -195,6 +198,15 @@ impl GLDevice {
             // Set color mask.
             let color_mask = render_options.color_mask as GLboolean;
             gl::ColorMask(color_mask, color_mask, color_mask, color_mask); ck();
+
+            // Set conservative rasterization mode.
+            //
+            // TODO(pcwalton): Choose appropriate extension.
+            if render_options.conservative_rasterization {
+                gl::Enable(GL_CONSERVATIVE_RASTERIZATION_NV); ck();
+            } else {
+                gl::Disable(GL_CONSERVATIVE_RASTERIZATION_NV); ck();
+            }
         }
     }
 
@@ -756,6 +768,20 @@ impl Device for GLDevice {
         }
     }
 
+    fn read_buffer(&self, buffer: &GLBuffer, target: BufferTarget, range: Range<usize>)
+                   -> Vec<u32> {
+        let mut dest = vec![0; range.end - range.start];
+        let gl_target = target.to_gl_target();
+        unsafe {
+            gl::BindBuffer(gl_target, buffer.gl_buffer); ck();
+            gl::GetBufferSubData(gl_target,
+                                 (range.start as GLintptr) * 4,
+                                 ((range.end - range.start) * 4) as GLsizeiptr,
+                                 dest.as_mut_ptr() as *mut GLvoid); ck();
+        }
+        dest
+    }
+
     fn begin_commands(&self) {
         // TODO(pcwalton): Add some checks in debug mode to make sure render commands are bracketed
         // by these?
@@ -972,7 +998,7 @@ impl GLDevice {
 
     fn unbind_image(&self, unit: u32) {
         unsafe {
-            gl::BindImageTexture(unit, 0, 0, gl::FALSE, 0, gl::READ_ONLY, 0); ck();
+            gl::BindImageTexture(unit, 0, 0, gl::FALSE, 0, gl::READ_ONLY, gl::RGBA8); ck();
         }
     }
 
@@ -1413,7 +1439,7 @@ impl TextureFormatExt for TextureFormat {
             TextureFormat::R8 => gl::R8 as GLint,
             TextureFormat::R16F => gl::R16F as GLint,
             TextureFormat::R32I => gl::R32I as GLint,
-            TextureFormat::RGBA8 => gl::RGBA as GLint,
+            TextureFormat::RGBA8 => gl::RGBA8 as GLint,
             TextureFormat::RGBA16F => gl::RGBA16F as GLint,
             TextureFormat::RGBA32F => gl::RGBA32F as GLint,
         }

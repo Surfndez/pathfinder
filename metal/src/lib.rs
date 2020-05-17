@@ -655,6 +655,12 @@ impl Device for MetalDevice {
         texture_data_receiver
     }
 
+    fn read_buffer(&self, buffer: &MetalBuffer, _: BufferTarget, range: Range<usize>)
+                   -> Vec<u32> {
+        // TODO(pcwalton)
+        vec![]
+    }
+
     fn begin_commands(&self) {
         self.command_buffers.borrow_mut().push(self.command_queue.new_command_buffer().retain());
     }
