@@ -9,7 +9,7 @@
 // except according to those terms.
 
 use crate::builder::{BuiltPath, ObjectBuilder};
-use crate::gpu_data::{AlphaTileId, TileObjectPrimitive};
+use crate::gpu_data::TileObjectPrimitive;
 use crate::paint::{PaintId, PaintMetadata};
 use pathfinder_content::effects::BlendMode;
 use pathfinder_content::fill::FillRule;
@@ -168,13 +168,6 @@ impl<'a> PackedTile<'a> {
 
 pub fn round_rect_out_to_tile_bounds(rect: RectF) -> RectI {
     (rect * vec2f(1.0 / TILE_WIDTH as f32, 1.0 / TILE_HEIGHT as f32)).round_out().to_i32()
-}
-
-impl Default for TileObjectPrimitive {
-    #[inline]
-    fn default() -> TileObjectPrimitive {
-        TileObjectPrimitive { backdrop: 0, alpha_tile_id: AlphaTileId::invalid() }
-    }
 }
 
 impl TileObjectPrimitive {

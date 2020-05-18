@@ -11,7 +11,7 @@
 //! Software occlusion culling.
 
 use crate::builder::Occluder;
-use crate::gpu_data::{Tile, TileBatch};
+use crate::gpu_data::{AlphaTileId, TileBatch, TileObjectPrimitive};
 use crate::paint::{PaintId, PaintMetadata};
 use crate::tile_map::DenseTileMap;
 use crate::tiles;
@@ -59,6 +59,7 @@ impl ZBuffer {
         }
     }
 
+    // TODO(pcwalton): Don't create a separate buffer.
     pub(crate) fn build_solid_tiles(&self, paint_metadata: &[PaintMetadata]) -> SolidTiles {
         let mut solid_tiles = SolidTiles { batches: vec![] };
 
@@ -99,23 +100,23 @@ impl ZBuffer {
             }
 
             let batch = solid_tiles.batches.last_mut().unwrap();
-            batch.tiles.push(Tile::new_solid_from_paint_id(tile_position, paint_id));
+            batch.tiles.push(TileObjectPrimitive::new_solid_from_paint_id(tile_position,
+                                                                          paint_id));
         }
 
         solid_tiles
     }
 }
 
-impl Tile {
-    pub(crate) fn new_solid_from_paint_id(tile_origin: Vector2I, paint_id: PaintId) -> Tile {
-        Tile {
+impl TileObjectPrimitive {
+    pub(crate) fn new_solid_from_paint_id(tile_origin: Vector2I, paint_id: PaintId)
+                                          -> TileObjectPrimitive {
+        TileObjectPrimitive {
             tile_x: tile_origin.x() as i16,
             tile_y: tile_origin.y() as i16,
-            mask_0_backdrop: 0,
-            mask_0_u: 0,
-            mask_0_v: 0,
+            backdrop: 0,
+            alpha_tile_id: AlphaTileId(0),
             ctrl: 0,
-            pad: 0,
             color: paint_id.0,
         }
     }

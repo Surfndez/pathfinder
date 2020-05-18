@@ -105,7 +105,7 @@ pub struct TextureLocation {
 
 #[derive(Clone, Debug)]
 pub struct TileBatch {
-    pub tiles: Vec<Tile>,
+    pub tiles: Vec<TileObjectPrimitive>,
     pub color_texture: Option<TileBatchTexture>,
     pub filter: Filter,
     pub blend_mode: BlendMode,
@@ -127,11 +127,17 @@ pub struct FillObjectPrimitive {
     pub tile_y: i16,
 }
 
+// TODO(pcwalton): Pack better.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct TileObjectPrimitive {
+    // TODO(pcwalton): Maybe remove these in favor of path ID?
+    pub tile_x: i16,
+    pub tile_y: i16,
     pub alpha_tile_id: AlphaTileId,
+    pub color: u16,
     pub backdrop: i8,
+    pub ctrl: u8,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -187,6 +193,7 @@ pub struct Clip {
     pub pad_1: u16,
 }
 
+/*
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct Tile {
@@ -199,6 +206,7 @@ pub struct Tile {
     pub color: u16,
     pub ctrl: u16,
 }
+*/
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct AlphaTileId(pub u32);

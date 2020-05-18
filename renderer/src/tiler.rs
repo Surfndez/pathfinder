@@ -11,7 +11,7 @@
 //! Implements the fast lattice-clipping algorithm from Nehab and Hoppe, "Random-Access Rendering
 //! of General Vector Graphics" 2006.
 
-use crate::builder::{ObjectBuilder, Occluder, SceneBuilder, SolidTiles};
+use crate::builder::{ObjectBuilder, Occluder, SceneBuilder};
 use crate::tiles::{PackedTile, TILE_HEIGHT, TILE_WIDTH, TileType, TilingPathInfo};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::outline::{ContourIterFlags, Outline};
@@ -89,30 +89,32 @@ impl<'a, 'b> Tiler<'a, 'b> {
 
             match packed_tile.tile_type {
                 TileType::Solid => {
-                    match self.object_builder.built_path.solid_tiles {
-                        SolidTiles::Occluders(ref mut occluders) => {
-                            occluders.push(Occluder::new(packed_tile.tile_coords));
-                        }
-                        SolidTiles::Regular(ref mut solid_tiles) => {
-                            packed_tile.add_to(solid_tiles,
-                                               &mut self.object_builder.built_path.clip_tiles,
-                                               &draw_tiling_path_info,
-                                               &self.scene_builder);
-                        }
+                    if let Some(ref mut occluders) = self.object_builder.built_path.occluders {
+                        occluders.push(Occluder::new(packed_tile.tile_coords));
+                        /*
+                        packed_tile.add_to(solid_tiles,
+                                            &mut self.object_builder.built_path.clip_tiles,
+                                            &draw_tiling_path_info,
+                                            &self.scene_builder);
+                        */
                     }
                 }
                 TileType::SingleMask => {
                     debug_assert_ne!(packed_tile.draw_tile.alpha_tile_id.page(), !0);
+                    /*
                     packed_tile.add_to(&mut self.object_builder.built_path.single_mask_tiles,
                                        &mut self.object_builder.built_path.clip_tiles,
                                        &draw_tiling_path_info,
                                        &self.scene_builder);
+                    */
                 }
                 TileType::Empty if blend_mode_is_destructive => {
+                    /*
                     packed_tile.add_to(&mut self.object_builder.built_path.empty_tiles,
                                        &mut self.object_builder.built_path.clip_tiles,
                                        &draw_tiling_path_info,
                                        &self.scene_builder);
+                    */
                 }
                 TileType::Empty => {
                     // Just cull.

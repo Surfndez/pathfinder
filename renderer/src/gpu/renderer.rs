@@ -18,7 +18,7 @@ use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertex
 use crate::gpu::shaders::{TileProgram, TileVertexArray};
 use crate::gpu_data::{ClipBatch, ClipBatchKey, ClipBatchKind, Fill, FillBatchEntry, RenderCommand};
 use crate::gpu_data::{TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
-use crate::gpu_data::{Tile, TileBatchTexture};
+use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::BoundingQuad;
 use crate::paint::PaintCompositeOp;
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
@@ -507,8 +507,8 @@ impl<D> Renderer<D> where D: Device {
         self.device.upload_to_texture(texture, rect, TextureDataRef::F16(&texels));
     }
 
-    fn upload_tiles(&mut self, tiles: &[Tile]) -> StorageID {
-        debug_assert!(tiles.len() <= MAX_TILES_PER_BATCH);
+    fn upload_tiles(&mut self, tiles: &[TileObjectPrimitive]) -> StorageID {
+        //debug_assert!(tiles.len() <= MAX_TILES_PER_BATCH);
 
         let tile_program = &self.tile_program;
         let tile_copy_program = &self.tile_copy_program;
@@ -1570,9 +1570,9 @@ impl<D> TileVertexStorage<D> where D: Device {
            quad_vertex_indices_buffer: &D::Buffer)
            -> TileVertexStorage<D> {
         let vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-        device.allocate_buffer::<Tile>(&vertex_buffer,
-                                       BufferData::Uninitialized(size as usize),
-                                       BufferTarget::Vertex);
+        device.allocate_buffer::<TileObjectPrimitive>(&vertex_buffer,
+                                                      BufferData::Uninitialized(size as usize),
+                                                      BufferTarget::Vertex);
         let tile_vertex_array = TileVertexArray::new(device,
                                                      &tile_program,
                                                      &vertex_buffer,

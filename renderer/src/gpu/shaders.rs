@@ -186,10 +186,9 @@ impl<D> TileVertexArray<D> where D: Device {
             device.get_vertex_attr(&tile_program.program, "TileOrigin").unwrap();
         let mask_0_tex_coord_attr =
             device.get_vertex_attr(&tile_program.program, "MaskTexCoord0").unwrap();
-        let mask_backdrop_attr =
-            device.get_vertex_attr(&tile_program.program, "MaskBackdrop").unwrap();
+        let backdrop_ctrl_attr =
+            device.get_vertex_attr(&tile_program.program, "BackdropCtrl").unwrap();
         let color_attr = device.get_vertex_attr(&tile_program.program, "Color").unwrap();
-        let tile_ctrl_attr = device.get_vertex_attr(&tile_program.program, "TileCtrl").unwrap();
 
         device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, BufferTarget::Vertex);
         device.configure_vertex_attr(&vertex_array, &tile_offset_attr, &VertexAttrDescriptor {
@@ -212,20 +211,11 @@ impl<D> TileVertexArray<D> where D: Device {
             buffer_index: 1,
         });
         device.configure_vertex_attr(&vertex_array, &mask_0_tex_coord_attr, &VertexAttrDescriptor {
-            size: 2,
+            size: 4,
             class: VertexAttrClass::Int,
             attr_type: VertexAttrType::U8,
             stride: TILE_INSTANCE_SIZE,
             offset: 4,
-            divisor: 1,
-            buffer_index: 1,
-        });
-        device.configure_vertex_attr(&vertex_array, &mask_backdrop_attr, &VertexAttrDescriptor {
-            size: 2,
-            class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::I8,
-            stride: TILE_INSTANCE_SIZE,
-            offset: 6,
             divisor: 1,
             buffer_index: 1,
         });
@@ -238,10 +228,10 @@ impl<D> TileVertexArray<D> where D: Device {
             divisor: 1,
             buffer_index: 1,
         });
-        device.configure_vertex_attr(&vertex_array, &tile_ctrl_attr, &VertexAttrDescriptor {
-            size: 1,
+        device.configure_vertex_attr(&vertex_array, &backdrop_ctrl_attr, &VertexAttrDescriptor {
+            size: 2,
             class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::I16,
+            attr_type: VertexAttrType::I8,
             stride: TILE_INSTANCE_SIZE,
             offset: 10,
             divisor: 1,
