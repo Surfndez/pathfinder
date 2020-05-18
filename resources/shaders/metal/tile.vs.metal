@@ -28,8 +28,9 @@ vertex main0_out main0(main0_in in [[stage_in]], constant int2& uTextureMetadata
     float2 tileOrigin = float2(in.aTileOrigin);
     float2 tileOffset = float2(in.aTileOffset);
     float2 position = (tileOrigin + tileOffset) * uTileSize;
-    float2 maskTexCoord0 = (float2(in.aMaskTexCoord0.xy) + tileOffset) * uTileSize;
-    if (float(in.aMaskTexCoord0.w) != 0.0)
+    uint2 maskTileCoord = uint2(in.aMaskTexCoord0.x, in.aMaskTexCoord0.y + (256u * in.aMaskTexCoord0.z));
+    float2 maskTexCoord0 = (float2(maskTileCoord) + tileOffset) * uTileSize;
+    if (in.aMaskTexCoord0.w != 0u)
     {
         position = float2(0.0);
     }

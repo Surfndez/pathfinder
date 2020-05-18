@@ -151,7 +151,8 @@ struct Frame<D> where D: Device {
     tile_vertex_storage_allocator: StorageAllocator<D, TileVertexStorage<D>>,
     quads_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_length: usize,
-    alpha_tile_pages: FxHashMap<u16, AlphaTilePage<D>>,
+    alpha_tile_pages: FxHashMap<u16, AlphaTilePage>,
+    mask_framebuffer: Option<D::Framebuffer>,
     tile_clip_vertex_array: ClipTileVertexArray<D>,
     stencil_vertex_array: StencilVertexArray<D>,
     reprojection_vertex_array: ReprojectionVertexArray<D>,
@@ -258,9 +259,6 @@ impl<D> Renderer<D> where D: Device {
 
     pub fn begin_scene(&mut self) {
         self.back_frame.framebuffer_flags = FramebufferFlags::empty();
-        for alpha_tile_page in self.back_frame.alpha_tile_pages.values_mut() {
-            alpha_tile_page.framebuffer_is_dirty = false;
-        }
 
         self.device.begin_commands();
         self.current_timer = Some(PendingTimer::new());
@@ -420,6 +418,29 @@ impl<D> Renderer<D> where D: Device {
         &self.quad_vertex_indices_buffer
     }
 
+    fn reallocate_alpha_tile_pages_if_necessary(&mut self) {
+        let mut alpha_tile_pages_needed = 0;
+        for alpha_tile_key in self.back_frame.alpha_tile_pages.keys() {
+            alpha_tile_pages_needed = alpha_tile_pages_needed.max(*alpha_tile_key as i32 + 1);
+        }
+
+        if let Some(ref current_mask_framebuffer) = self.back_frame.mask_framebuffer {
+            let mask_texture = self.device.framebuffer_texture(current_mask_framebuffer);
+            let mask_texture_size = self.device.texture_size(&mask_texture);
+            let current_alpha_tile_pages = mask_texture_size.y() / MASK_FRAMEBUFFER_HEIGHT;
+            if alpha_tile_pages_needed <= current_alpha_tile_pages {
+                return;
+            }
+        }
+
+        let new_size = vec2i(MASK_FRAMEBUFFER_WIDTH,
+                             MASK_FRAMEBUFFER_HEIGHT * alpha_tile_pages_needed);
+        let mask_texture = self.device.create_texture(TextureFormat::RGBA16F, new_size);
+        self.back_frame.mask_framebuffer = Some(self.device.create_framebuffer(mask_texture));
+
+        // TODO(pcwalton): Copy over old data!
+    }
+
     fn allocate_texture_page(&mut self,
                              page_id: TexturePageId,
                              descriptor: &TexturePageDescriptor) {
@@ -573,8 +594,9 @@ impl<D> Renderer<D> where D: Device {
         for fill_batch_entry in fill_batch {
             let page_index = fill_batch_entry.page;
             if !self.back_frame.alpha_tile_pages.contains_key(&page_index) {
-                let alpha_tile_page = AlphaTilePage::new(&mut self.device);
+                let alpha_tile_page = AlphaTilePage::new();
                 self.back_frame.alpha_tile_pages.insert(page_index, alpha_tile_page);
+                self.reallocate_alpha_tile_pages_if_necessary();
             }
 
             let page = self.back_frame.alpha_tile_pages.get_mut(&page_index).unwrap();
@@ -612,7 +634,7 @@ impl<D> Renderer<D> where D: Device {
             _ => unreachable!(),
         };
 
-        let mask_viewport = self.mask_viewport();
+        let mask_viewport = self.mask_viewport_for_page(page);
 
         let alpha_tile_page = self.back_frame
                                   .alpha_tile_pages
@@ -650,7 +672,9 @@ impl<D> Renderer<D> where D: Device {
                                      BufferTarget::Vertex);
 
         let mut clear_color = None;
-        if !alpha_tile_page.framebuffer_is_dirty {
+        if !self.back_frame
+                .framebuffer_flags
+                .contains(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY) {
             clear_color = Some(ColorF::default());
         };
 
@@ -659,7 +683,7 @@ impl<D> Renderer<D> where D: Device {
 
         debug_assert!(buffered_fills.len() <= u32::MAX as usize);
         self.device.draw_elements_instanced(6, buffered_fills.len() as u32, &RenderState {
-            target: &RenderTarget::Framebuffer(&alpha_tile_page.framebuffer),
+            target: &RenderTarget::Framebuffer(self.back_frame.mask_framebuffer.as_ref().unwrap()),
             program: &fill_raster_program.program,
             vertex_array: &fill_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
@@ -689,7 +713,7 @@ impl<D> Renderer<D> where D: Device {
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
 
-        alpha_tile_page.framebuffer_is_dirty = true;
+        self.back_frame.framebuffer_flags.insert(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY);
         buffered_fills.clear();
     }
 
@@ -761,7 +785,11 @@ impl<D> Renderer<D> where D: Device {
                                      &self.fill_tile_map,
                                      BufferTarget::Storage);
 
-        let image_texture = self.device.framebuffer_texture(&alpha_tile_page.framebuffer);
+        let mask_framebuffer = self.back_frame
+                                   .mask_framebuffer
+                                   .as_ref()
+                                   .expect("Where's the mask framebuffer?");
+        let image_texture = self.device.framebuffer_texture(mask_framebuffer);
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
@@ -786,11 +814,13 @@ impl<D> Renderer<D> where D: Device {
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
 
-        alpha_tile_page.framebuffer_is_dirty = true;
+        self.back_frame.framebuffer_flags.insert(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY);
         buffered_fills.clear();
     }
 
     fn draw_clip_batch(&mut self, batch: &ClipBatch) {
+        // TODO(pcwalton): Reenable.
+        /*
         if batch.clips.is_empty() {
             return;
         }
@@ -855,11 +885,8 @@ impl<D> Renderer<D> where D: Device {
             self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
         }
 
-        self.back_frame
-            .alpha_tile_pages
-            .get_mut(&dest_page)
-            .unwrap()
-            .framebuffer_is_dirty = true;
+        self.back_frame.framebuffer_flags.insert(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY);
+        */
     }
 
     fn tile_transform(&self) -> Transform4F {
@@ -911,11 +938,12 @@ impl<D> Renderer<D> where D: Device {
         }
 
         if let Some(alpha_tile_page) = self.back_frame.alpha_tile_pages.get(&tile_page) {
+            let mask_framebuffer =
+                self.back_frame.mask_framebuffer.as_ref().expect("Where's the mask framebuffer?");
+            let mask_texture = self.device.framebuffer_texture(mask_framebuffer);
             uniforms.push((&self.tile_program.mask_texture_size_0_uniform,
-                           UniformData::Vec2(F32x2::new(MASK_FRAMEBUFFER_WIDTH as f32,
-                                                        MASK_FRAMEBUFFER_HEIGHT as f32))));
-            textures.push((&self.tile_program.mask_texture_0,
-                           self.device.framebuffer_texture(&alpha_tile_page.framebuffer)));
+                           UniformData::Vec2(self.device.texture_size(mask_texture).to_f32().0)));
+            textures.push((&self.tile_program.mask_texture_0, mask_texture));
         }
 
         // TODO(pcwalton): Refactor.
@@ -1364,8 +1392,9 @@ impl<D> Renderer<D> where D: Device {
         }
     }
 
-    fn mask_viewport(&self) -> RectI {
-        RectI::new(Vector2I::zero(), vec2i(MASK_FRAMEBUFFER_WIDTH, MASK_FRAMEBUFFER_HEIGHT))
+    fn mask_viewport_for_page(&self, page: u16) -> RectI {
+        RectI::new(vec2i(0, MASK_FRAMEBUFFER_HEIGHT * page as i32),
+                   vec2i(MASK_FRAMEBUFFER_WIDTH, MASK_FRAMEBUFFER_HEIGHT))
     }
 
     fn render_target_location(&self, render_target_id: RenderTargetId) -> TextureLocation {
@@ -1442,6 +1471,7 @@ impl<D> Frame<D> where D: Device {
             quads_vertex_indices_length: 0,
             alpha_tile_pages: FxHashMap::default(),
             texture_metadata_texture,
+            mask_framebuffer: None,
             intermediate_dest_framebuffer,
             dest_blend_framebuffer,
             framebuffer_flags: FramebufferFlags::empty(),
@@ -1942,24 +1972,14 @@ impl BlendModeExt for BlendMode {
     }
 }
 
-struct AlphaTilePage<D> where D: Device {
+struct AlphaTilePage {
     buffered_fills: Vec<Fill>,
     pending_fills: Vec<Fill>,
-    framebuffer: D::Framebuffer,
-    framebuffer_is_dirty: bool,
 }
 
-impl<D> AlphaTilePage<D> where D: Device {
-    fn new(device: &mut D) -> AlphaTilePage<D> {
-        let framebuffer_size = vec2i(MASK_FRAMEBUFFER_WIDTH, MASK_FRAMEBUFFER_HEIGHT);
-        let framebuffer_texture = device.create_texture(TextureFormat::RGBA16F, framebuffer_size);
-        let framebuffer = device.create_framebuffer(framebuffer_texture);
-        AlphaTilePage {
-            buffered_fills: vec![],
-            pending_fills: vec![],
-            framebuffer,
-            framebuffer_is_dirty: false,
-        }
+impl AlphaTilePage {
+    fn new() -> AlphaTilePage {
+        AlphaTilePage { buffered_fills: vec![], pending_fills: vec![] }
     }
 }
 
