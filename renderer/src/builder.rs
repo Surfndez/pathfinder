@@ -424,7 +424,6 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                        color_texture: Option<TileBatchTexture>,
                        blend_mode: BlendMode,
                        filter: Filter) {
-        let mut batch_indices: Vec<BatchIndex> = vec![];
         for built_alpha_tile in &built_alpha_tiles.data {
             // Early cull if possible.
             let alpha_tile_coords = vec2i(built_alpha_tile.tile_x as i32,
@@ -433,34 +432,11 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                 continue;
             }
 
-            // Find an appropriate batch if we can.
-            let mut dest_batch_index = None;
-            let built_alpha_tile_page = (built_alpha_tile.alpha_tile_id.0 >> 16) as u16;
-            if built_alpha_tile_page == !0 {
-                match culled_tiles.display_list.last() {
-                    Some(&CulledDisplayItem::DrawTiles(TileBatch {
-                        tile_page: batch_tile_page,
-                        ..
-                    })) => {
-                        dest_batch_index = Some(BatchIndex {
-                            display_item_index: culled_tiles.display_list.len() - 1,
-                            tile_page: batch_tile_page,
-                        });
-                    }
-                    _ => {}
-                }
-            }
-
-            if dest_batch_index.is_none() {
-                dest_batch_index = batch_indices.iter().filter(|&batch_index| {
-                    batch_index.tile_page == built_alpha_tile_page
-                }).next().cloned();
-            }
-
-            // If no batch was found, try to reuse the last batch in the display list.
+            // Try to reuse the last batch in the display list.
             //
             // TODO(pcwalton): We could try harder to find a batch by taking tile positions into
             // account...
+            let mut dest_batch_index = None;
             if dest_batch_index.is_none() {
                 match culled_tiles.display_list.last() {
                     Some(&CulledDisplayItem::DrawTiles(TileBatch {
@@ -468,17 +444,11 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                         color_texture: ref batch_color_texture,
                         blend_mode: batch_blend_mode,
                         filter: batch_filter,
-                        tile_page: batch_tile_page
                     })) if *batch_color_texture == color_texture &&
                             batch_blend_mode == blend_mode &&
                             batch_filter == filter &&
-                            !batch_blend_mode.needs_readable_framebuffer() &&
-                            batch_tile_page == built_alpha_tile_page => {
-                        dest_batch_index = Some(BatchIndex {
-                            display_item_index: culled_tiles.display_list.len() - 1,
-                            tile_page: batch_tile_page,
-                        });
-                        batch_indices.push(dest_batch_index.unwrap());
+                            !batch_blend_mode.needs_readable_framebuffer() => {
+                        dest_batch_index = Some(culled_tiles.display_list.len() - 1);
                     }
                     _ => {}
                 }
@@ -486,22 +456,17 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
 
             // If it's still the case that no suitable batch was found, then make a new one.
             if dest_batch_index.is_none() {
-                dest_batch_index = Some(BatchIndex {
-                    display_item_index: culled_tiles.display_list.len(),
-                    tile_page: built_alpha_tile_page,
-                });
-                batch_indices.push(dest_batch_index.unwrap());
+                dest_batch_index = Some(culled_tiles.display_list.len());
                 culled_tiles.display_list.push(CulledDisplayItem::DrawTiles(TileBatch {
                     tiles: vec![],
                     color_texture,
                     blend_mode,
                     filter,
-                    tile_page: built_alpha_tile_page,
                 }));
             }
 
             // Add to the appropriate batch.
-            match culled_tiles.display_list[dest_batch_index.unwrap().display_item_index] {
+            match culled_tiles.display_list[dest_batch_index.unwrap()] {
                 CulledDisplayItem::DrawTiles(ref mut tiles) => {
                     tiles.tiles.push(*built_alpha_tile);
                 }
@@ -510,12 +475,6 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         }
 
         //println!("batch_indices={:?}", batch_indices);
-
-        #[derive(Clone, Copy, Debug)]
-        struct BatchIndex {
-            display_item_index: usize,
-            tile_page: u16,
-        }
     }
 
     fn pack_tiles(&mut self, culled_tiles: CulledTiles) {

@@ -94,7 +94,6 @@ impl ZBuffer {
                         tiles: vec![],
                         filter: paint_filter,
                         blend_mode: BlendMode::default(),
-                        tile_page: !0,
                     });
                 }
             }

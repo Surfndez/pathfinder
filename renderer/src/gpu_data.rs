@@ -109,7 +109,6 @@ pub struct TileBatch {
     pub color_texture: Option<TileBatchTexture>,
     pub filter: Filter,
     pub blend_mode: BlendMode,
-    pub tile_page: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

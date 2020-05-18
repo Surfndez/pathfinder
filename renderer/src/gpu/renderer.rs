@@ -303,8 +303,7 @@ impl<D> Renderer<D> where D: Device {
                 let count = batch.tiles.len();
                 self.stats.alpha_tile_count += count;
                 let storage_id = self.upload_tiles(&batch.tiles);
-                self.draw_tiles(batch.tile_page,
-                                count as u32,
+                self.draw_tiles(count as u32,
                                 storage_id,
                                 batch.color_texture,
                                 batch.blend_mode,
@@ -896,7 +895,6 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn draw_tiles(&mut self,
-                  tile_page: u16,
                   tile_count: u32,
                   storage_id: StorageID,
                   color_texture_0: Option<TileBatchTexture>,
@@ -937,9 +935,7 @@ impl<D> Renderer<D> where D: Device {
                                .framebuffer_texture(&self.back_frame.dest_blend_framebuffer)));
         }
 
-        if let Some(alpha_tile_page) = self.back_frame.alpha_tile_pages.get(&tile_page) {
-            let mask_framebuffer =
-                self.back_frame.mask_framebuffer.as_ref().expect("Where's the mask framebuffer?");
+        if let Some(ref mask_framebuffer) = self.back_frame.mask_framebuffer {
             let mask_texture = self.device.framebuffer_texture(mask_framebuffer);
             uniforms.push((&self.tile_program.mask_texture_size_0_uniform,
                            UniformData::Vec2(self.device.texture_size(mask_texture).to_f32().0)));
