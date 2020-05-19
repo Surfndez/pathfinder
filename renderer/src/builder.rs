@@ -49,8 +49,6 @@ pub(crate) struct SceneBuilder<'a, 'b> {
 #[derive(Debug)]
 pub(crate) struct ObjectBuilder {
     pub built_path: BuiltPath,
-    /// During tiling, this stores the sum of backdrops for tile columns above the viewport.
-    pub current_backdrops: Vec<i8>,
     pub fills: Vec<FillBatchEntry>,
     pub bounds: RectF,
 }
@@ -75,6 +73,9 @@ pub(crate) struct BuiltPath {
     pub clip_tiles: Vec<BuiltClip>,
     */
     pub tiles: DenseTileMap<TileObjectPrimitive>,
+    /// During tiling, or if backdrop computation is done on GPU, this stores the sum of backdrops
+    /// for tile columns above the viewport.
+    pub backdrops: Vec<i32>,
     pub fill_rule: FillRule,
 }
 
@@ -331,6 +332,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                         self.add_alpha_tiles(&mut culled_tiles,
                                              layer_z_buffer,
                                              &built_draw_path.path.tiles,
+                                             &built_draw_path.path.backdrops,
                                              current_depth,
                                              color_texture,
                                              built_draw_path.blend_mode,
@@ -424,6 +426,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                        culled_tiles: &mut CulledTiles,
                        layer_z_buffer: &ZBuffer,
                        built_alpha_tiles: &DenseTileMap<TileObjectPrimitive>,
+                       backdrops: &[i32],
                        current_depth: u32,
                        color_texture: Option<TileBatchTexture>,
                        blend_mode: BlendMode,
@@ -437,6 +440,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
             match culled_tiles.display_list.last() {
                 Some(&CulledDisplayItem::DrawTiles(TileBatch {
                     tiles: _,
+                    backdrops: _,
                     propagate_metadata: _,
                     color_texture: ref batch_color_texture,
                     blend_mode: batch_blend_mode,
@@ -456,6 +460,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
             dest_batch_index = Some(culled_tiles.display_list.len());
             culled_tiles.display_list.push(CulledDisplayItem::DrawTiles(TileBatch {
                 tiles: vec![],
+                backdrops: vec![],
                 propagate_metadata: vec![],
                 color_texture,
                 blend_mode,
@@ -494,8 +499,9 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                     tiles_across: built_alpha_tiles.rect.width() as u32,
                     tiles_down: built_alpha_tiles.rect.height() as u32,
                     tile_offset,
-                    pad: 0,
+                    backdrops_offset: tiles.backdrops.len() as u32,
                 });
+                tiles.backdrops.extend_from_slice(backdrops);
             }
             _ => unreachable!(),
         };
@@ -618,6 +624,7 @@ impl BuiltPath {
             single_mask_tiles: vec![],
             clip_tiles: vec![],
             */
+            backdrops: vec![0; tiles.rect.width() as usize],
             occluders: if occludes { Some(vec![]) } else { None },
             tiles,
             fill_rule,
@@ -657,8 +664,7 @@ impl ObjectBuilder {
                       tiling_path_info: &TilingPathInfo)
                       -> ObjectBuilder {
         let built_path = BuiltPath::new(path_bounds, view_box_bounds, fill_rule, tiling_path_info);
-        let current_backdrops = vec![0; built_path.tiles.rect.width() as usize];
-        ObjectBuilder { built_path, bounds: path_bounds, current_backdrops, fills: vec![] }
+        ObjectBuilder { built_path, bounds: path_bounds, fills: vec![] }
     }
 
     pub(crate) fn add_fill(&mut self,
@@ -749,7 +755,7 @@ impl ObjectBuilder {
         }
 
         if tile_offset.y() < 0 {
-            self.current_backdrops[tile_offset.x() as usize] += delta;
+            self.built_path.backdrops[tile_offset.x() as usize] += delta as i32;
             return;
         }
 

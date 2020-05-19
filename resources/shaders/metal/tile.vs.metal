@@ -30,7 +30,17 @@ vertex main0_out main0(main0_in in [[stage_in]], constant int2& uTextureMetadata
     float2 position = (tileOrigin + tileOffset) * uTileSize;
     uint2 maskTileCoord = uint2(in.aMaskTexCoord0.x, in.aMaskTexCoord0.y + (256u * in.aMaskTexCoord0.z));
     float2 maskTexCoord0 = (float2(maskTileCoord) + tileOffset) * uTileSize;
-    if (in.aMaskTexCoord0.w != 0u)
+    bool _60 = in.aMaskTexCoord0.w != 0u;
+    bool _69;
+    if (_60)
+    {
+        _69 = in.aBackdropCtrl.x == 0;
+    }
+    else
+    {
+        _69 = _60;
+    }
+    if (_69)
     {
         position = float2(0.0);
     }

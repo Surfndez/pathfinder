@@ -106,6 +106,7 @@ pub struct TextureLocation {
 #[derive(Clone, Debug)]
 pub struct TileBatch {
     pub tiles: Vec<TileObjectPrimitive>,
+    pub backdrops: Vec<i32>,
     pub propagate_metadata: Vec<PropagateMetadata>,
     pub color_texture: Option<TileBatchTexture>,
     pub filter: Filter,
@@ -146,7 +147,7 @@ pub struct PropagateMetadata {
     pub tiles_across: u32,
     pub tiles_down: u32,
     pub tile_offset: u32,
-    pub pad: u32,
+    pub backdrops_offset: u32,
 }
 
 #[derive(Clone, Copy, Debug)]

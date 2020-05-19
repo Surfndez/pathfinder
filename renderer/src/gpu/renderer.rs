@@ -161,6 +161,7 @@ struct Frame<D> where D: Device {
     intermediate_dest_framebuffer: D::Framebuffer,
     texture_metadata_texture: D::Texture,
     propagate_metadata_buffer: D::Buffer,
+    backdrops_buffer: D::Buffer,
 }
 
 impl<D> Renderer<D> where D: Device {
@@ -307,7 +308,7 @@ impl<D> Renderer<D> where D: Device {
                 let count = batch.tiles.len();
                 self.stats.alpha_tile_count += count;
                 let tile_storage_id = self.upload_tiles(&batch.tiles);
-                self.upload_propagate_metadata(&batch.propagate_metadata);
+                self.upload_propagate_data(&batch.propagate_metadata, &batch.backdrops);
                 self.propagate_tiles(batch.propagate_metadata.len() as u32, tile_storage_id);
                 self.draw_tiles(count as u32,
                                 tile_storage_id,
@@ -562,9 +563,14 @@ impl<D> Renderer<D> where D: Device {
         storage_id
     }
 
-    fn upload_propagate_metadata(&mut self, propagate_metadata: &[PropagateMetadata]) {
+    fn upload_propagate_data(&mut self,
+                             propagate_metadata: &[PropagateMetadata],
+                             backdrops: &[i32]) {
         self.device.allocate_buffer(&self.back_frame.propagate_metadata_buffer,
                                     BufferData::Memory(propagate_metadata),
+                                    BufferTarget::Storage);
+        self.device.allocate_buffer(&self.back_frame.backdrops_buffer,
+                                    BufferData::Memory(backdrops),
                                     BufferTarget::Storage);
     }
 
@@ -924,6 +930,8 @@ impl<D> Renderer<D> where D: Device {
             storage_buffers: &[
                 (&self.propagate_program.metadata_storage_buffer,
                  &self.back_frame.propagate_metadata_buffer),
+                (&self.propagate_program.backdrops_storage_buffer,
+                 &self.back_frame.backdrops_buffer),
                 (&self.propagate_program.alpha_tiles_storage_buffer, alpha_tile_buffer),
             ],
         });
@@ -1494,6 +1502,7 @@ impl<D> Frame<D> where D: Device {
         let dest_blend_framebuffer = device.create_framebuffer(dest_blend_texture);
 
         let propagate_metadata_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let backdrops_buffer = device.create_buffer(BufferUploadMode::Dynamic);
 
         Frame {
             blit_vertex_array,
@@ -1511,6 +1520,7 @@ impl<D> Frame<D> where D: Device {
             intermediate_dest_framebuffer,
             dest_blend_framebuffer,
             propagate_metadata_buffer,
+            backdrops_buffer,
             framebuffer_flags: FramebufferFlags::empty(),
         }
     }

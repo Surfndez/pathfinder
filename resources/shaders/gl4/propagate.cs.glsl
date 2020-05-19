@@ -60,25 +60,26 @@ layout(std430, binding = 0)buffer bMetadata {
     restrict readonly uvec4 iMetadata[];
 };
 
-layout(std430, binding = 1)buffer bAlphaTiles {
+layout(std430, binding = 1)buffer bBackdrops {
+    restrict readonly int iBackdrops[];
+};
+
+layout(std430, binding = 2)buffer bAlphaTiles {
     restrict uint iAlphaTiles[];
 };
 
 void main(){
     uint metadataOffset = gl_WorkGroupID . y;
-    uvec4 metadata = iMetadata[metadataOffset];
-
     uint tileX = uint(gl_LocalInvocationID . x);
 
+    uvec4 metadata = iMetadata[metadataOffset];
     uvec2 tileSize = metadata . xy;
-    uint tileBufferOffset = metadata . z;
+    uint tileBufferOffset = metadata . z, backdropOffset = metadata . w;
 
     if(tileX >= tileSize . x)
         return;
 
-
-    int backdrop = 0;
-    uint offset = tileBufferOffset;
+    int backdrop = iBackdrops[backdropOffset + tileX];
     for(uint tileY = 0;tileY < tileSize . y;tileY ++){
         uint index =(tileBufferOffset + tileY * tileSize . x + tileX)* 3 + 2;
         uint tileWord = iAlphaTiles[index];

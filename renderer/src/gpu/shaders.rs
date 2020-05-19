@@ -551,6 +551,7 @@ impl<D> ClipTileProgram<D> where D: Device {
 pub struct PropagateProgram<D> where D: Device {
     pub program: D::Program,
     pub metadata_storage_buffer: D::StorageBuffer,
+    pub backdrops_storage_buffer: D::StorageBuffer,
     pub alpha_tiles_storage_buffer: D::StorageBuffer,
 }
 
@@ -561,8 +562,15 @@ impl<D> PropagateProgram<D> where D: Device {
         device.set_compute_program_local_size(&mut program, local_size);
 
         let metadata_storage_buffer = device.get_storage_buffer(&program, "Metadata", 0);
-        let alpha_tiles_storage_buffer = device.get_storage_buffer(&program, "AlphaTiles", 1);
-        PropagateProgram { program, metadata_storage_buffer, alpha_tiles_storage_buffer }
+        let backdrops_storage_buffer = device.get_storage_buffer(&program, "Backdrops", 1);
+        let alpha_tiles_storage_buffer = device.get_storage_buffer(&program, "AlphaTiles", 2);
+
+        PropagateProgram {
+            program,
+            metadata_storage_buffer,
+            backdrops_storage_buffer,
+            alpha_tiles_storage_buffer,
+        }
     }
 }
 

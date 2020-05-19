@@ -40,7 +40,7 @@ void main(){
 
     uvec2 maskTileCoord = uvec2(aMaskTexCoord0 . x, aMaskTexCoord0 . y + 256u * aMaskTexCoord0 . z);
     vec2 maskTexCoord0 =(vec2(maskTileCoord)+ tileOffset)* uTileSize;
-    if(aMaskTexCoord0 . w != 0u)
+    if(aMaskTexCoord0 . w != 0u && aBackdropCtrl . x == 0)
         position = vec2(0.0);
 
     vec2 textureMetadataScale = vec2(1.0)/ vec2(uTextureMetadataSize);
