@@ -315,6 +315,7 @@ impl Device for MetalDevice {
             TextureFormat::R8 => descriptor.set_pixel_format(MTLPixelFormat::R8Unorm),
             TextureFormat::R16F => descriptor.set_pixel_format(MTLPixelFormat::R16Float),
             TextureFormat::RGBA8 => descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm),
+            TextureFormat::R32I => descriptor.set_pixel_format(MTLPixelFormat::R32Sint),
             TextureFormat::RGBA16F => descriptor.set_pixel_format(MTLPixelFormat::RGBA16Float),
             TextureFormat::RGBA32F => descriptor.set_pixel_format(MTLPixelFormat::RGBA32Float),
         }
@@ -510,6 +511,7 @@ impl Device for MetalDevice {
                 MTLVertexFormat::UCharNormalized
             }
             (VertexAttrClass::Int, VertexAttrType::I16, 1) => MTLVertexFormat::Short,
+            (VertexAttrClass::Int, VertexAttrType::I32, 1) => MTLVertexFormat::Int,
             (VertexAttrClass::Int, VertexAttrType::U16, 1) => MTLVertexFormat::UShort,
             (VertexAttrClass::FloatNorm, VertexAttrType::U16, 1) => {
                 MTLVertexFormat::UShortNormalized
@@ -1264,6 +1266,30 @@ impl MetalDevice {
                                                             Some(&image.texture));
             }
         }
+
+        // Set storage buffers.
+        for &(storage_buffer_id, storage_buffer_binding) in render_state.storage_buffers {
+            self.populate_storage_buffer_indices_if_necessary(storage_buffer_id,
+                                                              &render_state.program);
+
+            let indices = storage_buffer_id.indices.borrow_mut();
+            let indices = indices.as_ref().unwrap();
+            let (vertex_indices, fragment_indices) = match indices.0 {
+                ProgramKind::Raster { ref vertex, ref fragment } => (vertex, fragment),
+                _ => unreachable!(),
+            };
+
+            if let Some(vertex_index) = *vertex_indices {
+                if let Some(ref buffer) = *storage_buffer_binding.buffer.borrow() {
+                    render_command_encoder.set_vertex_buffer(vertex_index.0, Some(buffer), 0);
+                }
+            }
+            if let Some(fragment_index) = *fragment_indices {
+                if let Some(ref buffer) = *storage_buffer_binding.buffer.borrow() {
+                    render_command_encoder.set_fragment_buffer(fragment_index.0, Some(buffer), 0);
+                }
+            }
+        }
     }
 
     fn set_compute_uniforms(&self,
@@ -1339,7 +1365,6 @@ impl MetalDevice {
                     compute_command_encoder.set_buffer(index.0, Some(buffer), 0);
                 }
             }
-
         }
     }
 
@@ -1931,6 +1956,16 @@ impl MetalTextureDataReceiver {
                                          0,
                                          stride as u64 * 4);
                 TextureData::F32(pixels)
+            }
+            TextureFormat::R32I => {
+                let channels = format.channels();
+                let stride = size.x() as usize * channels;
+                let mut pixels = vec![0; stride * size.y() as usize];
+                self.0.texture.get_bytes(pixels.as_mut_ptr() as *mut _,
+                                         metal_region,
+                                         0,
+                                         stride as u64 * 4);
+                TextureData::I32(pixels)
             }
         };
 

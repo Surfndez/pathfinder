@@ -5,6 +5,8 @@ EMPTY=
 SHADERS=\
 	blit.fs.glsl \
 	blit.vs.glsl \
+	blit_buffer.fs.glsl \
+	blit_buffer.vs.glsl \
 	clear.fs.glsl \
 	clear.vs.glsl \
 	debug_solid.fs.glsl \

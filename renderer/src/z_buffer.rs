@@ -109,13 +109,14 @@ impl ZBuffer {
 }
 
 impl TileObjectPrimitive {
-    pub(crate) fn new_solid_from_paint_id(tile_origin: Vector2I, paint_id: PaintId)
+    pub(crate) fn new_solid_from_paint_id(tile_origin: Vector2I, path_id: u32, paint_id: PaintId)
                                           -> TileObjectPrimitive {
         TileObjectPrimitive {
             tile_x: tile_origin.x() as i16,
             tile_y: tile_origin.y() as i16,
             backdrop: 0,
             alpha_tile_id: AlphaTileId(0),
+            path_id,
             ctrl: 0,
             color: paint_id.0,
         }

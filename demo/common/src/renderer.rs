@@ -233,6 +233,7 @@ impl<W> DemoApp<W> where W: Window {
             primitive: Primitive::Triangles,
             textures: &[],
             images: &[],
+            storage_buffers: &[],
             uniforms: &[
                 (&self.ground_program.transform_uniform,
                  UniformData::from_transform_3d(&transform)),

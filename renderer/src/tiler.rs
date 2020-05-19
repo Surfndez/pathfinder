@@ -32,13 +32,14 @@ pub(crate) struct Tiler<'a, 'b> {
 
 impl<'a, 'b> Tiler<'a, 'b> {
     pub(crate) fn new(scene_builder: &'a SceneBuilder<'b, 'a>,
+                      path_id: u32,
                       outline: &'a Outline,
                       fill_rule: FillRule,
                       view_box: RectF,
                       path_info: TilingPathInfo<'a>)
                       -> Tiler<'a, 'b> {
         let bounds = outline.bounds().intersection(view_box).unwrap_or(RectF::default());
-        let object_builder = ObjectBuilder::new(bounds, view_box, fill_rule, &path_info);
+        let object_builder = ObjectBuilder::new(path_id, bounds, view_box, fill_rule, &path_info);
         Tiler { scene_builder, object_builder, outline, path_info }
     }
 

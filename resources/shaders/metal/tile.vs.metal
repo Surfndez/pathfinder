@@ -19,28 +19,38 @@ struct main0_in
     int2 aTileOrigin [[attribute(1)]];
     uint4 aMaskTexCoord0 [[attribute(2)]];
     int2 aBackdropCtrl [[attribute(3)]];
-    int aColor [[attribute(4)]];
+    int aPathIndex [[attribute(4)]];
+    int aColor [[attribute(5)]];
 };
 
-vertex main0_out main0(main0_in in [[stage_in]], constant int2& uTextureMetadataSize [[buffer(1)]], constant float2& uTileSize [[buffer(0)]], constant float4x4& uTransform [[buffer(2)]], texture2d<float> uTextureMetadata [[texture(0)]], sampler uTextureMetadataSmplr [[sampler(0)]])
+vertex main0_out main0(main0_in in [[stage_in]], constant int2& uZBufferSize [[buffer(1)]], constant int2& uTextureMetadataSize [[buffer(2)]], constant float2& uTileSize [[buffer(0)]], constant float4x4& uTransform [[buffer(3)]], texture2d<int> uZBuffer [[texture(0)]], texture2d<float> uTextureMetadata [[texture(1)]], sampler uZBufferSmplr [[sampler(0)]], sampler uTextureMetadataSmplr [[sampler(1)]])
 {
     main0_out out = {};
     float2 tileOrigin = float2(in.aTileOrigin);
     float2 tileOffset = float2(in.aTileOffset);
     float2 position = (tileOrigin + tileOffset) * uTileSize;
+    bool cull = false;
+    if (in.aPathIndex < uZBuffer.sample(uZBufferSmplr, ((tileOrigin + float2(0.5)) / float2(uZBufferSize)), level(0.0)).x)
+    {
+        cull = true;
+    }
     uint2 maskTileCoord = uint2(in.aMaskTexCoord0.x, in.aMaskTexCoord0.y + (256u * in.aMaskTexCoord0.z));
     float2 maskTexCoord0 = (float2(maskTileCoord) + tileOffset) * uTileSize;
-    bool _60 = in.aMaskTexCoord0.w != 0u;
-    bool _69;
-    if (_60)
+    bool _89 = in.aBackdropCtrl.x == 0;
+    bool _96;
+    if (_89)
     {
-        _69 = in.aBackdropCtrl.x == 0;
+        _96 = in.aMaskTexCoord0.w != 0u;
     }
     else
     {
-        _69 = _60;
+        _96 = _89;
     }
-    if (_69)
+    if (_96)
+    {
+        cull = true;
+    }
+    if (cull)
     {
         position = float2(0.0);
     }

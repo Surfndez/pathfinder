@@ -198,6 +198,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         let outline = scene.apply_render_options(path_object.outline(), built_options);
 
         let mut tiler = Tiler::new(self,
+                                   path_index as u32,
                                    &outline,
                                    path_object.fill_rule(),
                                    view_box,
@@ -225,6 +226,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         });
 
         let mut tiler = Tiler::new(self,
+                                   path_index as u32,
                                    &outline,
                                    path_object.fill_rule(),
                                    view_box,
@@ -336,7 +338,8 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                                              current_depth,
                                              color_texture,
                                              built_draw_path.blend_mode,
-                                             built_draw_path.filter);
+                                             built_draw_path.filter,
+                                             built_draw_path.path.occluders.is_some());
 
                         /*
                         debug_assert!(built_draw_path.path.empty_tiles.is_empty() ||
@@ -430,7 +433,8 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                        current_depth: u32,
                        color_texture: Option<TileBatchTexture>,
                        blend_mode: BlendMode,
-                       filter: Filter) {
+                       filter: Filter,
+                       z_write: bool) {
         // Try to reuse the last batch in the display list.
         //
         // TODO(pcwalton): We could try harder to find a batch by taking tile positions into
@@ -496,10 +500,11 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         match culled_tiles.display_list[dest_batch_index] {
             CulledDisplayItem::DrawTiles(ref mut tiles) => {
                 tiles.propagate_metadata.push(PropagateMetadata {
-                    tiles_across: built_alpha_tiles.rect.width() as u32,
-                    tiles_down: built_alpha_tiles.rect.height() as u32,
+                    tile_rect: built_alpha_tiles.rect,
                     tile_offset,
                     backdrops_offset: tiles.backdrops.len() as u32,
+                    z_write: z_write as u32,
+                    pad0: 0,
                 });
                 tiles.backdrops.extend_from_slice(backdrops);
             }
@@ -572,7 +577,8 @@ struct DrawPathBuildParams<'a> {
 }
 
 impl BuiltPath {
-    fn new(path_bounds: RectF,
+    fn new(path_id: u32,
+           path_bounds: RectF,
            view_box_bounds: RectF,
            fill_rule: FillRule,
            tiling_path_info: &TilingPathInfo)
@@ -612,6 +618,7 @@ impl BuiltPath {
                 tile_x: tile_coord.x() as i16,
                 tile_y: tile_coord.y() as i16,
                 alpha_tile_id: AlphaTileId(!0),
+                path_id,
                 color,
                 backdrop: 0,
                 ctrl: ctrl as u8,
@@ -658,12 +665,17 @@ pub struct TileStats {
 // Utilities for built objects
 
 impl ObjectBuilder {
-    pub(crate) fn new(path_bounds: RectF,
+    pub(crate) fn new(path_id: u32,
+                      path_bounds: RectF,
                       view_box_bounds: RectF,
                       fill_rule: FillRule,
                       tiling_path_info: &TilingPathInfo)
                       -> ObjectBuilder {
-        let built_path = BuiltPath::new(path_bounds, view_box_bounds, fill_rule, tiling_path_info);
+        let built_path = BuiltPath::new(path_id,
+                                        path_bounds,
+                                        view_box_bounds,
+                                        fill_rule,
+                                        tiling_path_info);
         ObjectBuilder { built_path, bounds: path_bounds, fills: vec![] }
     }
 

@@ -10,7 +10,7 @@
 
 use crate::gpu::debug::DebugUIPresenter;
 use crate::gpu::options::{DestFramebuffer, RendererOptions};
-use crate::gpu::shaders::{BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
+use crate::gpu::shaders::{BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
 use crate::gpu::shaders::{ClipTileProgram, ClipTileVertexArray};
 use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
@@ -37,7 +37,7 @@ use pathfinder_gpu::{BlendFactor, BlendOp, BlendState, BufferData, BufferTarget,
 use pathfinder_gpu::{ClearOps, ComputeDimensions, ComputeState, DepthFunc, DepthState, Device};
 use pathfinder_gpu::{ImageAccess, Primitive, RenderOptions, RenderState, RenderTarget};
 use pathfinder_gpu::{StencilFunc, StencilState, TextureBinding, TextureDataRef, TextureFormat};
-use pathfinder_gpu::{UniformBinding, UniformData};
+use pathfinder_gpu::{TextureSamplingFlags, UniformBinding, UniformData};
 use pathfinder_resources::ResourceLoader;
 use pathfinder_simd::default::{F32x2, F32x4, I32x2};
 use std::collections::VecDeque;
@@ -106,6 +106,7 @@ pub struct Renderer<D> where D: Device {
     dest_framebuffer: DestFramebuffer<D>,
     options: RendererOptions,
     blit_program: BlitProgram<D>,
+    blit_buffer_program: BlitBufferProgram<D>,
     clear_program: ClearProgram<D>,
     fill_program: FillProgram<D>,
     tile_program: TileProgram<D>,
@@ -147,6 +148,7 @@ pub struct Renderer<D> where D: Device {
 struct Frame<D> where D: Device {
     framebuffer_flags: FramebufferFlags,
     blit_vertex_array: BlitVertexArray<D>,
+    blit_buffer_vertex_array: BlitBufferVertexArray<D>,
     clear_vertex_array: ClearVertexArray<D>,
     fill_vertex_storage_allocator: StorageAllocator<D, FillVertexStorage<D>>,
     tile_vertex_storage_allocator: StorageAllocator<D, TileVertexStorage<D>>,
@@ -162,6 +164,8 @@ struct Frame<D> where D: Device {
     texture_metadata_texture: D::Texture,
     propagate_metadata_buffer: D::Buffer,
     backdrops_buffer: D::Buffer,
+    z_buffer: D::Buffer,
+    z_buffer_framebuffer: D::Framebuffer,
 }
 
 impl<D> Renderer<D> where D: Device {
@@ -171,6 +175,7 @@ impl<D> Renderer<D> where D: Device {
                options: RendererOptions)
                -> Renderer<D> {
         let blit_program = BlitProgram::new(&device, resources);
+        let blit_buffer_program = BlitBufferProgram::new(&device, resources);
         let clear_program = ClearProgram::new(&device, resources);
         let fill_program = FillProgram::new(&device, resources, &options);
         let tile_program = TileProgram::new(&device, resources);
@@ -201,6 +206,7 @@ impl<D> Renderer<D> where D: Device {
 
         let front_frame = Frame::new(&device,
                                      &blit_program,
+                                     &blit_buffer_program,
                                      &clear_program,
                                      &tile_clip_program,
                                      &reprojection_program,
@@ -210,6 +216,7 @@ impl<D> Renderer<D> where D: Device {
                                      window_size);
         let back_frame = Frame::new(&device,
                                     &blit_program,
+                                    &blit_buffer_program,
                                     &clear_program,
                                     &tile_clip_program,
                                     &reprojection_program,
@@ -224,6 +231,7 @@ impl<D> Renderer<D> where D: Device {
             dest_framebuffer,
             options,
             blit_program,
+            blit_buffer_program,
             clear_program,
             fill_program,
             tile_program,
@@ -296,10 +304,10 @@ impl<D> Renderer<D> where D: Device {
                     self.draw_buffered_fills(page_index)
                 }
             }
+            RenderCommand::BeginTileDrawing => {}
             RenderCommand::ClipTiles(ref batches) => {
                 batches.iter().for_each(|batch| self.draw_clip_batch(batch))
             }
-            RenderCommand::BeginTileDrawing => {}
             RenderCommand::PushRenderTarget(render_target_id) => {
                 self.push_render_target(render_target_id)
             }
@@ -310,6 +318,7 @@ impl<D> Renderer<D> where D: Device {
                 let tile_storage_id = self.upload_tiles(&batch.tiles);
                 self.upload_propagate_data(&batch.propagate_metadata, &batch.backdrops);
                 self.propagate_tiles(batch.propagate_metadata.len() as u32, tile_storage_id);
+                self.prepare_z_buffer();
                 self.draw_tiles(count as u32,
                                 tile_storage_id,
                                 batch.color_texture,
@@ -713,6 +722,7 @@ impl<D> Renderer<D> where D: Device {
                  UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
             ],
             images: &[],
+            storage_buffers: &[],
             viewport: mask_viewport,
             options: RenderOptions {
                 blend: Some(BlendState {
@@ -918,6 +928,9 @@ impl<D> Renderer<D> where D: Device {
                                      .get(tile_storage_id)
                                      .vertex_buffer;
 
+        let framebuffer_tile_size = self.device.texture_size(self.device.framebuffer_texture(
+            &self.back_frame.z_buffer_framebuffer));
+
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
@@ -926,14 +939,49 @@ impl<D> Renderer<D> where D: Device {
             program: &self.propagate_program.program,
             textures: &[],
             images: &[],
-            uniforms: &[],
+            uniforms: &[
+                (&self.propagate_program.framebuffer_tile_size_uniform,
+                 UniformData::IVec2(framebuffer_tile_size.0)),
+            ],
             storage_buffers: &[
                 (&self.propagate_program.metadata_storage_buffer,
                  &self.back_frame.propagate_metadata_buffer),
                 (&self.propagate_program.backdrops_storage_buffer,
                  &self.back_frame.backdrops_buffer),
                 (&self.propagate_program.alpha_tiles_storage_buffer, alpha_tile_buffer),
+                (&self.propagate_program.z_buffer_storage_buffer,
+                 &self.back_frame.z_buffer),
             ],
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().tile_times.push(TimerFuture::new(timer_query));
+    }
+
+    fn prepare_z_buffer(&mut self) {
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        let z_buffer_size = self.device.texture_size(self.device.framebuffer_texture(
+            &self.back_frame.z_buffer_framebuffer));
+
+        self.device.draw_elements(6, &RenderState {
+            target: &RenderTarget::Framebuffer(&self.back_frame.z_buffer_framebuffer),
+            program: &self.blit_buffer_program.program,
+            vertex_array: &self.back_frame.blit_buffer_vertex_array.vertex_array,
+            primitive: Primitive::Triangles,
+            textures: &[],
+            images: &[],
+            storage_buffers: &[
+                (&self.blit_buffer_program.buffer_storage_buffer, &self.back_frame.z_buffer),
+            ],
+            uniforms: &[
+                (&self.blit_buffer_program.buffer_size_uniform,
+                 UniformData::IVec2(z_buffer_size.0)),
+                 
+            ],
+            viewport: RectI::new(Vector2I::zero(), z_buffer_size),
+            options: RenderOptions::default(),
         });
 
         self.device.end_timer_query(&timer_query);
@@ -959,11 +1007,16 @@ impl<D> Renderer<D> where D: Device {
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
+        let z_buffer_texture =
+            self.device.framebuffer_texture(&self.back_frame.z_buffer_framebuffer);
         let mut textures = vec![
             (&self.tile_program.texture_metadata_texture,
              &self.back_frame.texture_metadata_texture),
+            (&self.tile_program.z_buffer_texture, z_buffer_texture),
         ];
         let mut uniforms = vec![
+            (&self.tile_program.z_buffer_texture_size_uniform,
+             UniformData::IVec2(self.device.texture_size(z_buffer_texture).0)),
             (&self.tile_program.transform_uniform,
              UniformData::Mat4(self.tile_transform().to_columns())),
             (&self.tile_program.tile_size_uniform,
@@ -1052,6 +1105,7 @@ impl<D> Renderer<D> where D: Device {
             primitive: Primitive::Triangles,
             textures: &textures,
             images: &[],
+            storage_buffers: &[],
             uniforms: &uniforms,
             viewport: draw_viewport,
             options: RenderOptions {
@@ -1102,6 +1156,7 @@ impl<D> Renderer<D> where D: Device {
             primitive: Primitive::Triangles,
             textures: &textures,
             images: &[],
+            storage_buffers: &[],
             uniforms: &uniforms,
             viewport: draw_viewport,
             options: RenderOptions {
@@ -1136,6 +1191,7 @@ impl<D> Renderer<D> where D: Device {
             primitive: Primitive::Triangles,
             textures: &[],
             images: &[],
+            storage_buffers: &[],
             uniforms: &[],
             viewport: self.draw_viewport(),
             options: RenderOptions {
@@ -1169,6 +1225,7 @@ impl<D> Renderer<D> where D: Device {
             primitive: Primitive::Triangles,
             textures: &[(&self.reprojection_program.texture, texture)],
             images: &[],
+            storage_buffers: &[],
             uniforms: &[
                 (&self.reprojection_program.old_transform_uniform,
                  UniformData::from_transform_3d(old_transform)),
@@ -1323,6 +1380,7 @@ impl<D> Renderer<D> where D: Device {
             primitive: Primitive::Triangles,
             textures: &[],
             images: &[],
+            storage_buffers: &[],
             uniforms: &uniforms[..],
             viewport: main_viewport,
             options: RenderOptions::default(),
@@ -1348,6 +1406,7 @@ impl<D> Renderer<D> where D: Device {
             primitive: Primitive::Triangles,
             textures: &textures[..],
             images: &[],
+            storage_buffers: &[],
             uniforms: &[],
             viewport: main_viewport,
             options: RenderOptions {
@@ -1459,6 +1518,7 @@ impl<D> Frame<D> where D: Device {
     // FIXME(pcwalton): This signature shouldn't be so big. Make a struct.
     fn new(device: &D,
            blit_program: &BlitProgram<D>,
+           blit_buffer_program: &BlitBufferProgram<D>,
            clear_program: &ClearProgram<D>,
            tile_clip_program: &ClipTileProgram<D>,
            reprojection_program: &ReprojectionProgram<D>,
@@ -1473,6 +1533,10 @@ impl<D> Frame<D> where D: Device {
                                                      &blit_program,
                                                      &quad_vertex_positions_buffer,
                                                      &quad_vertex_indices_buffer);
+        let blit_buffer_vertex_array = BlitBufferVertexArray::new(device,
+                                                                  &blit_buffer_program,
+                                                                  &quad_vertex_positions_buffer,
+                                                                  &quad_vertex_indices_buffer);
         let clear_vertex_array = ClearVertexArray::new(device,
                                                        &clear_program,
                                                        &quad_vertex_positions_buffer,
@@ -1504,8 +1568,24 @@ impl<D> Frame<D> where D: Device {
         let propagate_metadata_buffer = device.create_buffer(BufferUploadMode::Dynamic);
         let backdrops_buffer = device.create_buffer(BufferUploadMode::Dynamic);
 
+        let mut z_buffer_texture_size = window_size + vec2i(TILE_WIDTH as i32, TILE_HEIGHT as i32);
+        z_buffer_texture_size = vec2i(z_buffer_texture_size.x() / TILE_WIDTH as i32,
+                                      z_buffer_texture_size.y() / TILE_HEIGHT as i32);
+        let z_buffer_texture = device.create_texture(TextureFormat::R32I, z_buffer_texture_size);
+        device.set_texture_sampling_mode(&z_buffer_texture,
+                                         TextureSamplingFlags::NEAREST_MIN |
+                                         TextureSamplingFlags::NEAREST_MAG);
+        let z_buffer_framebuffer = device.create_framebuffer(z_buffer_texture);
+        let z_buffer = device.create_buffer(BufferUploadMode::Static);
+        let z_buffer_length = z_buffer_texture_size.x() as usize *
+            z_buffer_texture_size.y() as usize;
+        device.allocate_buffer::<i32>(&z_buffer,
+                                      BufferData::Uninitialized(z_buffer_length),
+                                      BufferTarget::Storage);
+
         Frame {
             blit_vertex_array,
+            blit_buffer_vertex_array,
             clear_vertex_array,
             tile_vertex_storage_allocator,
             fill_vertex_storage_allocator,
@@ -1521,6 +1601,8 @@ impl<D> Frame<D> where D: Device {
             dest_blend_framebuffer,
             propagate_metadata_buffer,
             backdrops_buffer,
+            z_buffer_framebuffer,
+            z_buffer,
             framebuffer_flags: FramebufferFlags::empty(),
         }
     }

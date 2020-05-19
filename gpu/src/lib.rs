@@ -174,6 +174,7 @@ pub enum FeatureLevel {
 pub enum TextureFormat {
     R8,
     R16F,
+    R32I,
     RGBA8,
     RGBA16F,
     RGBA32F,
@@ -182,10 +183,11 @@ pub enum TextureFormat {
 #[derive(Clone, Copy, Debug)]
 pub enum VertexAttrType {
     F32,
-    I16,
     I8,
-    U16,
+    I16,
+    I32,
     U8,
+    U16,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -258,6 +260,7 @@ pub struct RenderState<'a, D> where D: Device {
     pub uniforms: &'a [UniformBinding<'a, D::Uniform>],
     pub textures: &'a [TextureBinding<'a, D::TextureParameter, D::Texture>],
     pub images: &'a [ImageBinding<'a, D::ImageParameter, D::Texture>],
+    pub storage_buffers: &'a [(&'a D::StorageBuffer, &'a D::Buffer)],
     pub viewport: RectI,
     pub options: RenderOptions,
 }
@@ -406,6 +409,7 @@ pub enum TextureData {
     U16(Vec<u16>),
     F16(Vec<f16>),
     F32(Vec<f32>),
+    I32(Vec<i32>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -444,7 +448,7 @@ impl TextureFormat {
     #[inline]
     pub fn channels(self) -> usize {
         match self {
-            TextureFormat::R8 | TextureFormat::R16F => 1,
+            TextureFormat::R8 | TextureFormat::R16F | TextureFormat::R32I => 1,
             TextureFormat::RGBA8 | TextureFormat::RGBA16F | TextureFormat::RGBA32F => 4,
         }
     }
@@ -454,7 +458,7 @@ impl TextureFormat {
         match self {
             TextureFormat::R8 => 1,
             TextureFormat::R16F => 2,
-            TextureFormat::RGBA8 => 4,
+            TextureFormat::R32I | TextureFormat::RGBA8 => 4,
             TextureFormat::RGBA16F => 8,
             TextureFormat::RGBA32F => 16,
         }

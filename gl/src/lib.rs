@@ -83,6 +83,10 @@ impl GLDevice {
                                       &render_state.textures,
                                       &render_state.images);
 
+        for &(storage_buffer, buffer) in render_state.storage_buffers {
+            self.set_storage_buffer(storage_buffer, buffer);
+        }
+
         render_state.uniforms.iter().for_each(|(uniform, data)| self.set_uniform(uniform, data));
 
         self.set_render_options(&render_state.options);
@@ -253,6 +257,10 @@ impl GLDevice {
 
     fn reset_render_state(&self, render_state: &RenderState<GLDevice>) {
         self.reset_render_options(&render_state.options);
+
+        for &(storage_buffer, _) in render_state.storage_buffers {
+            self.unset_storage_buffer(storage_buffer);
+        }
 
         unsafe {
             for image_binding in render_state.images {
@@ -964,7 +972,7 @@ impl GLDevice {
 
     fn unbind_image(&self, unit: u32) {
         unsafe {
-            gl::BindImageTexture(unit, 0, 0, gl::FALSE, 0, 0, 0); ck();
+            gl::BindImageTexture(unit, 0, 0, gl::FALSE, 0, gl::READ_ONLY, 0); ck();
         }
     }
 
@@ -1073,6 +1081,12 @@ impl GLDevice {
                     texture_data_len = pixels.len() * mem::size_of::<f32>();
                     texture_data = TextureData::F32(pixels);
                 }
+                TextureFormat::R32I => {
+                    let mut pixels = vec![0; size.x() as usize * size.y() as usize * channels];
+                    texture_data_ptr = pixels.as_mut_ptr() as *mut u8;
+                    texture_data_len = pixels.len() * mem::size_of::<i32>();
+                    texture_data = TextureData::I32(pixels);
+                }
             }
 
             gl::BindBuffer(gl::PIXEL_PACK_BUFFER, receiver.gl_pixel_buffer); ck();
@@ -1087,6 +1101,7 @@ impl GLDevice {
                 TextureData::U16(ref mut pixels) => flip_y(pixels, size, channels),
                 TextureData::F16(ref mut pixels) => flip_y(pixels, size, channels),
                 TextureData::F32(ref mut pixels) => flip_y(pixels, size, channels),
+                TextureData::I32(ref mut pixels) => flip_y(pixels, size, channels),
             }
 
             texture_data
@@ -1397,6 +1412,7 @@ impl TextureFormatExt for TextureFormat {
         match self {
             TextureFormat::R8 => gl::R8 as GLint,
             TextureFormat::R16F => gl::R16F as GLint,
+            TextureFormat::R32I => gl::R32I as GLint,
             TextureFormat::RGBA8 => gl::RGBA as GLint,
             TextureFormat::RGBA16F => gl::RGBA16F as GLint,
             TextureFormat::RGBA32F => gl::RGBA32F as GLint,
@@ -1405,7 +1421,7 @@ impl TextureFormatExt for TextureFormat {
 
     fn gl_format(self) -> GLuint {
         match self {
-            TextureFormat::R8 | TextureFormat::R16F => gl::RED,
+            TextureFormat::R8 | TextureFormat::R16F | TextureFormat::R32I => gl::RED,
             TextureFormat::RGBA8 | TextureFormat::RGBA16F | TextureFormat::RGBA32F => gl::RGBA,
         }
     }
@@ -1414,6 +1430,7 @@ impl TextureFormatExt for TextureFormat {
         match self {
             TextureFormat::R8 | TextureFormat::RGBA8 => gl::UNSIGNED_BYTE,
             TextureFormat::R16F | TextureFormat::RGBA16F => gl::HALF_FLOAT,
+            TextureFormat::R32I => gl::INT,
             TextureFormat::RGBA32F => gl::FLOAT,
         }
     }
@@ -1427,10 +1444,11 @@ impl VertexAttrTypeExt for VertexAttrType {
     fn to_gl_type(self) -> GLuint {
         match self {
             VertexAttrType::F32 => gl::FLOAT,
-            VertexAttrType::I16 => gl::SHORT,
             VertexAttrType::I8  => gl::BYTE,
-            VertexAttrType::U16 => gl::UNSIGNED_SHORT,
+            VertexAttrType::I16 => gl::SHORT,
+            VertexAttrType::I32 => gl::INT,
             VertexAttrType::U8  => gl::UNSIGNED_BYTE,
+            VertexAttrType::U16 => gl::UNSIGNED_SHORT,
         }
     }
 }

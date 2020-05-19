@@ -16,7 +16,7 @@ use pathfinder_gpu::{VertexAttrClass, VertexAttrDescriptor, VertexAttrType};
 use pathfinder_resources::ResourceLoader;
 
 // TODO(pcwalton): Replace with `mem::size_of` calls?
-pub(crate) const TILE_INSTANCE_SIZE: usize = 12;
+pub(crate) const TILE_INSTANCE_SIZE: usize = 16;
 const FILL_INSTANCE_SIZE: usize = 8;
 const CLIP_TILE_INSTANCE_SIZE: usize = 8;
 
@@ -49,6 +49,36 @@ impl<D> BlitVertexArray<D> where D: Device {
         device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, BufferTarget::Index);
 
         BlitVertexArray { vertex_array }
+    }
+}
+
+pub struct BlitBufferVertexArray<D> where D: Device {
+    pub vertex_array: D::VertexArray,
+}
+
+impl<D> BlitBufferVertexArray<D> where D: Device {
+    pub fn new(device: &D,
+               blit_buffer_program: &BlitBufferProgram<D>,
+               quad_vertex_positions_buffer: &D::Buffer,
+               quad_vertex_indices_buffer: &D::Buffer)
+               -> BlitBufferVertexArray<D> {
+        let vertex_array = device.create_vertex_array();
+        let position_attr = device.get_vertex_attr(&blit_buffer_program.program,
+                                                   "Position").unwrap();
+
+        device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, BufferTarget::Vertex);
+        device.configure_vertex_attr(&vertex_array, &position_attr, &VertexAttrDescriptor {
+            size: 2,
+            class: VertexAttrClass::Int,
+            attr_type: VertexAttrType::I16,
+            stride: 4,
+            offset: 0,
+            divisor: 0,
+            buffer_index: 0,
+        });
+        device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, BufferTarget::Index);
+
+        BlitBufferVertexArray { vertex_array }
     }
 }
 
@@ -189,6 +219,7 @@ impl<D> TileVertexArray<D> where D: Device {
         let backdrop_ctrl_attr =
             device.get_vertex_attr(&tile_program.program, "BackdropCtrl").unwrap();
         let color_attr = device.get_vertex_attr(&tile_program.program, "Color").unwrap();
+        let path_index_attr = device.get_vertex_attr(&tile_program.program, "PathIndex").unwrap();
 
         device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, BufferTarget::Vertex);
         device.configure_vertex_attr(&vertex_array, &tile_offset_attr, &VertexAttrDescriptor {
@@ -219,12 +250,21 @@ impl<D> TileVertexArray<D> where D: Device {
             divisor: 1,
             buffer_index: 1,
         });
+        device.configure_vertex_attr(&vertex_array, &path_index_attr, &VertexAttrDescriptor {
+            size: 1,
+            class: VertexAttrClass::Int,
+            attr_type: VertexAttrType::I32,
+            stride: TILE_INSTANCE_SIZE,
+            offset: 8,
+            divisor: 1,
+            buffer_index: 1,
+        });
         device.configure_vertex_attr(&vertex_array, &color_attr, &VertexAttrDescriptor {
             size: 1,
             class: VertexAttrClass::Int,
             attr_type: VertexAttrType::I16,
             stride: TILE_INSTANCE_SIZE,
-            offset: 8,
+            offset: 12,
             divisor: 1,
             buffer_index: 1,
         });
@@ -233,7 +273,7 @@ impl<D> TileVertexArray<D> where D: Device {
             class: VertexAttrClass::Int,
             attr_type: VertexAttrType::I8,
             stride: TILE_INSTANCE_SIZE,
-            offset: 10,
+            offset: 14,
             divisor: 1,
             buffer_index: 1,
         });
@@ -356,6 +396,21 @@ impl<D> BlitProgram<D> where D: Device {
     }
 }
 
+pub struct BlitBufferProgram<D> where D: Device {
+    pub program: D::Program,
+    pub buffer_storage_buffer: D::StorageBuffer,
+    pub buffer_size_uniform: D::Uniform,
+}
+
+impl<D> BlitBufferProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> BlitBufferProgram<D> {
+        let program = device.create_raster_program(resources, "blit_buffer");
+        let buffer_storage_buffer = device.get_storage_buffer(&program, "Buffer", 0);
+        let buffer_size_uniform = device.get_uniform(&program, "BufferSize");
+        BlitBufferProgram { program, buffer_storage_buffer, buffer_size_uniform }
+    }
+}
+
 pub struct ClearProgram<D> where D: Device {
     pub program: D::Program,
     pub rect_uniform: D::Uniform,
@@ -455,6 +510,8 @@ pub struct TileProgram<D> where D: Device {
     pub tile_size_uniform: D::Uniform,
     pub texture_metadata_texture: D::TextureParameter,
     pub texture_metadata_size_uniform: D::Uniform,
+    pub z_buffer_texture: D::TextureParameter,
+    pub z_buffer_texture_size_uniform: D::Uniform,
     pub dest_texture: D::TextureParameter,
     pub color_texture_0: D::TextureParameter,
     pub color_texture_size_0_uniform: D::Uniform,
@@ -476,6 +533,8 @@ impl<D> TileProgram<D> where D: Device {
         let tile_size_uniform = device.get_uniform(&program, "TileSize");
         let texture_metadata_texture = device.get_texture_parameter(&program, "TextureMetadata");
         let texture_metadata_size_uniform = device.get_uniform(&program, "TextureMetadataSize");
+        let z_buffer_texture = device.get_texture_parameter(&program, "ZBuffer");
+        let z_buffer_texture_size_uniform = device.get_uniform(&program, "ZBufferSize");
         let dest_texture = device.get_texture_parameter(&program, "DestTexture");
         let color_texture_0 = device.get_texture_parameter(&program, "ColorTexture0");
         let color_texture_size_0_uniform = device.get_uniform(&program, "ColorTextureSize0");
@@ -494,6 +553,8 @@ impl<D> TileProgram<D> where D: Device {
             tile_size_uniform,
             texture_metadata_texture,
             texture_metadata_size_uniform,
+            z_buffer_texture,
+            z_buffer_texture_size_uniform,
             dest_texture,
             color_texture_0,
             color_texture_size_0_uniform,
@@ -550,9 +611,11 @@ impl<D> ClipTileProgram<D> where D: Device {
 
 pub struct PropagateProgram<D> where D: Device {
     pub program: D::Program,
+    pub framebuffer_tile_size_uniform: D::Uniform,
     pub metadata_storage_buffer: D::StorageBuffer,
     pub backdrops_storage_buffer: D::StorageBuffer,
     pub alpha_tiles_storage_buffer: D::StorageBuffer,
+    pub z_buffer_storage_buffer: D::StorageBuffer,
 }
 
 impl<D> PropagateProgram<D> where D: Device {
@@ -561,15 +624,19 @@ impl<D> PropagateProgram<D> where D: Device {
         let local_size = ComputeDimensions { x: 256, y: 1, z: 1 };
         device.set_compute_program_local_size(&mut program, local_size);
 
+        let framebuffer_tile_size_uniform = device.get_uniform(&program, "FramebufferTileSize");
+        let z_buffer_image = device.get_image_parameter(&program, "ZBuffer");
         let metadata_storage_buffer = device.get_storage_buffer(&program, "Metadata", 0);
         let backdrops_storage_buffer = device.get_storage_buffer(&program, "Backdrops", 1);
         let alpha_tiles_storage_buffer = device.get_storage_buffer(&program, "AlphaTiles", 2);
-
+        let z_buffer_storage_buffer = device.get_storage_buffer(&program, "ZBuffer", 3);
         PropagateProgram {
             program,
+            framebuffer_tile_size_uniform,
             metadata_storage_buffer,
             backdrops_storage_buffer,
             alpha_tiles_storage_buffer,
+            z_buffer_storage_buffer,
         }
     }
 }

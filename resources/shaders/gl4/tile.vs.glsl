@@ -22,11 +22,14 @@ uniform mat4 uTransform;
 uniform vec2 uTileSize;
 uniform sampler2D uTextureMetadata;
 uniform ivec2 uTextureMetadataSize;
+uniform isampler2D uZBuffer;
+uniform ivec2 uZBufferSize;
 
 in ivec2 aTileOffset;
 in ivec2 aTileOrigin;
 in uvec4 aMaskTexCoord0;
 in ivec2 aBackdropCtrl;
+in int aPathIndex;
 in int aColor;
 
 out vec3 vMaskTexCoord0;
@@ -38,9 +41,17 @@ void main(){
     vec2 tileOrigin = vec2(aTileOrigin), tileOffset = vec2(aTileOffset);
     vec2 position =(tileOrigin + tileOffset)* uTileSize;
 
+    bool cull = false;
+    if(aPathIndex < texture(uZBuffer,(tileOrigin + vec2(0.5))/ vec2(uZBufferSize)). x)
+
+        cull = true;
+
     uvec2 maskTileCoord = uvec2(aMaskTexCoord0 . x, aMaskTexCoord0 . y + 256u * aMaskTexCoord0 . z);
     vec2 maskTexCoord0 =(vec2(maskTileCoord)+ tileOffset)* uTileSize;
-    if(aMaskTexCoord0 . w != 0u && aBackdropCtrl . x == 0)
+    if(aBackdropCtrl . x == 0 && aMaskTexCoord0 . w != 0u)
+        cull = true;
+
+    if(cull)
         position = vec2(0.0);
 
     vec2 textureMetadataScale = vec2(1.0)/ vec2(uTextureMetadataSize);

@@ -132,10 +132,11 @@ pub struct FillObjectPrimitive {
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct TileObjectPrimitive {
-    // TODO(pcwalton): Maybe remove these in favor of path ID?
     pub tile_x: i16,
     pub tile_y: i16,
     pub alpha_tile_id: AlphaTileId,
+    pub path_id: u32,
+    // TODO(pcwalton): Maybe look the color up based on path ID?
     pub color: u16,
     pub backdrop: i8,
     pub ctrl: u8,
@@ -144,10 +145,11 @@ pub struct TileObjectPrimitive {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct PropagateMetadata {
-    pub tiles_across: u32,
-    pub tiles_down: u32,
+    pub tile_rect: RectI,
     pub tile_offset: u32,
     pub backdrops_offset: u32,
+    pub z_write: u32,
+    pub pad0: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
