@@ -276,6 +276,15 @@ impl<D> Renderer<D> where D: Device {
         self.device.begin_commands();
         self.current_timer = Some(PendingTimer::new());
         self.stats = RenderStats::default();
+
+        let framebuffer_tile_size = self.framebuffer_tile_size();
+        let z_buffer_length = framebuffer_tile_size.x() as usize *
+            framebuffer_tile_size.y() as usize;
+        let mut z_buffer_data = vec![0; z_buffer_length];
+        self.device.upload_to_buffer::<i32>(&self.back_frame.z_buffer,
+                                            0,
+                                            &z_buffer_data,
+                                            BufferTarget::Storage);
     }
 
     pub fn render_command(&mut self, command: &RenderCommand) {
@@ -928,9 +937,6 @@ impl<D> Renderer<D> where D: Device {
                                      .get(tile_storage_id)
                                      .vertex_buffer;
 
-        let framebuffer_tile_size = self.device.texture_size(self.device.framebuffer_texture(
-            &self.back_frame.z_buffer_framebuffer));
-
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
@@ -941,7 +947,7 @@ impl<D> Renderer<D> where D: Device {
             images: &[],
             uniforms: &[
                 (&self.propagate_program.framebuffer_tile_size_uniform,
-                 UniformData::IVec2(framebuffer_tile_size.0)),
+                 UniformData::IVec2(self.framebuffer_tile_size().0)),
             ],
             storage_buffers: &[
                 (&self.propagate_program.metadata_storage_buffer,
@@ -962,8 +968,7 @@ impl<D> Renderer<D> where D: Device {
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
-        let z_buffer_size = self.device.texture_size(self.device.framebuffer_texture(
-            &self.back_frame.z_buffer_framebuffer));
+        let z_buffer_size = self.framebuffer_tile_size();
 
         self.device.draw_elements(6, &RenderState {
             target: &RenderTarget::Framebuffer(&self.back_frame.z_buffer_framebuffer),
@@ -1512,6 +1517,10 @@ impl<D> Renderer<D> where D: Device {
     fn texture_page(&self, id: TexturePageId) -> &D::Texture {
         self.device.framebuffer_texture(&self.texture_page_framebuffer(id))
     }
+
+    fn framebuffer_tile_size(&self) -> Vector2I {
+        pixel_size_to_tile_size(self.dest_framebuffer.window_size(&self.device))
+    }
 }
 
 impl<D> Frame<D> where D: Device {
@@ -1568,17 +1577,15 @@ impl<D> Frame<D> where D: Device {
         let propagate_metadata_buffer = device.create_buffer(BufferUploadMode::Dynamic);
         let backdrops_buffer = device.create_buffer(BufferUploadMode::Dynamic);
 
-        let mut z_buffer_texture_size = window_size + vec2i(TILE_WIDTH as i32, TILE_HEIGHT as i32);
-        z_buffer_texture_size = vec2i(z_buffer_texture_size.x() / TILE_WIDTH as i32,
-                                      z_buffer_texture_size.y() / TILE_HEIGHT as i32);
-        let z_buffer_texture = device.create_texture(TextureFormat::R32I, z_buffer_texture_size);
+        let framebuffer_tile_size = pixel_size_to_tile_size(window_size);
+        let z_buffer_texture = device.create_texture(TextureFormat::R32I, framebuffer_tile_size);
         device.set_texture_sampling_mode(&z_buffer_texture,
                                          TextureSamplingFlags::NEAREST_MIN |
                                          TextureSamplingFlags::NEAREST_MAG);
         let z_buffer_framebuffer = device.create_framebuffer(z_buffer_texture);
         let z_buffer = device.create_buffer(BufferUploadMode::Static);
-        let z_buffer_length = z_buffer_texture_size.x() as usize *
-            z_buffer_texture_size.y() as usize;
+        let z_buffer_length = framebuffer_tile_size.x() as usize *
+            framebuffer_tile_size.y() as usize;
         device.allocate_buffer::<i32>(&z_buffer,
                                       BufferData::Uninitialized(z_buffer_length),
                                       BufferTarget::Storage);
@@ -2173,4 +2180,11 @@ impl ToCombineMode for PaintCompositeOp {
             PaintCompositeOp::SrcIn => COMBINER_CTRL_COLOR_COMBINE_SRC_IN,
         }
     }
+}
+
+fn pixel_size_to_tile_size(pixel_size: Vector2I) -> Vector2I {
+    // Round up.
+    let tile_size = vec2i(TILE_WIDTH as i32, TILE_HEIGHT as i32);
+    let size = pixel_size + tile_size;
+    vec2i(size.x() / TILE_WIDTH as i32, size.y() / TILE_HEIGHT as i32)
 }
