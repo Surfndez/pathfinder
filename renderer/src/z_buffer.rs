@@ -60,6 +60,7 @@ impl ZBuffer {
     }
 
     // TODO(pcwalton): Don't create a separate buffer.
+    /*
     pub(crate) fn build_solid_tiles(&self, paint_metadata: &[PaintMetadata]) -> SolidTiles {
         let mut solid_tiles = SolidTiles { batches: vec![] };
 
@@ -104,7 +105,7 @@ impl ZBuffer {
         }
 
         solid_tiles
-    }
+    }*/
 }
 
 impl TileObjectPrimitive {

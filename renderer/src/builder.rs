@@ -13,7 +13,7 @@
 use crate::concurrent::executor::Executor;
 use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
 use crate::gpu_data::{AlphaTileId, Clip, ClipBatchKey, ClipBatchKind, Fill};
-use crate::gpu_data::{FillBatchEntry, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
+use crate::gpu_data::{FillBatchEntry, PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
 use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatch};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::{PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
@@ -288,10 +288,12 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
 
         // Process first Z-buffer.
         let first_z_buffer = remaining_layer_z_buffers.pop().unwrap();
+        /*
         let first_solid_tiles = first_z_buffer.build_solid_tiles(paint_metadata);
         for batch in first_solid_tiles.batches {
             culled_tiles.display_list.push(CulledDisplayItem::DrawTiles(batch));
         }
+        */
 
         let mut layer_z_buffers_stack = vec![first_z_buffer];
         let mut current_depth = 1;
@@ -303,10 +305,12 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                                 .push(CulledDisplayItem::PushRenderTarget(render_target_id));
 
                     let z_buffer = remaining_layer_z_buffers.pop().unwrap();
+                    /*
                     let solid_tiles = z_buffer.build_solid_tiles(paint_metadata);
                     for batch in solid_tiles.batches {
                         culled_tiles.display_list.push(CulledDisplayItem::DrawTiles(batch));
                     }
+                    */
                     layer_z_buffers_stack.push(z_buffer);
                 }
 
@@ -424,55 +428,77 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                        color_texture: Option<TileBatchTexture>,
                        blend_mode: BlendMode,
                        filter: Filter) {
+        // Try to reuse the last batch in the display list.
+        //
+        // TODO(pcwalton): We could try harder to find a batch by taking tile positions into
+        // account...
+        let mut dest_batch_index = None;
+        if dest_batch_index.is_none() {
+            match culled_tiles.display_list.last() {
+                Some(&CulledDisplayItem::DrawTiles(TileBatch {
+                    tiles: _,
+                    propagate_metadata: _,
+                    color_texture: ref batch_color_texture,
+                    blend_mode: batch_blend_mode,
+                    filter: batch_filter,
+                })) if *batch_color_texture == color_texture &&
+                        batch_blend_mode == blend_mode &&
+                        batch_filter == filter &&
+                        !batch_blend_mode.needs_readable_framebuffer() => {
+                    dest_batch_index = Some(culled_tiles.display_list.len() - 1);
+                }
+                _ => {}
+            }
+        }
+
+        // If it's still the case that no suitable batch was found, then make a new one.
+        if dest_batch_index.is_none() {
+            dest_batch_index = Some(culled_tiles.display_list.len());
+            culled_tiles.display_list.push(CulledDisplayItem::DrawTiles(TileBatch {
+                tiles: vec![],
+                propagate_metadata: vec![],
+                color_texture,
+                blend_mode,
+                filter,
+            }));
+        }
+
+        let dest_batch_index = dest_batch_index.unwrap();
+        let tile_offset = match culled_tiles.display_list[dest_batch_index] {
+            CulledDisplayItem::DrawTiles(ref tiles) => tiles.tiles.len() as u32,
+            _ => unreachable!(),
+        };
+
         for built_alpha_tile in &built_alpha_tiles.data {
+            /*
             // Early cull if possible.
             let alpha_tile_coords = vec2i(built_alpha_tile.tile_x as i32,
                                           built_alpha_tile.tile_y as i32);
             if !layer_z_buffer.test(alpha_tile_coords, current_depth) {
                 continue;
             }
-
-            // Try to reuse the last batch in the display list.
-            //
-            // TODO(pcwalton): We could try harder to find a batch by taking tile positions into
-            // account...
-            let mut dest_batch_index = None;
-            if dest_batch_index.is_none() {
-                match culled_tiles.display_list.last() {
-                    Some(&CulledDisplayItem::DrawTiles(TileBatch {
-                        tiles: _,
-                        color_texture: ref batch_color_texture,
-                        blend_mode: batch_blend_mode,
-                        filter: batch_filter,
-                    })) if *batch_color_texture == color_texture &&
-                            batch_blend_mode == blend_mode &&
-                            batch_filter == filter &&
-                            !batch_blend_mode.needs_readable_framebuffer() => {
-                        dest_batch_index = Some(culled_tiles.display_list.len() - 1);
-                    }
-                    _ => {}
-                }
-            }
-
-            // If it's still the case that no suitable batch was found, then make a new one.
-            if dest_batch_index.is_none() {
-                dest_batch_index = Some(culled_tiles.display_list.len());
-                culled_tiles.display_list.push(CulledDisplayItem::DrawTiles(TileBatch {
-                    tiles: vec![],
-                    color_texture,
-                    blend_mode,
-                    filter,
-                }));
-            }
+            */
 
             // Add to the appropriate batch.
-            match culled_tiles.display_list[dest_batch_index.unwrap()] {
+            match culled_tiles.display_list[dest_batch_index] {
                 CulledDisplayItem::DrawTiles(ref mut tiles) => {
                     tiles.tiles.push(*built_alpha_tile);
                 }
                 _ => unreachable!(),
             }
         }
+
+        match culled_tiles.display_list[dest_batch_index] {
+            CulledDisplayItem::DrawTiles(ref mut tiles) => {
+                tiles.propagate_metadata.push(PropagateMetadata {
+                    tiles_across: built_alpha_tiles.rect.width() as u32,
+                    tiles_down: built_alpha_tiles.rect.height() as u32,
+                    tile_offset,
+                    pad: 0,
+                });
+            }
+            _ => unreachable!(),
+        };
 
         //println!("batch_indices={:?}", batch_indices);
     }

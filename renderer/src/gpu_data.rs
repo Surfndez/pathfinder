@@ -106,6 +106,7 @@ pub struct TextureLocation {
 #[derive(Clone, Debug)]
 pub struct TileBatch {
     pub tiles: Vec<TileObjectPrimitive>,
+    pub propagate_metadata: Vec<PropagateMetadata>,
     pub color_texture: Option<TileBatchTexture>,
     pub filter: Filter,
     pub blend_mode: BlendMode,
@@ -137,6 +138,15 @@ pub struct TileObjectPrimitive {
     pub color: u16,
     pub backdrop: i8,
     pub ctrl: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct PropagateMetadata {
+    pub tiles_across: u32,
+    pub tiles_down: u32,
+    pub tile_offset: u32,
+    pub pad: u32,
 }
 
 #[derive(Clone, Copy, Debug)]

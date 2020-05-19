@@ -13,10 +13,10 @@ use crate::gpu::options::{DestFramebuffer, RendererOptions};
 use crate::gpu::shaders::{BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
 use crate::gpu::shaders::{ClipTileProgram, ClipTileVertexArray};
 use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
-use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, MAX_TILES_PER_BATCH, ReprojectionProgram};
+use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TileProgram, TileVertexArray};
-use crate::gpu_data::{ClipBatch, ClipBatchKey, ClipBatchKind, Fill, FillBatchEntry, RenderCommand};
+use crate::gpu_data::{ClipBatch, ClipBatchKey, ClipBatchKind, Fill, FillBatchEntry, PropagateMetadata, RenderCommand};
 use crate::gpu_data::{TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::BoundingQuad;
@@ -113,6 +113,7 @@ pub struct Renderer<D> where D: Device {
     tile_clip_program: ClipTileProgram<D>,
     stencil_program: StencilProgram<D>,
     reprojection_program: ReprojectionProgram<D>,
+    propagate_program: PropagateProgram<D>,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
     next_fills: Vec<i32>,
@@ -159,6 +160,7 @@ struct Frame<D> where D: Device {
     dest_blend_framebuffer: D::Framebuffer,
     intermediate_dest_framebuffer: D::Framebuffer,
     texture_metadata_texture: D::Texture,
+    propagate_metadata_buffer: D::Buffer,
 }
 
 impl<D> Renderer<D> where D: Device {
@@ -175,6 +177,7 @@ impl<D> Renderer<D> where D: Device {
         let tile_clip_program = ClipTileProgram::new(&device, resources);
         let stencil_program = StencilProgram::new(&device, resources);
         let reprojection_program = ReprojectionProgram::new(&device, resources);
+        let propagate_program = PropagateProgram::new(&device, resources);
 
         let area_lut_texture =
             device.create_texture_from_png(resources, "area-lut", TextureFormat::RGBA8);
@@ -225,6 +228,7 @@ impl<D> Renderer<D> where D: Device {
             tile_program,
             tile_copy_program,
             tile_clip_program,
+            propagate_program,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             next_fills: vec![],
@@ -302,9 +306,11 @@ impl<D> Renderer<D> where D: Device {
             RenderCommand::DrawTiles(ref batch) => {
                 let count = batch.tiles.len();
                 self.stats.alpha_tile_count += count;
-                let storage_id = self.upload_tiles(&batch.tiles);
+                let tile_storage_id = self.upload_tiles(&batch.tiles);
+                self.upload_propagate_metadata(&batch.propagate_metadata);
+                self.propagate_tiles(batch.propagate_metadata.len() as u32, tile_storage_id);
                 self.draw_tiles(count as u32,
-                                storage_id,
+                                tile_storage_id,
                                 batch.color_texture,
                                 batch.blend_mode,
                                 batch.filter)
@@ -554,6 +560,12 @@ impl<D> Renderer<D> where D: Device {
         self.ensure_index_buffer(tiles.len());
 
         storage_id
+    }
+
+    fn upload_propagate_metadata(&mut self, propagate_metadata: &[PropagateMetadata]) {
+        self.device.allocate_buffer(&self.back_frame.propagate_metadata_buffer,
+                                    BufferData::Memory(propagate_metadata),
+                                    BufferTarget::Storage);
     }
 
     fn ensure_index_buffer(&mut self, mut length: usize) {
@@ -892,6 +904,32 @@ impl<D> Renderer<D> where D: Device {
         let draw_viewport = self.draw_viewport().size().to_f32();
         let scale = Vector4F::new(2.0 / draw_viewport.x(), -2.0 / draw_viewport.y(), 1.0, 1.0);
         Transform4F::from_scale(scale).translate(Vector4F::new(-1.0, 1.0, 0.0, 1.0))
+    }
+
+    fn propagate_tiles(&mut self, path_count: u32, tile_storage_id: StorageID) {
+        let alpha_tile_buffer = &self.back_frame
+                                     .tile_vertex_storage_allocator
+                                     .get(tile_storage_id)
+                                     .vertex_buffer;
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        let dimensions = ComputeDimensions { x: 1, y: path_count, z: 1 };
+        self.device.dispatch_compute(dimensions, &ComputeState {
+            program: &self.propagate_program.program,
+            textures: &[],
+            images: &[],
+            uniforms: &[],
+            storage_buffers: &[
+                (&self.propagate_program.metadata_storage_buffer,
+                 &self.back_frame.propagate_metadata_buffer),
+                (&self.propagate_program.alpha_tiles_storage_buffer, alpha_tile_buffer),
+            ],
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().tile_times.push(TimerFuture::new(timer_query));
     }
 
     fn draw_tiles(&mut self,
@@ -1455,6 +1493,8 @@ impl<D> Frame<D> where D: Device {
         let dest_blend_texture = device.create_texture(TextureFormat::RGBA8, window_size);
         let dest_blend_framebuffer = device.create_framebuffer(dest_blend_texture);
 
+        let propagate_metadata_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+
         Frame {
             blit_vertex_array,
             clear_vertex_array,
@@ -1470,6 +1510,7 @@ impl<D> Frame<D> where D: Device {
             mask_framebuffer: None,
             intermediate_dest_framebuffer,
             dest_blend_framebuffer,
+            propagate_metadata_buffer,
             framebuffer_flags: FramebufferFlags::empty(),
         }
     }

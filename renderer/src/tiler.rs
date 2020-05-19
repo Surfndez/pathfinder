@@ -49,10 +49,11 @@ impl<'a, 'b> Tiler<'a, 'b> {
             }
         }
 
-        self.propagate_backdrops();
+        //self.propagate_backdrops();
         self.pack_and_cull();
     }
 
+    /*
     fn propagate_backdrops(&mut self) {
         let tiles_across = self.object_builder.built_path.tiles.rect.width() as usize;
         for (draw_tile_index, draw_tile) in self.object_builder
@@ -66,7 +67,7 @@ impl<'a, 'b> Tiler<'a, 'b> {
             draw_tile.backdrop = self.object_builder.current_backdrops[column];
             self.object_builder.current_backdrops[column] += delta;
         }
-    }
+    }*/
 
     fn pack_and_cull(&mut self) {
         let draw_tiling_path_info = match self.path_info {

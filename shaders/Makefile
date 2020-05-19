@@ -29,6 +29,7 @@ SHADERS=\
 
 COMPUTE_SHADERS=\
 	fill.cs.glsl \
+	propagate.cs.glsl \
 	$(EMPTY)
 
 INCLUDES=\
