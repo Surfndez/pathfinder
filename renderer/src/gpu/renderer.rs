@@ -391,8 +391,8 @@ impl<D> Renderer<D> where D: Device {
             for old_query in pending_timer.poll(&self.device) {
                 self.timer_query_cache.free(old_query);
             }
-            if let Some(gpu_time) = pending_timer.total_time() {
-                return Some(RenderTime { gpu_time })
+            if let Some(render_time) = pending_timer.total_time() {
+                return Some(render_time);
             }
             self.pending_timers.push_front(pending_timer);
         }
@@ -961,7 +961,7 @@ impl<D> Renderer<D> where D: Device {
         });
 
         self.device.end_timer_query(&timer_query);
-        self.current_timer.as_mut().unwrap().tile_times.push(TimerFuture::new(timer_query));
+        self.current_timer.as_mut().unwrap().propagate_times.push(TimerFuture::new(timer_query));
     }
 
     fn prepare_z_buffer(&mut self) {
@@ -990,7 +990,7 @@ impl<D> Renderer<D> where D: Device {
         });
 
         self.device.end_timer_query(&timer_query);
-        self.current_timer.as_mut().unwrap().tile_times.push(TimerFuture::new(timer_query));
+        self.current_timer.as_mut().unwrap().propagate_times.push(TimerFuture::new(timer_query));
     }
 
     fn draw_tiles(&mut self,
@@ -1795,6 +1795,7 @@ struct TimerQueryCache<D> where D: Device {
 
 struct PendingTimer<D> where D: Device {
     fill_times: Vec<TimerFuture<D>>,
+    propagate_times: Vec<TimerFuture<D>>,
     tile_times: Vec<TimerFuture<D>>,
 }
 
@@ -1819,12 +1820,13 @@ impl<D> TimerQueryCache<D> where D: Device {
 
 impl<D> PendingTimer<D> where D: Device {
     fn new() -> PendingTimer<D> {
-        PendingTimer { fill_times: vec![], tile_times: vec![] }
+        PendingTimer { fill_times: vec![], propagate_times: vec![], tile_times: vec![] }
     }
 
     fn poll(&mut self, device: &D) -> Vec<D::TimerQuery> {
         let mut old_queries = vec![];
-        for future in self.fill_times.iter_mut().chain(self.tile_times.iter_mut()) {
+        for future in self.fill_times.iter_mut().chain(self.propagate_times.iter_mut())
+                                                .chain(self.tile_times.iter_mut()) {
             if let Some(old_query) = future.poll(device) {
                 old_queries.push(old_query)
             }
@@ -1832,15 +1834,16 @@ impl<D> PendingTimer<D> where D: Device {
         old_queries
     }
 
-    fn total_time(&self) -> Option<Duration> {
-        let mut total = Duration::default();
-        for future in self.fill_times.iter().chain(self.tile_times.iter()) {
-            match *future {
-                TimerFuture::Pending(_) => return None,
-                TimerFuture::Resolved(time) => total += time,
+    fn total_time(&self) -> Option<RenderTime> {
+        let fill_time = total_time_of_timer_futures(&self.fill_times);
+        let propagate_time = total_time_of_timer_futures(&self.propagate_times);
+        let tile_time = total_time_of_timer_futures(&self.tile_times);
+        match (fill_time, propagate_time, tile_time) {
+            (Some(fill_time), Some(propagate_time), Some(tile_time)) => {
+                Some(RenderTime { fill_time, propagate_time, tile_time })
             }
+            _ => None,
         }
-        Some(total)
     }
 }
 
@@ -1866,15 +1869,32 @@ impl<D> TimerFuture<D> where D: Device {
     }
 }
 
+fn total_time_of_timer_futures<D>(futures: &[TimerFuture<D>]) -> Option<Duration> where D: Device {
+    let mut total = Duration::default();
+    for future in futures {
+        match *future {
+            TimerFuture::Pending(_) => return None,
+            TimerFuture::Resolved(time) => total += time,
+        }
+    }
+    Some(total)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RenderTime {
-    pub gpu_time: Duration,
+    pub fill_time: Duration,
+    pub propagate_time: Duration,
+    pub tile_time: Duration,
 }
 
 impl Default for RenderTime {
     #[inline]
     fn default() -> RenderTime {
-        RenderTime { gpu_time: Duration::new(0, 0) }
+        RenderTime {
+            fill_time: Duration::new(0, 0),
+            propagate_time: Duration::new(0, 0),
+            tile_time: Duration::new(0, 0),
+        }
     }
 }
 
@@ -1883,7 +1903,11 @@ impl Add<RenderTime> for RenderTime {
 
     #[inline]
     fn add(self, other: RenderTime) -> RenderTime {
-        RenderTime { gpu_time: self.gpu_time + other.gpu_time }
+        RenderTime {
+            fill_time: self.fill_time + other.fill_time,
+            propagate_time: self.propagate_time + other.propagate_time,
+            tile_time: self.tile_time + other.tile_time,
+        }
     }
 }
 
@@ -1892,7 +1916,12 @@ impl Div<usize> for RenderTime {
 
     #[inline]
     fn div(self, divisor: usize) -> RenderTime {
-        RenderTime { gpu_time: self.gpu_time / divisor as u32 }
+        let divisor = divisor as u32;
+        RenderTime {
+            fill_time: self.fill_time / divisor,
+            propagate_time: self.propagate_time / divisor,
+            tile_time: self.tile_time / divisor,
+        }
     }
 }
 

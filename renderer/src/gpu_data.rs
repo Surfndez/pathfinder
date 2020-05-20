@@ -193,16 +193,15 @@ pub enum ClipBatchKind {
     Clip,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Clip {
-    pub dest_u: u8,
-    pub dest_v: u8,
-    pub src_u: u8,
-    pub src_v: u8,
+    pub dest_tile_id: AlphaTileId,
+    pub src_tile_id: AlphaTileId,
     pub backdrop: i8,
-    pub pad_0: u8,
-    pub pad_1: u16,
+    pub enabled: u8,
+    pub pad0: u8,
+    pub pad1: u8,
 }
 
 /*
@@ -221,6 +220,7 @@ pub struct Tile {
 */
 
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[repr(C)]
 pub struct AlphaTileId(pub u32);
 
 impl AlphaTileId {

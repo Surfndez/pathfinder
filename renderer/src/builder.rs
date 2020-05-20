@@ -73,6 +73,7 @@ pub(crate) struct BuiltPath {
     pub clip_tiles: Vec<BuiltClip>,
     */
     pub tiles: DenseTileMap<TileObjectPrimitive>,
+    pub clip_tiles: Option<DenseTileMap<Clip>>,
     /// During tiling, or if backdrop computation is done on GPU, this stores the sum of backdrops
     /// for tile columns above the viewport.
     pub backdrops: Vec<i32>,
@@ -112,7 +113,6 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         built_options: &'b PreparedBuildOptions,
         listener: Box<dyn RenderCommandListener + 'a>,
     ) -> SceneBuilder<'a, 'b> {
-        let effective_view_box = scene.effective_view_box(built_options);
         SceneBuilder {
             scene,
             built_options,
@@ -625,6 +625,23 @@ impl BuiltPath {
             }
         }, tiles::round_rect_out_to_tile_bounds(tile_map_bounds));
 
+        let clip_tiles = match *tiling_path_info {
+            TilingPathInfo::Draw(ref draw_tiling_path_info) if
+                    draw_tiling_path_info.built_clip_path.is_some() => {
+                Some(DenseTileMap::from_builder(|tile_coord| {
+                    Clip {
+                        dest_tile_id: AlphaTileId(!0),
+                        src_tile_id: AlphaTileId(!0),
+                        backdrop: 0,
+                        enabled: 0,
+                        pad0: 0,
+                        pad1: 0,
+                    }
+                }, tiles.rect))
+            }
+            _ => None,
+        };
+
         BuiltPath {
             /*
             empty_tiles: vec![],
@@ -634,6 +651,7 @@ impl BuiltPath {
             backdrops: vec![0; tiles.rect.width() as usize],
             occluders: if occludes { Some(vec![]) } else { None },
             tiles,
+            clip_tiles,
             fill_rule,
         }
     }
@@ -873,23 +891,6 @@ impl Tile {
     }
 }
 */
-
-impl Clip {
-    #[inline]
-    fn new(dest_tile_index: u16, src_tile_index: u16, src_backdrop: i8) -> Clip {
-        let dest_uv = calculate_mask_uv(dest_tile_index);
-        let src_uv = calculate_mask_uv(src_tile_index);
-        Clip {
-            dest_u: dest_uv.x() as u8,
-            dest_v: dest_uv.y() as u8,
-            src_u: src_uv.x() as u8,
-            src_v: src_uv.y() as u8,
-            backdrop: src_backdrop,
-            pad_0: 0,
-            pad_1: 0,
-        }
-    }
-}
 
 fn calculate_mask_uv(tile_index: u16) -> Vector2I {
     debug_assert_eq!(MASK_TILES_ACROSS, MASK_TILES_DOWN);

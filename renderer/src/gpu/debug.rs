@@ -30,8 +30,8 @@ const SAMPLE_BUFFER_SIZE: usize = 60;
 const STATS_WINDOW_WIDTH: i32 = 325;
 const STATS_WINDOW_HEIGHT: i32 = LINE_HEIGHT * 4 + PADDING + 2;
 
-const PERFORMANCE_WINDOW_WIDTH: i32 = 400;
-const PERFORMANCE_WINDOW_HEIGHT: i32 = LINE_HEIGHT * 4 + PADDING + 2;
+const PERFORMANCE_WINDOW_WIDTH: i32 = 425;
+const PERFORMANCE_WINDOW_HEIGHT: i32 = LINE_HEIGHT * 5 + PADDING + 2;
 
 pub struct DebugUIPresenter<D>
 where
@@ -131,17 +131,31 @@ where
         let mean_gpu_sample = self.gpu_samples.mean();
         self.ui_presenter.draw_text(
             device,
-            &format!("GPU: {:.3} ms", duration_to_ms(mean_gpu_sample.gpu_time)),
+            &format!("GPU Fill: {:.3} ms", duration_to_ms(mean_gpu_sample.fill_time)),
             origin + vec2i(0, LINE_HEIGHT * 1),
             false,
         );
+        self.ui_presenter.draw_text(
+            device,
+            &format!("GPU Propagate: {:.3} ms", duration_to_ms(mean_gpu_sample.propagate_time)),
+            origin + vec2i(0, LINE_HEIGHT * 2),
+            false,
+        );
+        self.ui_presenter.draw_text(
+            device,
+            &format!("GPU Composite: {:.3} ms", duration_to_ms(mean_gpu_sample.tile_time)),
+            origin + vec2i(0, LINE_HEIGHT * 3),
+            false,
+        );
 
-        let wallclock_time = f64::max(duration_to_ms(mean_gpu_sample.gpu_time),
-                                      duration_to_ms(mean_cpu_sample.cpu_build_time));
+        let wallclock_time = f64::max(duration_to_ms(mean_gpu_sample.fill_time),
+                                      duration_to_ms(mean_cpu_sample.cpu_build_time)) +
+            duration_to_ms(mean_gpu_sample.propagate_time) +
+            duration_to_ms(mean_gpu_sample.tile_time);
         self.ui_presenter.draw_text(
             device,
             &format!("Wallclock: {:.3} ms", wallclock_time),
-            origin + vec2i(0, LINE_HEIGHT * 3),
+            origin + vec2i(0, LINE_HEIGHT * 4),
             false,
         );
     }
