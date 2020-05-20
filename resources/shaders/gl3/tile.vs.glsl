@@ -43,7 +43,6 @@ void main(){
 
     bool cull = false;
     if(aPathIndex < texture(uZBuffer,(tileOrigin + vec2(0.5))/ vec2(uZBufferSize)). x)
-
         cull = true;
 
     uvec2 maskTileCoord = uvec2(aMaskTexCoord0 . x, aMaskTexCoord0 . y + 256u * aMaskTexCoord0 . z);

@@ -58,7 +58,7 @@ kernel void main0(constant int& uFirstTileIndex [[buffer(0)]], const device bFil
         coverages += computeCoverage(param, param_1, uAreaLUT, uAreaLUTSmplr);
         fillIndex = _256.iNextFills[fillIndex];
     } while (fillIndex >= 0);
-    int2 tileOrigin = int2(int(tileIndex & 255u), int((tileIndex >> 8u) & 255u)) * int2(16, 4);
+    int2 tileOrigin = int2(int(tileIndex & 255u), int((tileIndex >> 8u) & (255u + (((tileIndex >> 16u) & 255u) << 8u)))) * int2(16, 4);
     int2 destCoord = tileOrigin + int2(gl_LocalInvocationID.xy);
     uDest.write(coverages, uint2(destCoord));
 }

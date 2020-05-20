@@ -93,7 +93,9 @@ void main(){
         fillIndex = iNextFills[fillIndex];
     } while(fillIndex >= 0);
 
-    ivec2 tileOrigin = ivec2(tileIndex & 0xff,(tileIndex >> 8u)& 0xff)* ivec2(16, 4);
+    ivec2 tileOrigin =
+        ivec2(tileIndex & 0xff,(tileIndex >> 8u)& 0xff +(((tileIndex >> 16u)& 0xff)<< 8u))*
+        ivec2(16, 4);
     ivec2 destCoord = tileOrigin + ivec2(gl_LocalInvocationID . xy);
     imageStore(uDest, destCoord, coverages);
 }
