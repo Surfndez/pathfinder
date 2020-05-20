@@ -16,7 +16,7 @@ use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, Fil
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TileProgram, TileVertexArray};
-use crate::gpu_data::{ClipBatch, ClipBatchKey, ClipBatchKind, Fill, FillBatchEntry, PropagateMetadata, RenderCommand};
+use crate::gpu_data::{ClipBatch, ClipBatchKey, ClipBatchKind, Fill, PropagateMetadata, RenderCommand};
 use crate::gpu_data::{TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::BoundingQuad;
@@ -155,7 +155,10 @@ struct Frame<D> where D: Device {
     tile_vertex_storage_allocator: StorageAllocator<D, TileVertexStorage<D>>,
     quads_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_length: usize,
-    alpha_tile_pages: FxHashMap<u16, AlphaTilePage>,
+    buffered_fills: Vec<Fill>,
+    pending_fills: Vec<Fill>,
+    max_alpha_tile_index: u32,
+    allocated_alpha_tile_page_count: u32,
     mask_framebuffer: Option<D::Framebuffer>,
     tile_clip_vertex_array: ClipTileVertexArray<D>,
     stencil_vertex_array: StencilVertexArray<D>,
@@ -285,6 +288,8 @@ impl<D> Renderer<D> where D: Device {
                                             0,
                                             &z_buffer_data,
                                             BufferTarget::Storage);
+
+        self.back_frame.max_alpha_tile_index = 0;
     }
 
     pub fn render_command(&mut self, command: &RenderCommand) {
@@ -307,11 +312,7 @@ impl<D> Renderer<D> where D: Device {
             }
             RenderCommand::AddFills(ref fills) => self.add_fills(fills),
             RenderCommand::FlushFills => {
-                let page_indices: Vec<_> =
-                    self.back_frame.alpha_tile_pages.keys().cloned().collect();
-                for page_index in page_indices {
-                    self.draw_buffered_fills(page_index)
-                }
+                self.draw_buffered_fills();
             }
             RenderCommand::BeginTileDrawing => {}
             RenderCommand::ClipTiles(ref batches) => {
@@ -443,27 +444,20 @@ impl<D> Renderer<D> where D: Device {
         &self.quad_vertex_indices_buffer
     }
 
-    fn reallocate_alpha_tile_pages_if_necessary(&mut self) {
-        let mut alpha_tile_pages_needed = 0;
-        for alpha_tile_key in self.back_frame.alpha_tile_pages.keys() {
-            alpha_tile_pages_needed = alpha_tile_pages_needed.max(*alpha_tile_key as i32 + 1);
-        }
-
-        if let Some(ref current_mask_framebuffer) = self.back_frame.mask_framebuffer {
-            let mask_texture = self.device.framebuffer_texture(current_mask_framebuffer);
-            let mask_texture_size = self.device.texture_size(&mask_texture);
-            let current_alpha_tile_pages = mask_texture_size.y() / MASK_FRAMEBUFFER_HEIGHT;
-            if alpha_tile_pages_needed <= current_alpha_tile_pages {
-                return;
-            }
+    fn reallocate_alpha_tile_pages_if_necessary(&mut self, copy_existing: bool) {
+        let alpha_tile_pages_needed =
+            ((self.back_frame.max_alpha_tile_index + 0xffff) >> 16) as u32;
+        if alpha_tile_pages_needed <= self.back_frame.allocated_alpha_tile_page_count {
+            return;
         }
 
         let new_size = vec2i(MASK_FRAMEBUFFER_WIDTH,
-                             MASK_FRAMEBUFFER_HEIGHT * alpha_tile_pages_needed);
+                             MASK_FRAMEBUFFER_HEIGHT * alpha_tile_pages_needed as i32);
         let mask_texture = self.device.create_texture(TextureFormat::RGBA16F, new_size);
         self.back_frame.mask_framebuffer = Some(self.device.create_framebuffer(mask_texture));
+        self.back_frame.allocated_alpha_tile_page_count = alpha_tile_pages_needed;
 
-        // TODO(pcwalton): Copy over old data!
+        // TODO(pcwalton): Copy over existing content if needed!
     }
 
     fn allocate_texture_page(&mut self,
@@ -615,68 +609,48 @@ impl<D> Renderer<D> where D: Device {
         self.back_frame.quads_vertex_indices_length = length;
     }
 
-    fn add_fills(&mut self, fill_batch: &[FillBatchEntry]) {
+    fn add_fills(&mut self, fill_batch: &[Fill]) {
         if fill_batch.is_empty() {
             return;
         }
 
         self.stats.fill_count += fill_batch.len();
 
-        // We have to make sure we don't split batches across draw calls, or else the compute
-        // shader path, which expects to see all the fills belonging to one tile in the same
-        // batch, will break.
+        let preserve_alpha_mask_contents = self.back_frame.max_alpha_tile_index > 0;
 
-        let mut pages_touched = vec![];
-        for fill_batch_entry in fill_batch {
-            let page_index = fill_batch_entry.page;
-            if !self.back_frame.alpha_tile_pages.contains_key(&page_index) {
-                let alpha_tile_page = AlphaTilePage::new();
-                self.back_frame.alpha_tile_pages.insert(page_index, alpha_tile_page);
-                self.reallocate_alpha_tile_pages_if_necessary();
-            }
-
-            let page = self.back_frame.alpha_tile_pages.get_mut(&page_index).unwrap();
-            if page.pending_fills.is_empty() {
-                pages_touched.push(page_index);
-            }
-            page.pending_fills.push(fill_batch_entry.fill);
+        self.back_frame.pending_fills.reserve(fill_batch.len());
+        for fill in fill_batch {
+            self.back_frame.max_alpha_tile_index =
+                self.back_frame.max_alpha_tile_index.max(fill.alpha_tile_index + 1);
+            self.back_frame.pending_fills.push(*fill);
         }
 
-        for page_index in pages_touched {
-            if self.back_frame.alpha_tile_pages[&page_index].buffered_fills.len() +
-                    self.back_frame.alpha_tile_pages[&page_index].pending_fills.len() >
-                    MAX_FILLS_PER_BATCH {
-                self.draw_buffered_fills(page_index);
-            }
+        self.reallocate_alpha_tile_pages_if_necessary(preserve_alpha_mask_contents);
 
-            let page = self.back_frame.alpha_tile_pages.get_mut(&page_index).unwrap();
-            for fill in &page.pending_fills {
-                page.buffered_fills.push(*fill);
-            }
-            page.pending_fills.clear();
+        if self.back_frame.buffered_fills.len() + self.back_frame.pending_fills.len() >
+                MAX_FILLS_PER_BATCH {
+            self.draw_buffered_fills();
         }
+
+        self.back_frame.buffered_fills.extend(self.back_frame.pending_fills.drain(..));
     }
 
-    fn draw_buffered_fills(&mut self, page: u16) {
+    fn draw_buffered_fills(&mut self) {
         match self.fill_program {
-            FillProgram::Raster(_) => self.draw_buffered_fills_via_raster(page),
-            FillProgram::Compute(_) => self.draw_buffered_fills_via_compute(page),
+            FillProgram::Raster(_) => self.draw_buffered_fills_via_raster(),
+            FillProgram::Compute(_) => self.draw_buffered_fills_via_compute(),
         }
     }
 
-    fn draw_buffered_fills_via_raster(&mut self, page: u16) {
+    fn draw_buffered_fills_via_raster(&mut self) {
         let fill_raster_program = match self.fill_program {
             FillProgram::Raster(ref fill_raster_program) => fill_raster_program,
             _ => unreachable!(),
         };
 
-        let mask_viewport = self.mask_viewport_for_page(page);
+        let mask_viewport = self.mask_viewport();
 
-        let alpha_tile_page = self.back_frame
-                                  .alpha_tile_pages
-                                  .get_mut(&page)
-                                  .expect("Where's the alpha tile page?");
-        let buffered_fills = &mut alpha_tile_page.buffered_fills;
+        let buffered_fills = &mut self.back_frame.buffered_fills;
         if buffered_fills.is_empty() {
             return;
         }
@@ -752,17 +726,13 @@ impl<D> Renderer<D> where D: Device {
         buffered_fills.clear();
     }
 
-    fn draw_buffered_fills_via_compute(&mut self, page: u16) {
+    fn draw_buffered_fills_via_compute(&mut self) {
         let fill_compute_program = match self.fill_program {
             FillProgram::Compute(ref fill_compute_program) => fill_compute_program,
             _ => unreachable!(),
         };
 
-        let alpha_tile_page = self.back_frame
-                                  .alpha_tile_pages
-                                  .get_mut(&page)
-                                  .expect("Where's the alpha tile page?");
-        let buffered_fills = &mut alpha_tile_page.buffered_fills;
+        let buffered_fills = &mut self.back_frame.buffered_fills;
         if buffered_fills.is_empty() {
             return;
         }
@@ -1503,9 +1473,10 @@ impl<D> Renderer<D> where D: Device {
         }
     }
 
-    fn mask_viewport_for_page(&self, page: u16) -> RectI {
-        RectI::new(vec2i(0, MASK_FRAMEBUFFER_HEIGHT * page as i32),
-                   vec2i(MASK_FRAMEBUFFER_WIDTH, MASK_FRAMEBUFFER_HEIGHT))
+    fn mask_viewport(&self) -> RectI {
+        let page_count = self.back_frame.allocated_alpha_tile_page_count as i32;
+        let height = MASK_FRAMEBUFFER_HEIGHT * page_count;
+        RectI::new(Vector2I::default(), vec2i(MASK_FRAMEBUFFER_WIDTH, height))
     }
 
     fn render_target_location(&self, render_target_id: RenderTargetId) -> TextureLocation {
@@ -1609,8 +1580,11 @@ impl<D> Frame<D> where D: Device {
             stencil_vertex_array,
             quads_vertex_indices_buffer,
             quads_vertex_indices_length: 0,
-            alpha_tile_pages: FxHashMap::default(),
             texture_metadata_texture,
+            buffered_fills: vec![],
+            pending_fills: vec![],
+            max_alpha_tile_index: 0,
+            allocated_alpha_tile_page_count: 0,
             mask_framebuffer: None,
             intermediate_dest_framebuffer,
             dest_blend_framebuffer,
@@ -2119,17 +2093,6 @@ impl BlendModeExt for BlendMode {
             BlendMode::Color |
             BlendMode::Luminosity => true,
         }
-    }
-}
-
-struct AlphaTilePage {
-    buffered_fills: Vec<Fill>,
-    pending_fills: Vec<Fill>,
-}
-
-impl AlphaTilePage {
-    fn new() -> AlphaTilePage {
-        AlphaTilePage { buffered_fills: vec![], pending_fills: vec![] }
     }
 }
 

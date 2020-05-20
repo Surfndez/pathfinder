@@ -64,7 +64,7 @@ pub enum RenderCommand {
     UploadTextureMetadata(Vec<TextureMetadataEntry>),
 
     // Adds fills to the queue.
-    AddFills(Vec<FillBatchEntry>),
+    AddFills(Vec<Fill>),
 
     // Flushes the queue of fills.
     FlushFills,
@@ -149,12 +149,6 @@ pub struct PropagateMetadata {
 pub struct TextureMetadataEntry {
     pub color_0_transform: Transform2F,
     pub base_color: ColorU,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct FillBatchEntry {
-    pub fill: Fill,
-    pub page: u16,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

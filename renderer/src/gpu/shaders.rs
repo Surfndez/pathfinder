@@ -593,7 +593,6 @@ impl<D> PropagateProgram<D> where D: Device {
         device.set_compute_program_local_size(&mut program, local_size);
 
         let framebuffer_tile_size_uniform = device.get_uniform(&program, "FramebufferTileSize");
-        let z_buffer_image = device.get_image_parameter(&program, "ZBuffer");
         let metadata_storage_buffer = device.get_storage_buffer(&program, "Metadata", 0);
         let backdrops_storage_buffer = device.get_storage_buffer(&program, "Backdrops", 1);
         let alpha_tiles_storage_buffer = device.get_storage_buffer(&program, "AlphaTiles", 2);

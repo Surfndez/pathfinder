@@ -13,7 +13,7 @@
 use crate::concurrent::executor::Executor;
 use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
 use crate::gpu_data::{AlphaTileId, Clip, ClipBatchKey, ClipBatchKind, Fill};
-use crate::gpu_data::{FillBatchEntry, PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
+use crate::gpu_data::{PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
 use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatch};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::{PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
@@ -49,7 +49,7 @@ pub(crate) struct SceneBuilder<'a, 'b> {
 #[derive(Debug)]
 pub(crate) struct ObjectBuilder {
     pub built_path: BuiltPath,
-    pub fills: Vec<FillBatchEntry>,
+    pub fills: Vec<Fill>,
     pub bounds: RectF,
 }
 
@@ -251,7 +251,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         }
     }
 
-    fn send_fills(&self, fills: Vec<FillBatchEntry>) {
+    fn send_fills(&self, fills: Vec<Fill>) {
         if !fills.is_empty() {
             self.listener.send(RenderCommand::AddFills(fills));
         }
@@ -732,17 +732,14 @@ impl ObjectBuilder {
 
         // Pack instance data.
         debug!("... OK, pushing");
-        self.fills.push(FillBatchEntry {
-            page: alpha_tile_id.page(),
-            fill: Fill {
-                line_segment: LineSegmentU16 {
-                    from_x: from_x as u16,
-                    from_y: from_y as u16,
-                    to_x: to_x as u16,
-                    to_y: to_y as u16,
-                }, 
-                alpha_tile_index: alpha_tile_id.0,
-            },
+        self.fills.push(Fill {
+            line_segment: LineSegmentU16 {
+                from_x: from_x as u16,
+                from_y: from_y as u16,
+                to_x: to_x as u16,
+                to_y: to_y as u16,
+            }, 
+            alpha_tile_index: alpha_tile_id.0,
         });
     }
 
