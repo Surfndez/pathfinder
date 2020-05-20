@@ -52,6 +52,7 @@ vec4 computeCoverage(vec2 from, vec2 to, sampler2D areaLUT){
 }
 
 
+
 layout(local_size_x = 256)in;
 
 uniform ivec2 uFramebufferTileSize;

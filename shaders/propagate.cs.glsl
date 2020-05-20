@@ -22,6 +22,7 @@ precision highp sampler2D;
 
 #include "fill.inc.glsl"
 
+// TODO(pcwalton): Improve occupancy!
 layout(local_size_x = 256) in;
 
 uniform ivec2 uFramebufferTileSize;

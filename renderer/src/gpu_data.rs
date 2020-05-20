@@ -22,6 +22,7 @@ use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::Vector2I;
 use pathfinder_gpu::TextureSamplingFlags;
 use std::fmt::{Debug, Formatter, Result as DebugResult};
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -69,9 +70,6 @@ pub enum RenderCommand {
     // Flushes the queue of fills.
     FlushFills,
 
-    // Renders clips to the mask tile.
-    ClipTiles(Vec<ClipBatch>),
-
     // Pushes a render target onto the stack. Draw commands go to the render target on top of the
     // stack.
     PushRenderTarget(RenderTargetId),
@@ -79,11 +77,14 @@ pub enum RenderCommand {
     // Pops a render target from the stack.
     PopRenderTarget,
 
+    // Computes backdrops for tiles, prepares any Z-buffers, and performs clipping.
+    PrepareTiles { draw: PrepareDrawTilesBatch, clip: PrepareClipTilesBatch },
+
     // Marks that tile compositing is about to begin.
     BeginTileDrawing,
 
     // Draws a batch of tiles to the render target on top of the stack.
-    DrawTiles(TileBatch),
+    DrawTiles(DrawTileBatch),
 
     // Presents a rendered frame.
     Finish { cpu_build_time: Duration },
@@ -104,10 +105,22 @@ pub struct TextureLocation {
 }
 
 #[derive(Clone, Debug)]
-pub struct TileBatch {
+pub struct PrepareDrawTilesBatch {
     pub tiles: Vec<TileObjectPrimitive>,
     pub backdrops: Vec<i32>,
     pub propagate_metadata: Vec<PropagateMetadata>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PrepareClipTilesBatch {
+    pub tiles: Vec<TileObjectPrimitive>,
+    pub backdrops: Vec<i32>,
+    pub clip_metadata: Vec<ClipMetadata>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DrawTileBatch {
+    pub tile_indices: Range<u32>,
     pub color_texture: Option<TileBatchTexture>,
     pub filter: Filter,
     pub blend_mode: BlendMode,
@@ -159,10 +172,15 @@ pub struct Fill {
     pub alpha_tile_index: u32,
 }
 
-#[derive(Clone, Debug)]
-pub struct ClipBatch {
-    pub clips: Vec<Clip>,
-    pub key: ClipBatchKey,
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct ClipMetadata {
+    pub draw_tile_rect: RectI,
+    pub clip_tile_rect: RectI,
+    pub draw_tile_offset: u32,
+    pub clip_tile_offset: u32,
+    pub pad0: u32,
+    pub pad1: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

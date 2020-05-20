@@ -14,18 +14,19 @@ struct main0_out
 struct main0_in
 {
     int2 aTileOffset [[attribute(0)]];
-    int2 aDestTileOrigin [[attribute(1)]];
-    int2 aSrcTileOrigin [[attribute(2)]];
+    int aDestTileIndex [[attribute(1)]];
+    int aSrcTileIndex [[attribute(2)]];
     int aSrcBackdrop [[attribute(3)]];
-    int aEnabled [[attribute(4)]];
 };
 
-vertex main0_out main0(main0_in in [[stage_in]])
+vertex main0_out main0(main0_in in [[stage_in]], constant float2& uFramebufferSize [[buffer(0)]])
 {
     main0_out out = {};
-    float2 destPosition = float2(in.aDestTileOrigin + in.aTileOffset) / float2(256.0);
-    float2 srcPosition = float2(in.aSrcTileOrigin + in.aTileOffset) / float2(256.0);
-    if (in.aEnabled == 0)
+    float2 destPosition = float2(int2(in.aDestTileIndex % 256, in.aDestTileIndex / 256) + in.aTileOffset);
+    float2 srcPosition = float2(int2(in.aSrcTileIndex % 256, in.aSrcTileIndex / 256) + in.aTileOffset);
+    destPosition /= uFramebufferSize;
+    srcPosition /= uFramebufferSize;
+    if (in.aDestTileIndex < 0)
     {
         destPosition = float2(0.0);
     }

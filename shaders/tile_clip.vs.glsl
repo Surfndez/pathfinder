@@ -16,19 +16,22 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
+uniform vec2 uFramebufferSize;
+
 in ivec2 aTileOffset;
-in ivec2 aDestTileOrigin;
-in ivec2 aSrcTileOrigin;
+in int aDestTileIndex;
+in int aSrcTileIndex;
 in int aSrcBackdrop;
-in int aEnabled;
 
 out vec2 vTexCoord;
 out float vBackdrop;
 
 void main() {
-    vec2 destPosition = vec2(aDestTileOrigin + aTileOffset) / vec2(256.0);
-    vec2 srcPosition = vec2(aSrcTileOrigin + aTileOffset) / vec2(256.0);
-    if (aEnabled == 0)
+    vec2 destPosition = vec2(ivec2(aDestTileIndex % 256, aDestTileIndex / 256) + aTileOffset);
+    vec2 srcPosition  = vec2(ivec2(aSrcTileIndex  % 256, aSrcTileIndex  / 256) + aTileOffset);
+    destPosition /= uFramebufferSize;
+    srcPosition /= uFramebufferSize;
+    if (aDestTileIndex < 0)
         destPosition = vec2(0.0);
     vTexCoord = srcPosition;
     vBackdrop = float(aSrcBackdrop);

@@ -698,8 +698,7 @@ impl<D> Renderer<D> where D: Device {
             textures: &[(&fill_raster_program.area_lut_texture, &self.area_lut_texture)],
             uniforms: &[
                 (&fill_raster_program.framebuffer_size_uniform,
-                 UniformData::Vec2(F32x2::new(MASK_FRAMEBUFFER_WIDTH as f32,
-                                              MASK_FRAMEBUFFER_HEIGHT as f32))),
+                 UniformData::Vec2(mask_viewport.size().to_f32().0)),
                 (&fill_raster_program.tile_size_uniform,
                  UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
             ],

@@ -12,8 +12,8 @@
 
 use crate::concurrent::executor::Executor;
 use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
-use crate::gpu_data::{AlphaTileId, Clip, ClipBatchKey, ClipBatchKind, Fill};
-use crate::gpu_data::{PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
+use crate::gpu_data::{AlphaTileId, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, Fill};
+use crate::gpu_data::{PrepareClipTilesBatch, PrepareDrawTilesBatch, PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
 use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatch};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::{PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
@@ -56,6 +56,7 @@ pub(crate) struct ObjectBuilder {
 #[derive(Debug)]
 struct BuiltDrawPath {
     path: BuiltPath,
+    clip_path_id: Option<u32>,
     blend_mode: BlendMode,
     filter: Filter,
     color_texture: Option<TileBatchTexture>,
@@ -73,7 +74,7 @@ pub(crate) struct BuiltPath {
     pub clip_tiles: Vec<BuiltClip>,
     */
     pub tiles: DenseTileMap<TileObjectPrimitive>,
-    pub clip_tiles: Option<DenseTileMap<Clip>>,
+    //pub clip_tiles: Option<DenseTileMap<Clip>>,
     /// During tiling, or if backdrop computation is done on GPU, this stores the sum of backdrops
     /// for tile columns above the viewport.
     pub backdrops: Vec<i32>,
@@ -257,7 +258,50 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         }
     }
 
-    fn build_clips(&self, built_draw_paths: &[BuiltDrawPath]) {
+    fn build_clips(&self,
+                   built_draw_paths: &[BuiltDrawPath],
+                   built_clip_paths: &[BuiltPath],
+                   prepare_draw_tiles_batch: &PrepareDrawTilesBatch)
+                   -> PrepareClipTilesBatch {
+        let mut prepare_clip_tiles_batch = PrepareClipTilesBatch {
+            tiles: vec![],
+            backdrops: vec![],
+            clip_metadata: vec![],
+        };
+
+        let (mut clip_offsets, mut clip_tile_rects, mut clip_tiles) = (vec![], vec![], vec![]);
+        for clip_path in built_clip_paths {
+            clip_offsets.push(clip_tiles.len() as u32);
+            clip_tile_rects.push(clip_path.tiles.rect);
+            clip_tiles.extend_from_slice(&clip_path.tiles.data);
+        }
+
+        for (draw_path_id, built_draw_path) in built_draw_paths.iter().enumerate() {
+            let clip_path_id = match built_draw_path.clip_path_id {
+                None => continue,
+                Some(clip_path_id) => clip_path_id,
+            };
+            debug_assert!(clip_path_id < built_clip_paths.len() as u32);
+
+            prepare_clip_tiles_batch.clip_metadata.push(ClipMetadata {
+                draw_tile_rect: built_draw_path.path.tiles.rect,
+                clip_tile_rect: clip_tile_rects[clip_path_id as usize],
+                draw_tile_offset:
+                    prepare_draw_tiles_batch.propagate_metadata[draw_path_id].tile_offset,
+                clip_tile_offset: clip_offsets[clip_path_id as usize],
+                pad0: 0,
+                pad1: 0,
+            });
+        }
+
+        if !clip_metadata.is_empty() {
+            self.listener.send(RenderCommand::ClipTiles(ClipBatch {
+                clip_tiles,
+                clip_metadata,
+                affected_draw_tile_count,
+            }));
+        }
+
         // FIXME(pcwalton): Reenable.
         /*
         let mut built_clip_tiles = vec![];
@@ -534,9 +578,10 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
 
     fn finish_building(&mut self,
                        paint_metadata: &[PaintMetadata],
-                       built_draw_paths: Vec<BuiltDrawPath>) {
+                       built_draw_paths: Vec<BuiltDrawPath>,
+                       built_clip_paths: Vec<BuiltPath>) {
         self.listener.send(RenderCommand::FlushFills);
-        self.build_clips(&built_draw_paths);
+        let prepare_clip_batch = self.build_clips(&built_draw_paths, & &built_clip_paths);
         let culled_tiles = self.cull_tiles(paint_metadata, built_draw_paths);
         self.pack_tiles(culled_tiles);
     }
@@ -665,6 +710,7 @@ impl Occluder {
     }
 }
 
+/*
 struct CulledTiles {
     display_list: Vec<CulledDisplayItem>,
 }
@@ -674,6 +720,7 @@ enum CulledDisplayItem {
     PushRenderTarget(RenderTargetId),
     PopRenderTarget,
 }
+*/
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TileStats {
