@@ -17,7 +17,7 @@ use pathfinder_resources::ResourceLoader;
 
 // TODO(pcwalton): Replace with `mem::size_of` calls?
 pub(crate) const TILE_INSTANCE_SIZE: usize = 16;
-const FILL_INSTANCE_SIZE: usize = 8;
+const FILL_INSTANCE_SIZE: usize = 12;
 const CLIP_TILE_INSTANCE_SIZE: usize = 8;
 
 pub const MAX_FILLS_PER_BATCH: usize = 0x10000;
@@ -129,10 +129,8 @@ where
         let vertex_array = device.create_vertex_array();
 
         let tess_coord_attr = device.get_vertex_attr(&fill_program.program, "TessCoord").unwrap();
-        let from_px_attr = device.get_vertex_attr(&fill_program.program, "FromPx").unwrap();
-        let to_px_attr = device.get_vertex_attr(&fill_program.program, "ToPx").unwrap();
-        let from_subpx_attr = device.get_vertex_attr(&fill_program.program, "FromSubpx").unwrap();
-        let to_subpx_attr = device.get_vertex_attr(&fill_program.program, "ToSubpx").unwrap();
+        let line_segment_attr = device.get_vertex_attr(&fill_program.program, "LineSegment")
+                                      .unwrap();
         let tile_index_attr = device.get_vertex_attr(&fill_program.program, "TileIndex").unwrap();
 
         device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, BufferTarget::Vertex);
@@ -146,48 +144,21 @@ where
             buffer_index: 0,
         });
         device.bind_buffer(&vertex_array, &vertex_buffer, BufferTarget::Vertex);
-        device.configure_vertex_attr(&vertex_array, &from_subpx_attr, &VertexAttrDescriptor {
-            size: 2,
-            class: VertexAttrClass::FloatNorm,
-            attr_type: VertexAttrType::U8,
+        device.configure_vertex_attr(&vertex_array, &line_segment_attr, &VertexAttrDescriptor {
+            size: 4,
+            class: VertexAttrClass::Int,
+            attr_type: VertexAttrType::U16,
             stride: FILL_INSTANCE_SIZE,
             offset: 0,
-            divisor: 1,
-            buffer_index: 1,
-        });
-        device.configure_vertex_attr(&vertex_array, &to_subpx_attr, &VertexAttrDescriptor {
-            size: 2,
-            class: VertexAttrClass::FloatNorm,
-            attr_type: VertexAttrType::U8,
-            stride: FILL_INSTANCE_SIZE,
-            offset: 2,
-            divisor: 1,
-            buffer_index: 1,
-        });
-        device.configure_vertex_attr(&vertex_array, &from_px_attr, &VertexAttrDescriptor {
-            size: 1,
-            class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::U8,
-            stride: FILL_INSTANCE_SIZE,
-            offset: 4,
-            divisor: 1,
-            buffer_index: 1,
-        });
-        device.configure_vertex_attr(&vertex_array, &to_px_attr, &VertexAttrDescriptor {
-            size: 1,
-            class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::U8,
-            stride: FILL_INSTANCE_SIZE,
-            offset: 5,
             divisor: 1,
             buffer_index: 1,
         });
         device.configure_vertex_attr(&vertex_array, &tile_index_attr, &VertexAttrDescriptor {
             size: 1,
             class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::U16,
+            attr_type: VertexAttrType::I32,
             stride: FILL_INSTANCE_SIZE,
-            offset: 6,
+            offset: 8,
             divisor: 1,
             buffer_index: 1,
         });
@@ -475,7 +446,6 @@ pub struct FillComputeProgram<D> where D: Device {
     pub area_lut_texture: D::TextureParameter,
     pub first_tile_index_uniform: D::Uniform,
     pub fills_storage_buffer: D::StorageBuffer,
-    pub next_fills_storage_buffer: D::StorageBuffer,
     pub fill_tile_map_storage_buffer: D::StorageBuffer,
 }
 
@@ -489,8 +459,7 @@ impl<D> FillComputeProgram<D> where D: Device {
         let area_lut_texture = device.get_texture_parameter(&program, "AreaLUT");
         let first_tile_index_uniform = device.get_uniform(&program, "FirstTileIndex");
         let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 0);
-        let next_fills_storage_buffer = device.get_storage_buffer(&program, "NextFills", 1);
-        let fill_tile_map_storage_buffer = device.get_storage_buffer(&program, "FillTileMap", 2);
+        let fill_tile_map_storage_buffer = device.get_storage_buffer(&program, "FillTileMap", 1);
 
         FillComputeProgram {
             program,
@@ -498,7 +467,6 @@ impl<D> FillComputeProgram<D> where D: Device {
             area_lut_texture,
             first_tile_index_uniform,
             fills_storage_buffer,
-            next_fills_storage_buffer,
             fill_tile_map_storage_buffer,
         }
     }

@@ -59,8 +59,9 @@ const SQRT_2_PI_INV: f32 = 0.3989422804014327;
 
 const TEXTURE_CACHE_SIZE: usize = 8;
 
-const MIN_FILL_STORAGE_CLASS: usize = 14;   // 0x4000 entries, 128kB
-const MIN_TILE_STORAGE_CLASS: usize = 10;   // 1024 entries, 12kB
+const MIN_FILL_STORAGE_CLASS: usize =          14;   // 16K entries, 128kB
+const MIN_FILL_TILE_MAP_STORAGE_CLASS: usize = 15;   // 32K entries, 128kB
+const MIN_TILE_STORAGE_CLASS: usize =          10;   // 1024 entries, 12kB
 
 const TEXTURE_METADATA_ENTRIES_PER_ROW: i32 = 128;
 const TEXTURE_METADATA_TEXTURE_WIDTH:   i32 = TEXTURE_METADATA_ENTRIES_PER_ROW * 4;
@@ -117,7 +118,6 @@ pub struct Renderer<D> where D: Device {
     propagate_program: PropagateProgram<D>,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
-    next_fills: Vec<i32>,
     fill_tile_map: Vec<i32>,
     texture_pages: Vec<Option<TexturePage<D>>>,
     render_targets: Vec<RenderTargetInfo>,
@@ -151,6 +151,7 @@ struct Frame<D> where D: Device {
     blit_buffer_vertex_array: BlitBufferVertexArray<D>,
     clear_vertex_array: ClearVertexArray<D>,
     fill_vertex_storage_allocator: StorageAllocator<D, FillVertexStorage<D>>,
+    fill_tile_map_storage_allocator: StorageAllocator<D, D::Buffer>,  
     tile_vertex_storage_allocator: StorageAllocator<D, TileVertexStorage<D>>,
     quads_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_length: usize,
@@ -240,8 +241,7 @@ impl<D> Renderer<D> where D: Device {
             propagate_program,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
-            next_fills: vec![],
-            fill_tile_map: vec![-1; 256 * 256],
+            fill_tile_map: vec![],
             texture_pages: vec![],
             render_targets: vec![],
             render_target_stack: vec![],
@@ -349,6 +349,7 @@ impl<D> Renderer<D> where D: Device {
         self.device.end_commands();
 
         self.back_frame.fill_vertex_storage_allocator.end_frame();
+        self.back_frame.fill_tile_map_storage_allocator.end_frame();
         self.back_frame.tile_vertex_storage_allocator.end_frame();
 
         if let Some(timer) = self.current_timer.take() {
@@ -696,10 +697,8 @@ impl<D> Renderer<D> where D: Device {
         };
         let fill_vertex_storage = self.back_frame.fill_vertex_storage_allocator.get(storage_id);
 
-        let fill_vertex_array = match fill_vertex_storage.auxiliary {
-            FillVertexStorageAuxiliary::Raster { ref vertex_array } => vertex_array,
-            _ => unreachable!(),
-        };
+        let fill_vertex_array =
+            fill_vertex_storage.vertex_array.as_ref().expect("Where's the vertex array?");
 
         self.device.upload_to_buffer(&fill_vertex_storage.vertex_buffer,
                                      0,
@@ -768,7 +767,8 @@ impl<D> Renderer<D> where D: Device {
             return;
         }
 
-        let storage_id = {
+        // Allocate buffered fill buffer.
+        let fill_vertex_storage_id = {
             let fill_program = &self.fill_program;
             let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
             let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
@@ -782,41 +782,47 @@ impl<D> Renderer<D> where D: Device {
                                        quad_vertex_indices_buffer)
             })
         };
-        let fill_vertex_storage = self.back_frame.fill_vertex_storage_allocator.get(storage_id);
+        let fill_vertex_storage = self.back_frame
+                                      .fill_vertex_storage_allocator
+                                      .get(fill_vertex_storage_id);
 
-        let (tile_map_buffer, next_fills_buffer) = match fill_vertex_storage.auxiliary {
-            FillVertexStorageAuxiliary::Compute { ref tile_map_buffer, ref next_fills_buffer } => {
-                (tile_map_buffer, next_fills_buffer)
-            }
-            _ => unreachable!(),
-        };
-
-        // Initialize the tile map and fill linked list buffers.
-        self.fill_tile_map.iter_mut().for_each(|entry| *entry = -1);
-        while self.next_fills.len() < buffered_fills.len() {
-            self.next_fills.push(-1);
-        }
+        // Initialize the tile map.
+        self.fill_tile_map.clear();
 
         // Create a linked list running through all our fills.
-        let (mut first_fill_tile, mut last_fill_tile) = (256 * 256, 0);
-        for (fill_index, fill) in buffered_fills.iter().enumerate() {
+        let (mut first_fill_tile, mut last_fill_tile) = (u32::MAX, 0);
+        for (fill_index, fill) in buffered_fills.iter_mut().enumerate() {
             let fill_tile_index = fill.alpha_tile_index as usize;
-            self.next_fills[fill_index as usize] = self.fill_tile_map[fill_tile_index];
+            while fill_tile_index >= self.fill_tile_map.len() {
+                self.fill_tile_map.push(-1);
+            }
+            fill.alpha_tile_index = self.fill_tile_map[fill_tile_index] as u32;
             self.fill_tile_map[fill_tile_index] = fill_index as i32;
             first_fill_tile = first_fill_tile.min(fill_tile_index as u32);
             last_fill_tile = last_fill_tile.max(fill_tile_index as u32);
         }
         let fill_tile_count = last_fill_tile - first_fill_tile + 1;
 
+        // Allocate fill tile map.
+        let fill_map_storage_id =
+            self.back_frame.fill_tile_map_storage_allocator.allocate(&self.device,
+                                                                     last_fill_tile as u64,
+                                                                     |device, size| {
+                let buffer = device.create_buffer(BufferUploadMode::Dynamic);
+                device.allocate_buffer::<i32>(&buffer,
+                                              BufferData::Uninitialized(size as usize),
+                                              BufferTarget::Storage);
+                buffer
+            });
+        let fill_map_buffer =
+            self.back_frame.fill_tile_map_storage_allocator.get(fill_map_storage_id);
+
+
         self.device.upload_to_buffer(&fill_vertex_storage.vertex_buffer,
                                      0,
                                      &buffered_fills,
                                      BufferTarget::Storage);
-        self.device.upload_to_buffer(next_fills_buffer,
-                                     0,
-                                     &self.next_fills,
-                                     BufferTarget::Storage);
-        self.device.upload_to_buffer(tile_map_buffer,
+        self.device.upload_to_buffer(fill_map_buffer,
                                      0,
                                      &self.fill_tile_map,
                                      BufferTarget::Storage);
@@ -842,8 +848,7 @@ impl<D> Renderer<D> where D: Device {
             ],
             storage_buffers: &[
                 (&fill_compute_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
-                (&fill_compute_program.next_fills_storage_buffer, next_fills_buffer),
-                (&fill_compute_program.fill_tile_map_storage_buffer, tile_map_buffer),
+                (&fill_compute_program.fill_tile_map_storage_buffer, fill_map_buffer),
             ],
         });
 
@@ -1561,6 +1566,8 @@ impl<D> Frame<D> where D: Device {
         let stencil_vertex_array = StencilVertexArray::new(device, &stencil_program);
 
         let fill_vertex_storage_allocator = StorageAllocator::new(MIN_FILL_STORAGE_CLASS);
+        let fill_tile_map_storage_allocator =
+            StorageAllocator::new(MIN_FILL_TILE_MAP_STORAGE_CLASS);
         let tile_vertex_storage_allocator = StorageAllocator::new(MIN_TILE_STORAGE_CLASS);
 
         let texture_metadata_texture_size = vec2i(TEXTURE_METADATA_TEXTURE_WIDTH,
@@ -1596,6 +1603,7 @@ impl<D> Frame<D> where D: Device {
             clear_vertex_array,
             tile_vertex_storage_allocator,
             fill_vertex_storage_allocator,
+            fill_tile_map_storage_allocator,
             tile_clip_vertex_array,
             reprojection_vertex_array,
             stencil_vertex_array,
@@ -1668,15 +1676,8 @@ impl<D, S> StorageAllocator<D, S> where D: Device {
 
 struct FillVertexStorage<D> where D: Device {
     vertex_buffer: D::Buffer,
-    auxiliary: FillVertexStorageAuxiliary<D>,
-}
-
-enum FillVertexStorageAuxiliary<D> where D: Device {
-    Raster { vertex_array: FillVertexArray<D> },
-    Compute {
-        next_fills_buffer: D::Buffer,
-        tile_map_buffer: D::Buffer,
-    },
+    // Will be `None` if we're using compute.
+    vertex_array: Option<FillVertexArray<D>>,
 }
 
 struct TileVertexStorage<D> where D: Device {
@@ -1696,34 +1697,18 @@ impl<D> FillVertexStorage<D> where D: Device {
         let vertex_buffer_data: BufferData<Fill> = BufferData::Uninitialized(size as usize);
         device.allocate_buffer(&vertex_buffer, vertex_buffer_data, BufferTarget::Vertex);
 
-        let auxiliary = match *fill_program {
+        let vertex_array = match *fill_program {
             FillProgram::Raster(ref fill_raster_program) => {
-                FillVertexStorageAuxiliary::Raster {
-                    vertex_array: FillVertexArray::new(device,
-                                                       fill_raster_program,
-                                                       &vertex_buffer,
-                                                       quad_vertex_positions_buffer,
-                                                       quad_vertex_indices_buffer),
-                }
+                Some(FillVertexArray::new(device,
+                                          fill_raster_program,
+                                          &vertex_buffer,
+                                          quad_vertex_positions_buffer,
+                                          quad_vertex_indices_buffer))
             }
-            FillProgram::Compute(_) => {
-                let next_fills_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-                let tile_map_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-                let next_fills_buffer_data: BufferData<i32> =
-                    BufferData::Uninitialized(size as usize);
-                let tile_map_buffer_data: BufferData<i32> =
-                    BufferData::Uninitialized(256 * 256);
-                device.allocate_buffer(&next_fills_buffer,
-                                       next_fills_buffer_data,
-                                       BufferTarget::Storage);
-                device.allocate_buffer(&tile_map_buffer,
-                                       tile_map_buffer_data,
-                                       BufferTarget::Storage);
-                FillVertexStorageAuxiliary::Compute { next_fills_buffer, tile_map_buffer }
-            }
+            FillProgram::Compute(_) => None,
         };
 
-        FillVertexStorage { vertex_buffer, auxiliary }
+        FillVertexStorage { vertex_buffer, vertex_array }
     }
 }
 

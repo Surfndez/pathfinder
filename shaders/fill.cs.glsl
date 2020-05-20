@@ -27,14 +27,10 @@ uniform sampler2D uAreaLUT;
 uniform int uFirstTileIndex;
 
 layout(std430, binding = 0) buffer bFills {
-    restrict readonly uvec2 iFills[];
+    restrict readonly uint iFills[];
 };
 
-layout(std430, binding = 1) buffer bNextFills {
-    restrict readonly int iNextFills[];
-};
-
-layout(std430, binding = 2) buffer bFillTileMap {
+layout(std430, binding = 1) buffer bFillTileMap {
     restrict readonly int iFillTileMap[];
 };
 
@@ -50,17 +46,15 @@ void main() {
 
     vec4 coverages = vec4(0.0);
     do {
-        uvec2 fill = iFills[fillIndex];
-        vec2 from = vec2(fill.y & 0xf,           (fill.y >> 4u) & 0xf) +
-                    vec2(fill.x & 0xff,          (fill.x >> 8u) & 0xff) / 256.0;
-        vec2 to   = vec2((fill.y >> 8u) & 0xf,   (fill.y >> 12u) & 0xf) +
-                    vec2((fill.x >> 16u) & 0xff, (fill.x >> 24u) & 0xff) / 256.0;
+        uint fillFrom = iFills[fillIndex * 3 + 0], fillTo = iFills[fillIndex * 3 + 1];
+        vec4 lineSegment = vec4(fillFrom & 0xffff, fillFrom >> 16,
+                                fillTo   & 0xffff, fillTo   >> 16) / 256.0;
 
-        coverages += computeCoverage(from - (vec2(tileSubCoord) + vec2(0.5)),
-                                     to   - (vec2(tileSubCoord) + vec2(0.5)),
+        coverages += computeCoverage(lineSegment.xy - (vec2(tileSubCoord) + vec2(0.5)),
+                                     lineSegment.zw - (vec2(tileSubCoord) + vec2(0.5)),
                                      uAreaLUT);
 
-        fillIndex = iNextFills[fillIndex];
+        fillIndex = int(iFills[fillIndex * 3 + 2]);
     } while (fillIndex >= 0);
 
     ivec2 tileOrigin =

@@ -22,11 +22,8 @@ uniform vec2 uFramebufferSize;
 uniform vec2 uTileSize;
 
 in uvec2 aTessCoord;
-in uint aFromPx;
-in uint aToPx;
-in vec2 aFromSubpx;
-in vec2 aToSubpx;
-in uint aTileIndex;
+in uvec4 aLineSegment;
+in int aTileIndex;
 
 out vec2 vFrom;
 out vec2 vTo;
@@ -38,10 +35,10 @@ vec2 computeTileOffset(uint tileIndex, float stencilTextureWidth){
 }
 
 void main(){
-    vec2 tileOrigin = computeTileOffset(aTileIndex, uFramebufferSize . x);
+    vec2 tileOrigin = computeTileOffset(uint(aTileIndex), uFramebufferSize . x);
 
-    vec2 from = vec2(aFromPx & 15u, aFromPx >> 4u)+ aFromSubpx;
-    vec2 to = vec2(aToPx & 15u, aToPx >> 4u)+ aToSubpx;
+    vec4 lineSegment = vec4(aLineSegment)/ 256.0;
+    vec2 from = lineSegment . xy, to = lineSegment . zw;
 
     vec2 position;
     if(aTessCoord . x == 0u)

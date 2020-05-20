@@ -26,7 +26,7 @@ use crate::z_buffer::{DepthMetadata, ZBuffer};
 use pathfinder_content::effects::{BlendMode, Filter};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::render_target::RenderTargetId;
-use pathfinder_geometry::line_segment::{LineSegment2F, LineSegmentU4, LineSegmentU8};
+use pathfinder_geometry::line_segment::{LineSegment2F, LineSegmentU16};
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::{Vector2I, vec2i};
@@ -240,6 +240,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
 
         tiler.generate_tiles();
         self.send_fills(tiler.object_builder.fills);
+
         BuiltDrawPath {
             path: tiler.object_builder.built_path,
             blend_mode: path_object.blend_mode(),
@@ -714,7 +715,7 @@ impl ObjectBuilder {
         let tile_size = F32x4::splat(TILE_WIDTH as f32);
         let tile_upper_left = tile_coords.to_f32().0.to_f32x4().xyxy() * tile_size;
 
-        // Convert to 4.8 fixed point.
+        // Convert to 8.8 fixed point.
         let segment = (segment.0 - tile_upper_left) * F32x4::splat(256.0);
         let (min, max) = (F32x4::default(), F32x4::splat((TILE_WIDTH * 256 - 1) as f32));
         let segment = segment.clamp(min, max).to_i32x4();
@@ -729,23 +730,18 @@ impl ObjectBuilder {
         // Allocate a global tile if necessary.
         let alpha_tile_id = self.get_or_allocate_alpha_tile_index(scene_builder, tile_coords);
 
-        // Pack whole pixels.
-        let px = (segment & I32x4::splat(0xf00)).to_u32x4();
-        let px = (px >> 8).to_i32x4() | (px >> 4).to_i32x4().yxwz();
-
         // Pack instance data.
         debug!("... OK, pushing");
         self.fills.push(FillBatchEntry {
             page: alpha_tile_id.page(),
             fill: Fill {
-                px: LineSegmentU4 { from: px[0] as u8, to: px[2] as u8 },
-                subpx: LineSegmentU8 {
-                    from_x: from_x as u8,
-                    from_y: from_y as u8,
-                    to_x:   to_x   as u8,
-                    to_y:   to_y   as u8,
-                },
-                alpha_tile_index: alpha_tile_id.tile(),
+                line_segment: LineSegmentU16 {
+                    from_x: from_x as u16,
+                    from_y: from_y as u16,
+                    to_x: to_x as u16,
+                    to_y: to_y as u16,
+                }, 
+                alpha_tile_index: alpha_tile_id.0,
             },
         });
     }

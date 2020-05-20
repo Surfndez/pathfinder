@@ -16,7 +16,7 @@ use crate::paint::PaintCompositeOp;
 use pathfinder_color::ColorU;
 use pathfinder_content::effects::{BlendMode, Filter};
 use pathfinder_content::render_target::RenderTargetId;
-use pathfinder_geometry::line_segment::{LineSegmentU4, LineSegmentU8};
+use pathfinder_geometry::line_segment::LineSegmentU16;
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::Vector2I;
@@ -120,14 +120,6 @@ pub struct TileBatchTexture {
     pub composite_op: PaintCompositeOp,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct FillObjectPrimitive {
-    pub px: LineSegmentU4,
-    pub subpx: LineSegmentU8,
-    pub tile_x: i16,
-    pub tile_y: i16,
-}
-
 // TODO(pcwalton): Pack better.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -168,9 +160,9 @@ pub struct FillBatchEntry {
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct Fill {
-    pub subpx: LineSegmentU8,
-    pub px: LineSegmentU4,
-    pub alpha_tile_index: u16,
+    pub line_segment: LineSegmentU16,
+    // NB: This is overloaded to mean the next fill in the compute phase.
+    pub alpha_tile_index: u32,
 }
 
 #[derive(Clone, Debug)]
