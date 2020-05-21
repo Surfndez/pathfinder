@@ -608,6 +608,26 @@ impl<D> PropagateProgram<D> where D: Device {
     }
 }
 
+pub struct GenerateClipProgram<D> where D: Device {
+    pub program: D::Program,
+    pub clipped_path_indices_storage_buffer: D::StorageBuffer,
+    pub propagate_metadata_storage_buffer: D::StorageBuffer,
+    pub tiles_storage_buffer: D::StorageBuffer,
+    pub clip_vertex_buffer: D::StorageBuffer,
+}
+
+impl<D> GenerateClipProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> GenerateClipProgram<D> {
+        let mut program = device.create_compute_program(resources, "gen_clip");
+        let local_size = ComputeDimensions { x: 16, y: 16, z: 1 };
+        device.set_compute_program_local_size(&mut program, local_size);
+
+        let clipped_path_indices_storage_buffer =
+            device.get_storage_buffer(&program, "ClippedPathIndices", 0);
+        let propagate_metadata_storage_buffer = device.get_storage_buffer(&program, name: &str, binding: u32)
+    }
+}
+
 pub struct StencilProgram<D>
 where
     D: Device,
