@@ -11,7 +11,7 @@
 //! Software occlusion culling.
 
 use crate::builder::Occluder;
-use crate::gpu_data::{AlphaTileId, TileBatch, TileObjectPrimitive};
+use crate::gpu_data::{AlphaTileId, TileObjectPrimitive};
 use crate::paint::{PaintId, PaintMetadata};
 use crate::tile_map::DenseTileMap;
 use crate::tiles;
@@ -25,9 +25,11 @@ pub(crate) struct ZBuffer {
     depth_metadata: VecMap<DepthMetadata>,
 }
 
+/*
 pub(crate) struct SolidTiles {
     pub(crate) batches: Vec<TileBatch>,
 }
+*/
 
 #[derive(Clone, Copy)]
 pub(crate) struct DepthMetadata {

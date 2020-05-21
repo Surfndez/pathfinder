@@ -16,7 +16,7 @@ use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, Fil
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TileProgram, TileVertexArray};
-use crate::gpu_data::{ClipBatch, ClipBatchKey, ClipBatchKind, Fill, PropagateMetadata, RenderCommand};
+use crate::gpu_data::{ClipBatchKey, ClipBatchKind, Fill, PrepareTilesBatch, PropagateMetadata, RenderCommand};
 use crate::gpu_data::{TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::BoundingQuad;
@@ -47,6 +47,7 @@ use std::mem;
 use std::ops::{Add, Div};
 use std::time::Duration;
 use std::u32;
+use vec_map::VecMap;
 
 static QUAD_VERTEX_POSITIONS: [u16; 8] = [0, 0, 1, 0, 1, 1, 0, 1];
 static QUAD_VERTEX_INDICES: [u32; 6] = [0, 1, 3, 1, 2, 3];
@@ -153,6 +154,10 @@ struct Frame<D> where D: Device {
     fill_vertex_storage_allocator: StorageAllocator<D, FillVertexStorage<D>>,
     fill_tile_map_storage_allocator: StorageAllocator<D, D::Buffer>,  
     tile_vertex_storage_allocator: StorageAllocator<D, TileVertexStorage<D>>,
+
+    // Maps tile batch IDs to tile vertex storage IDs.
+    tile_batch_info: VecMap<TileBatchInfo>,
+
     quads_vertex_indices_buffer: D::Buffer,
     quads_vertex_indices_length: usize,
     buffered_fills: Vec<Fill>,
@@ -315,22 +320,20 @@ impl<D> Renderer<D> where D: Device {
                 self.draw_buffered_fills();
             }
             RenderCommand::BeginTileDrawing => {}
+            /*
             RenderCommand::ClipTiles(ref batches) => {
                 batches.iter().for_each(|batch| self.draw_clip_batch(batch))
             }
+            */
             RenderCommand::PushRenderTarget(render_target_id) => {
                 self.push_render_target(render_target_id)
             }
             RenderCommand::PopRenderTarget => self.pop_render_target(),
+            RenderCommand::PrepareTiles(ref batch) => self.prepare_tiles(batch),
             RenderCommand::DrawTiles(ref batch) => {
-                let count = batch.tiles.len();
-                self.stats.alpha_tile_count += count;
-                let tile_storage_id = self.upload_tiles(&batch.tiles);
-                self.upload_propagate_data(&batch.propagate_metadata, &batch.backdrops);
-                self.propagate_tiles(batch.propagate_metadata.len() as u32, tile_storage_id);
-                self.prepare_z_buffer();
-                self.draw_tiles(count as u32,
-                                tile_storage_id,
+                let batch_info = self.back_frame.tile_batch_info[batch.tile_batch_id.0 as usize];
+                self.draw_tiles(batch_info.tile_count,
+                                batch_info.storage_id,
                                 batch.color_texture,
                                 batch.blend_mode,
                                 batch.filter)
@@ -352,6 +355,8 @@ impl<D> Renderer<D> where D: Device {
         self.back_frame.fill_vertex_storage_allocator.end_frame();
         self.back_frame.fill_tile_map_storage_allocator.end_frame();
         self.back_frame.tile_vertex_storage_allocator.end_frame();
+
+        self.back_frame.tile_batch_info.clear();
 
         if let Some(timer) = self.current_timer.take() {
             self.pending_timers.push_back(timer);
@@ -828,9 +833,9 @@ impl<D> Renderer<D> where D: Device {
         buffered_fills.clear();
     }
 
+    // TODO(pcwalton): Reenable.
+    /*
     fn draw_clip_batch(&mut self, batch: &ClipBatch) {
-        // TODO(pcwalton): Reenable.
-        /*
         if batch.clips.is_empty() {
             return;
         }
@@ -896,7 +901,21 @@ impl<D> Renderer<D> where D: Device {
         }
 
         self.back_frame.framebuffer_flags.insert(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY);
-        */
+    }
+    */
+
+    fn prepare_tiles(&mut self, batch: &PrepareTilesBatch) {
+        let count = batch.tiles.len();
+        self.stats.alpha_tile_count += count;
+        let storage_id = self.upload_tiles(&batch.tiles);
+        self.upload_propagate_data(&batch.propagate_metadata, &batch.backdrops);
+        self.propagate_tiles(batch.propagate_metadata.len() as u32, storage_id);
+        // TODO(pcwalton): Z-buffering.
+
+        self.back_frame.tile_batch_info.insert(batch.batch_id.0 as usize, TileBatchInfo {
+            tile_count: batch.tiles.len() as u32,
+            storage_id,
+        });
     }
 
     fn tile_transform(&self) -> Transform4F {
@@ -1584,6 +1603,7 @@ impl<D> Frame<D> where D: Device {
             pending_fills: vec![],
             max_alpha_tile_index: 0,
             allocated_alpha_tile_page_count: 0,
+            tile_batch_info: VecMap::new(),
             mask_framebuffer: None,
             intermediate_dest_framebuffer,
             dest_blend_framebuffer,
@@ -1594,6 +1614,12 @@ impl<D> Frame<D> where D: Device {
             framebuffer_flags: FramebufferFlags::empty(),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct TileBatchInfo {
+    tile_count: u32,
+    storage_id: StorageID,
 }
 
 // Buffer management

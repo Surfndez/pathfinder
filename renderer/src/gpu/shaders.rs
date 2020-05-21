@@ -18,7 +18,7 @@ use pathfinder_resources::ResourceLoader;
 // TODO(pcwalton): Replace with `mem::size_of` calls?
 pub(crate) const TILE_INSTANCE_SIZE: usize = 16;
 const FILL_INSTANCE_SIZE: usize = 12;
-const CLIP_TILE_INSTANCE_SIZE: usize = 8;
+const CLIP_TILE_INSTANCE_SIZE: usize = 12;
 
 pub const MAX_FILLS_PER_BATCH: usize = 0x10000;
 pub const MAX_TILES_PER_BATCH: usize = MASK_TILES_ACROSS as usize * MASK_TILES_DOWN as usize;
@@ -302,10 +302,10 @@ impl<D> ClipTileVertexArray<D> where D: Device {
 
         let tile_offset_attr =
             device.get_vertex_attr(&clip_tile_program.program, "TileOffset").unwrap();
-        let dest_tile_origin_attr =
-            device.get_vertex_attr(&clip_tile_program.program, "DestTileOrigin").unwrap();
-        let src_tile_origin_attr =
-            device.get_vertex_attr(&clip_tile_program.program, "SrcTileOrigin").unwrap();
+        let dest_tile_index_attr =
+            device.get_vertex_attr(&clip_tile_program.program, "DestTileIndex").unwrap();
+        let src_tile_index_attr =
+            device.get_vertex_attr(&clip_tile_program.program, "SrcTileIndex").unwrap();
         let src_backdrop_attr =
             device.get_vertex_attr(&clip_tile_program.program, "SrcBackdrop").unwrap();
 
@@ -320,21 +320,21 @@ impl<D> ClipTileVertexArray<D> where D: Device {
             buffer_index: 0,
         });
         device.bind_buffer(&vertex_array, &vertex_buffer, BufferTarget::Vertex);
-        device.configure_vertex_attr(&vertex_array, &dest_tile_origin_attr, &VertexAttrDescriptor {
-            size: 2,
+        device.configure_vertex_attr(&vertex_array, &dest_tile_index_attr, &VertexAttrDescriptor {
+            size: 1,
             class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::U8,
+            attr_type: VertexAttrType::I32,
             stride: CLIP_TILE_INSTANCE_SIZE,
             offset: 0,
             divisor: 1,
             buffer_index: 1,
         });
-        device.configure_vertex_attr(&vertex_array, &src_tile_origin_attr, &VertexAttrDescriptor {
-            size: 2,
+        device.configure_vertex_attr(&vertex_array, &src_tile_index_attr, &VertexAttrDescriptor {
+            size: 1,
             class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::U8,
+            attr_type: VertexAttrType::I32,
             stride: CLIP_TILE_INSTANCE_SIZE,
-            offset: 2,
+            offset: 4,
             divisor: 1,
             buffer_index: 1,
         });
@@ -343,7 +343,7 @@ impl<D> ClipTileVertexArray<D> where D: Device {
             class: VertexAttrClass::Int,
             attr_type: VertexAttrType::I8,
             stride: CLIP_TILE_INSTANCE_SIZE,
-            offset: 4,
+            offset: 8,
             divisor: 1,
             buffer_index: 1,
         });

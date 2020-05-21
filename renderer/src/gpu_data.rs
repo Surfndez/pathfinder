@@ -78,7 +78,7 @@ pub enum RenderCommand {
     PopRenderTarget,
 
     // Computes backdrops for tiles, prepares any Z-buffers, and performs clipping.
-    PrepareTiles { draw: PrepareDrawTilesBatch, clip: PrepareClipTilesBatch },
+    PrepareTiles(PrepareTilesBatch),
 
     // Marks that tile compositing is about to begin.
     BeginTileDrawing,
@@ -104,25 +104,70 @@ pub struct TextureLocation {
     pub rect: RectI,
 }
 
+/// Information about a group of prepared tiles.
 #[derive(Clone, Debug)]
-pub struct PrepareDrawTilesBatch {
+pub struct PrepareTilesBatch {
+    /// The ID of this batch.
+    /// 
+    /// The renderer should not assume that these values are consecutive.
+    pub batch_id: TileBatchId,
+
+    /// Information about all the allocated tiles.
+    /// 
+    /// If backdrops are being computed on CPU, then the backdrop values will already being summed.
+    /// Otherwise, they will simply be raw delta values.
     pub tiles: Vec<TileObjectPrimitive>,
+
+    /// Initial backdrop values for each tile column, packed together.
+    /// 
+    /// This value is ignored if backdrops are being computed on CPU.
     pub backdrops: Vec<i32>,
+
+    /// Mapping from path ID to metadata needed to compute propagation on GPU.
+    /// 
+    /// This contains indices into the `tiles` and `backdrops` vectors.
     pub propagate_metadata: Vec<PropagateMetadata>,
+
+    /// Information about clips applied to paths, if any of the paths have clips.
+    pub clipped_path_info: Option<ClippedPathInfo>,
 }
 
+/// Information about clips applied to paths in a batch.
 #[derive(Clone, Debug)]
-pub struct PrepareClipTilesBatch {
-    pub tiles: Vec<TileObjectPrimitive>,
-    pub backdrops: Vec<i32>,
-    pub clip_metadata: Vec<ClipMetadata>,
+pub struct ClippedPathInfo {
+    /// The ID of the batch containing the clips.
+    /// 
+    /// In the current implementation, this is always 0.
+    pub clip_batch_id: TileBatchId,
+
+    /// The IDs of the paths that have clips.
+    pub clipped_paths: Vec<PathIndex>,
 }
 
+/// Together with the `TileBatchId`, uniquely identifies a path on the renderer side.
+/// 
+/// Generally, `PathIndex(!0)` represents no path.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct PathIndex(pub u32);
+
+/// Unique ID that identifies a batch of tiles.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TileBatchId(pub u32);
+
+/// Information needed to draw a batch of tiles.
 #[derive(Clone, Debug)]
 pub struct DrawTileBatch {
-    pub tile_indices: Range<u32>,
+    /// The ID of the tile batch. This must have been previously sent to the renderer in a
+    /// `PrepareTiles` command.
+    pub tile_batch_id: TileBatchId,
+
+    /// The color texture to use.
     pub color_texture: Option<TileBatchTexture>,
+
+    /// The filter to use.
     pub filter: Filter,
+
+    /// The blend mode to composite these tiles with.
     pub blend_mode: BlendMode,
 }
 
@@ -154,7 +199,7 @@ pub struct PropagateMetadata {
     pub tile_offset: u32,
     pub backdrops_offset: u32,
     pub z_write: u32,
-    pub pad0: u32,
+    pub clip_path: PathIndex,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -203,9 +248,9 @@ pub struct Clip {
     pub dest_tile_id: AlphaTileId,
     pub src_tile_id: AlphaTileId,
     pub backdrop: i8,
-    pub enabled: u8,
     pub pad0: u8,
     pub pad1: u8,
+    pub pad2: u8,
 }
 
 /*
@@ -277,8 +322,17 @@ impl Debug for RenderCommand {
                 write!(formatter, "AddFills(x{})", fills.len())
             }
             RenderCommand::FlushFills => write!(formatter, "FlushFills"),
-            RenderCommand::ClipTiles(ref batches) => {
-                write!(formatter, "ClipTiles(x{})", batches.len())
+            RenderCommand::PrepareTiles(ref batch) => {
+                let clipped_path_count = match batch.clipped_path_info {
+                    None => 0,
+                    Some(ref clipped_path_info) => clipped_path_info.clipped_paths.len(),
+                };
+                write!(formatter,
+                       "PrepareTiles({:?}, T {}, B {}, C {})",
+                       batch.batch_id,
+                       batch.tiles.len(),
+                       batch.backdrops.len(),
+                       clipped_path_count)
             }
             RenderCommand::PushRenderTarget(render_target_id) => {
                 write!(formatter, "PushRenderTarget({:?})", render_target_id)
@@ -287,8 +341,8 @@ impl Debug for RenderCommand {
             RenderCommand::BeginTileDrawing => write!(formatter, "BeginTileDrawing"),
             RenderCommand::DrawTiles(ref batch) => {
                 write!(formatter,
-                       "DrawTiles(x{}, C0 {:?}, {:?})",
-                       batch.tiles.len(),
+                       "DrawTiles({:?}, C0 {:?}, {:?})",
+                       batch.tile_batch_id,
                        batch.color_texture,
                        batch.blend_mode)
             }

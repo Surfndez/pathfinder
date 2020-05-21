@@ -4,19 +4,19 @@
 
 using namespace metal;
 
-struct bMetadata
+struct bClippedPathIndices
 {
-    uint4 iMetadata[1];
+    uint iClippedPathIndices[1];
 };
 
-struct bDrawTiles
+struct bPropagateMetadata
 {
-    uint4 iDrawTiles[1];
+    uint4 iPropagateMetadata[1];
 };
 
-struct bClipTiles
+struct bTiles
 {
-    uint4 iClipTiles[1];
+    uint4 iTiles[1];
 };
 
 struct bClipVertexBuffer
@@ -26,15 +26,17 @@ struct bClipVertexBuffer
 
 constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(16u, 16u, 1u);
 
-kernel void main0(const device bMetadata& _31 [[buffer(0)]], device bDrawTiles& _157 [[buffer(1)]], device bClipTiles& _166 [[buffer(2)]], device bClipVertexBuffer& _182 [[buffer(3)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]])
+kernel void main0(const device bClippedPathIndices& _23 [[buffer(0)]], const device bPropagateMetadata& _40 [[buffer(1)]], device bTiles& _174 [[buffer(2)]], device bClipVertexBuffer& _198 [[buffer(3)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]])
 {
     uint2 tileCoord = uint2(gl_GlobalInvocationID.xy);
-    uint pathIndex = gl_WorkGroupID.z;
-    uint4 drawTileRect = _31.iMetadata[(pathIndex * 3u) + 0u];
-    uint4 clipTileRect = _31.iMetadata[(pathIndex * 3u) + 1u];
-    uint4 offsets = _31.iMetadata[(pathIndex * 3u) + 2u];
-    uint drawOffset = offsets.x;
-    uint clipOffset = offsets.y;
+    uint drawPathIndex = _23.iClippedPathIndices[gl_WorkGroupID.z];
+    uint4 drawTileRect = _40.iPropagateMetadata[(drawPathIndex * 2u) + 0u];
+    uint4 drawPathMetadata = _40.iPropagateMetadata[(drawPathIndex * 2u) + 1u];
+    uint clipPathIndex = drawPathMetadata.w;
+    uint4 clipTileRect = _40.iPropagateMetadata[(clipPathIndex * 2u) + 0u];
+    uint4 clipPathMetadata = _40.iPropagateMetadata[(clipPathIndex * 2u) + 1u];
+    uint drawOffset = drawPathMetadata.x;
+    uint clipOffset = clipPathMetadata.x;
     int2 drawTileOffset2D = int2(tileCoord) - int2(drawTileRect.xy);
     int2 clipTileOffset2D = int2(tileCoord) - int2(clipTileRect.xy);
     int drawTilesAcross = int(drawTileRect.z - drawTileRect.x);
@@ -52,12 +54,14 @@ kernel void main0(const device bMetadata& _31 [[buffer(0)]], device bDrawTiles& 
     int clipTileBackdrop = 0;
     if (inBoundsClip)
     {
-        drawTileIndex = int(_157.iDrawTiles[drawTileOffset].y);
-        clipTileIndex = int(_166.iClipTiles[clipTileOffset].y);
-        clipTileBackdrop = int(_166.iClipTiles[clipTileOffset].w << uint(8)) >> 24;
+        uint4 drawTile = _174.iTiles[drawTileOffset];
+        uint4 clipTile = _174.iTiles[clipTileOffset];
+        drawTileIndex = int(drawTile.y);
+        clipTileIndex = int(clipTile.y);
+        clipTileBackdrop = int(clipTile.w << uint(8)) >> 24;
     }
-    _182.iClipVertexBuffer[(drawTileOffset * 3) + 0] = uint(drawTileIndex);
-    _182.iClipVertexBuffer[(drawTileOffset * 3) + 1] = uint(clipTileIndex);
-    _182.iClipVertexBuffer[(drawTileOffset * 3) + 2] = uint(clipTileBackdrop);
+    _198.iClipVertexBuffer[(drawTileOffset * 3) + 0] = uint(drawTileIndex);
+    _198.iClipVertexBuffer[(drawTileOffset * 3) + 1] = uint(clipTileIndex);
+    _198.iClipVertexBuffer[(drawTileOffset * 3) + 2] = uint(clipTileBackdrop);
 }
 

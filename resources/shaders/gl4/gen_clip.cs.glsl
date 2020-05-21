@@ -55,16 +55,16 @@ vec4 computeCoverage(vec2 from, vec2 to, sampler2D areaLUT){
 
 layout(local_size_x = 16, local_size_y = 16)in;
 
-layout(std430, binding = 0)buffer bMetadata {
-    restrict readonly uvec4 iMetadata[];
+layout(std430, binding = 0)buffer bClippedPathIndices {
+    restrict readonly uint iClippedPathIndices[];
 };
 
-layout(std430, binding = 1)buffer bDrawTiles {
-    restrict uvec4 iDrawTiles[];
+layout(std430, binding = 1)buffer bPropagateMetadata {
+    restrict readonly uvec4 iPropagateMetadata[];
 };
 
-layout(std430, binding = 2)buffer bClipTiles {
-    restrict uvec4 iClipTiles[];
+layout(std430, binding = 2)buffer bTiles {
+    restrict uvec4 iTiles[];
 };
 
 layout(std430, binding = 3)buffer bClipVertexBuffer {
@@ -73,13 +73,16 @@ layout(std430, binding = 3)buffer bClipVertexBuffer {
 
 void main(){
     uvec2 tileCoord = uvec2(gl_GlobalInvocationID . xy);
-    uint pathIndex = gl_WorkGroupID . z;
 
-    uvec4 drawTileRect = iMetadata[pathIndex * 3 + 0];
-    uvec4 clipTileRect = iMetadata[pathIndex * 3 + 1];
-    uvec4 offsets = iMetadata[pathIndex * 3 + 2];
+    uint drawPathIndex = iClippedPathIndices[gl_WorkGroupID . z];
+    uvec4 drawTileRect = iPropagateMetadata[drawPathIndex * 2 + 0];
+    uvec4 drawPathMetadata = iPropagateMetadata[drawPathIndex * 2 + 1];
 
-    uint drawOffset = offsets . x, clipOffset = offsets . y;
+    uint clipPathIndex = drawPathMetadata . w;
+    uvec4 clipTileRect = iPropagateMetadata[clipPathIndex * 2 + 0];
+    uvec4 clipPathMetadata = iPropagateMetadata[clipPathIndex * 2 + 1];
+
+    uint drawOffset = drawPathMetadata . x, clipOffset = clipPathMetadata . x;
     ivec2 drawTileOffset2D = ivec2(tileCoord)- ivec2(drawTileRect . xy);
     ivec2 clipTileOffset2D = ivec2(tileCoord)- ivec2(clipTileRect . xy);
     int drawTilesAcross = int(drawTileRect . z - drawTileRect . x);
@@ -97,9 +100,10 @@ void main(){
 
     int drawTileIndex = - 1, clipTileIndex = - 1, clipTileBackdrop = 0;
     if(inBoundsClip){
-        drawTileIndex = int(iDrawTiles[drawTileOffset]. y);
-        clipTileIndex = int(iClipTiles[clipTileOffset]. y);
-        clipTileBackdrop = int(iClipTiles[clipTileOffset]. w << 8)>> 24;
+        uvec4 drawTile = iTiles[drawTileOffset], clipTile = iTiles[clipTileOffset];
+        drawTileIndex = int(drawTile . y);
+        clipTileIndex = int(clipTile . y);
+        clipTileBackdrop = int(clipTile . w << 8)>> 24;
 
 
     }

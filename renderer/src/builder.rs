@@ -12,9 +12,9 @@
 
 use crate::concurrent::executor::Executor;
 use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
-use crate::gpu_data::{AlphaTileId, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, Fill};
-use crate::gpu_data::{PrepareClipTilesBatch, PrepareDrawTilesBatch, PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
-use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatch};
+use crate::gpu_data::{AlphaTileId, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, ClippedPathInfo, DrawTileBatch, Fill};
+use crate::gpu_data::{PathIndex, PrepareTilesBatch, PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
+use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatchId};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::{PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
 use crate::paint::{PaintInfo, PaintMetadata};
@@ -23,6 +23,8 @@ use crate::tile_map::DenseTileMap;
 use crate::tiler::Tiler;
 use crate::tiles::{self, DrawTilingPathInfo, PackedTile, TILE_HEIGHT, TILE_WIDTH, TilingPathInfo};
 use crate::z_buffer::{DepthMetadata, ZBuffer};
+use fxhash::FxHashMap;
+use instant::Instant;
 use pathfinder_content::effects::{BlendMode, Filter};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::render_target::RenderTargetId;
@@ -32,8 +34,8 @@ use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::{Vector2I, vec2i};
 use pathfinder_gpu::TextureSamplingFlags;
 use pathfinder_simd::default::{F32x4, I32x4};
+use std::collections::VecDeque;
 use std::sync::atomic::AtomicUsize;
-use instant::Instant;
 use std::u32;
 
 pub(crate) const ALPHA_TILE_LEVEL_COUNT: usize = 2;
@@ -56,7 +58,7 @@ pub(crate) struct ObjectBuilder {
 #[derive(Debug)]
 struct BuiltDrawPath {
     path: BuiltPath,
-    clip_path_id: Option<u32>,
+    clip_path_id: Option<PathIndex>,
     blend_mode: BlendMode,
     filter: Filter,
     color_texture: Option<TileBatchTexture>,
@@ -187,7 +189,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         println!("dense tile count={}", dense_tile_count);
         */
 
-        self.finish_building(&paint_metadata, built_draw_paths);
+        self.finish_building(&paint_metadata, built_draw_paths, built_clip_paths);
 
         let cpu_build_time = Instant::now() - start_time;
         self.listener.send(RenderCommand::Finish { cpu_build_time });
@@ -244,6 +246,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
 
         BuiltDrawPath {
             path: tiler.object_builder.built_path,
+            clip_path_id: path_object.clip_path().map(|clip_path_id| PathIndex(clip_path_id.0)),
             blend_mode: path_object.blend_mode(),
             filter: paint_metadata.filter(),
             color_texture: paint_metadata.tile_batch_texture(),
@@ -258,6 +261,8 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         }
     }
 
+    // FIXME(pcwalton): Reenable.
+    /*
     fn build_clips(&self,
                    built_draw_paths: &[BuiltDrawPath],
                    built_clip_paths: &[BuiltPath],
@@ -326,9 +331,13 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         }
         */
     }
+    */
 
-    fn cull_tiles(&self, paint_metadata: &[PaintMetadata], built_draw_paths: Vec<BuiltDrawPath>)
-                  -> CulledTiles {
+    fn build_tile_batches(&mut self,
+                          paint_metadata: &[PaintMetadata],
+                          built_draw_paths: Vec<BuiltDrawPath>,
+                          built_clip_paths: Vec<BuiltPath>) {
+        /*
         let mut culled_tiles = CulledTiles { display_list: vec![] };
 
         let mut remaining_layer_z_buffers = self.build_solid_tiles(&built_draw_paths);
@@ -336,19 +345,104 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
 
         // Process first Z-buffer.
         let first_z_buffer = remaining_layer_z_buffers.pop().unwrap();
-        /*
         let first_solid_tiles = first_z_buffer.build_solid_tiles(paint_metadata);
         for batch in first_solid_tiles.batches {
             culled_tiles.display_list.push(CulledDisplayItem::DrawTiles(batch));
         }
         */
 
-        let mut layer_z_buffers_stack = vec![first_z_buffer];
-        let mut current_depth = 1;
+        let (mut prepare_commands, mut draw_commands) = (vec![], vec![]);
+        let mut clip_prepare_batch = PrepareTilesBatch::new(TileBatchId(0));
+        let mut next_batch_id = TileBatchId(1);
+        let mut clip_id_to_path_index = FxHashMap::default();
 
+        // Prepare display items.
         for display_item in &self.scene.display_list {
             match *display_item {
                 DisplayItem::PushRenderTarget(render_target_id) => {
+                    draw_commands.push(RenderCommand::PushRenderTarget(render_target_id))
+                }
+                DisplayItem::PopRenderTarget => draw_commands.push(RenderCommand::PopRenderTarget),
+                DisplayItem::DrawPaths {
+                    start_index: start_draw_path_index,
+                    end_index: end_draw_path_index,
+                } => {
+                    let mut batches = None;
+                    for draw_path_index in start_draw_path_index..end_draw_path_index {
+                        let draw_path = &built_draw_paths[draw_path_index as usize];
+
+                        // Try to reuse the current batch if we can. Otherwise, flush it.
+                        match batches {
+                            Some(PathBatches {
+                                draw: DrawTileBatch {
+                                    color_texture: ref batch_color_texture,
+                                    filter: ref batch_filter,
+                                    blend_mode: ref batch_blend_mode,
+                                    tile_batch_id: _
+                                },
+                                prepare: _,
+                            }) if draw_path.color_texture == *batch_color_texture &&
+                                draw_path.filter == *batch_filter &&
+                                draw_path.blend_mode == *batch_blend_mode => {}
+                            Some(PathBatches { draw, prepare }) => {
+                                prepare_commands.push(RenderCommand::PrepareTiles(prepare));
+                                draw_commands.push(RenderCommand::DrawTiles(draw));
+                                batches = None;
+                            }
+                            None => {}
+                        }
+
+                        // Create a new batch if necessary.
+                        if batches.is_none() {
+                            batches = Some(PathBatches {
+                                prepare: PrepareTilesBatch::new(next_batch_id),
+                                draw: DrawTileBatch {
+                                    tile_batch_id: next_batch_id,
+                                    color_texture: draw_path.color_texture,
+                                    filter: draw_path.filter,
+                                    blend_mode: draw_path.blend_mode,
+                                },
+                            });
+                            next_batch_id.0 += 1;
+                        }
+
+                        // Add clip path if necessary.
+                        let clip_path = draw_path.clip_path_id.map(|clip_path_id| {
+                            match clip_id_to_path_index.get(&clip_path_id) {
+                                Some(&clip_path_index) => clip_path_index,
+                                None => {
+                                    let clip_path = &built_clip_paths[clip_path_id.0 as usize];
+                                    let clip_path_index = clip_prepare_batch.push(clip_path, None);
+                                    clip_id_to_path_index.insert(clip_path_id, clip_path_index);
+                                    clip_path_index
+                                }
+                            }
+                        });
+
+                        let batches = batches.as_mut().unwrap();
+                        batches.prepare.push(&draw_path.path, clip_path);
+                    }
+
+                    if let Some(PathBatches { draw, prepare }) = batches {
+                        prepare_commands.push(RenderCommand::PrepareTiles(prepare));
+                        draw_commands.push(RenderCommand::DrawTiles(draw));
+                    }
+                }
+            }
+        }
+
+        // Send commands.
+        if !clip_prepare_batch.propagate_metadata.is_empty() {
+            self.listener.send(RenderCommand::PrepareTiles(clip_prepare_batch));
+        }
+        for command in prepare_commands {
+            self.listener.send(command);
+        }
+        for command in draw_commands {
+            self.listener.send(command);
+        }
+
+        /*
                     culled_tiles.display_list
                                 .push(CulledDisplayItem::PushRenderTarget(render_target_id));
 
@@ -428,8 +522,10 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         //println!("culled tiles display item count={}", culled_tiles.display_list.len());
 
         culled_tiles
+        */
     }
 
+    /*
     fn build_solid_tiles(&self, built_draw_paths: &[BuiltDrawPath]) -> Vec<ZBuffer> {
         let effective_view_box = self.scene.effective_view_box(self.built_options);
         let mut z_buffers = vec![ZBuffer::new(effective_view_box)];
@@ -576,14 +672,14 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         }
     }
 
+    */
+
     fn finish_building(&mut self,
                        paint_metadata: &[PaintMetadata],
                        built_draw_paths: Vec<BuiltDrawPath>,
                        built_clip_paths: Vec<BuiltPath>) {
         self.listener.send(RenderCommand::FlushFills);
-        let prepare_clip_batch = self.build_clips(&built_draw_paths, & &built_clip_paths);
-        let culled_tiles = self.cull_tiles(paint_metadata, built_draw_paths);
-        self.pack_tiles(culled_tiles);
+        self.build_tile_batches(paint_metadata, built_draw_paths, built_clip_paths);
     }
 
     fn needs_readable_framebuffer(&self) -> bool {
@@ -671,23 +767,6 @@ impl BuiltPath {
             }
         }, tiles::round_rect_out_to_tile_bounds(tile_map_bounds));
 
-        let clip_tiles = match *tiling_path_info {
-            TilingPathInfo::Draw(ref draw_tiling_path_info) if
-                    draw_tiling_path_info.built_clip_path.is_some() => {
-                Some(DenseTileMap::from_builder(|tile_coord| {
-                    Clip {
-                        dest_tile_id: AlphaTileId(!0),
-                        src_tile_id: AlphaTileId(!0),
-                        backdrop: 0,
-                        enabled: 0,
-                        pad0: 0,
-                        pad1: 0,
-                    }
-                }, tiles.rect))
-            }
-            _ => None,
-        };
-
         BuiltPath {
             /*
             empty_tiles: vec![],
@@ -697,7 +776,6 @@ impl BuiltPath {
             backdrops: vec![0; tiles.rect.width() as usize],
             occluders: if occludes { Some(vec![]) } else { None },
             tiles,
-            clip_tiles,
             fill_rule,
         }
     }
@@ -937,4 +1015,46 @@ fn calculate_mask_uv(tile_index: u16) -> Vector2I {
     let mask_u = tile_index as i32 % MASK_TILES_ACROSS as i32;
     let mask_v = tile_index as i32 / MASK_TILES_ACROSS as i32;
     vec2i(mask_u, mask_v)
+}
+
+struct PathBatches {
+    prepare: PrepareTilesBatch,
+    draw: DrawTileBatch,
+}
+
+impl PrepareTilesBatch {
+    fn new(batch_id: TileBatchId) -> PrepareTilesBatch {
+        PrepareTilesBatch {
+            batch_id,
+            tiles: vec![],
+            backdrops: vec![],
+            propagate_metadata: vec![],
+            clipped_path_info: None,
+        }
+    }
+
+    fn push(&mut self, path: &BuiltPath, clip_path_id: Option<PathIndex>) -> PathIndex {
+        let path_index = PathIndex(self.propagate_metadata.len() as u32);
+        self.propagate_metadata.push(PropagateMetadata {
+            tile_rect: path.tiles.rect,
+            tile_offset: self.tiles.len() as u32,
+            backdrops_offset: self.backdrops.len() as u32,
+            z_write: path.occluders.is_some() as u32,
+            clip_path: clip_path_id.unwrap_or(PathIndex(!0)),
+        });
+        self.tiles.extend_from_slice(&path.tiles.data);
+        self.backdrops.extend_from_slice(&path.backdrops);
+
+        if clip_path_id.is_some() {
+            if self.clipped_path_info.is_none() {
+                self.clipped_path_info = Some(ClippedPathInfo {
+                    clip_batch_id: TileBatchId(0),
+                    clipped_paths: vec![],
+                });
+            }
+            self.clipped_path_info.as_mut().unwrap().clipped_paths.push(path_index);
+        }
+
+        path_index
+    }
 }
