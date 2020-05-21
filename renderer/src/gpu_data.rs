@@ -142,6 +142,11 @@ pub struct ClippedPathInfo {
 
     /// The IDs of the paths that have clips.
     pub clipped_paths: Vec<PathIndex>,
+
+    /// The maximum number of clipped tiles.
+    /// 
+    /// This is used to allocate vertex buffers.
+    pub max_clipped_tile_count: u32,
 }
 
 /// Together with the `TileBatchId`, uniquely identifies a path on the renderer side.

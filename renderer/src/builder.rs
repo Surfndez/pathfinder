@@ -1050,9 +1050,12 @@ impl PrepareTilesBatch {
                 self.clipped_path_info = Some(ClippedPathInfo {
                     clip_batch_id: TileBatchId(0),
                     clipped_paths: vec![],
+                    max_clipped_tile_count: 0,
                 });
             }
-            self.clipped_path_info.as_mut().unwrap().clipped_paths.push(path_index);
+            let clipped_path_info = self.clipped_path_info.as_mut().unwrap();
+            clipped_path_info.clipped_paths.push(path_index);
+            clipped_path_info.max_clipped_tile_count += path.tiles.data.len() as u32;
         }
 
         path_index

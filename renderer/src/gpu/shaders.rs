@@ -567,13 +567,15 @@ impl<D> CopyTileProgram<D> where D: Device {
 pub struct ClipTileProgram<D> where D: Device {
     pub program: D::Program,
     pub src_texture: D::TextureParameter,
+    pub framebuffer_size_uniform: D::Uniform,
 }
 
 impl<D> ClipTileProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> ClipTileProgram<D> {
         let program = device.create_raster_program(resources, "tile_clip");
         let src_texture = device.get_texture_parameter(&program, "Src");
-        ClipTileProgram { program, src_texture }
+        let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
+        ClipTileProgram { program, src_texture, framebuffer_size_uniform }
     }
 }
 
@@ -613,7 +615,7 @@ pub struct GenerateClipProgram<D> where D: Device {
     pub clipped_path_indices_storage_buffer: D::StorageBuffer,
     pub propagate_metadata_storage_buffer: D::StorageBuffer,
     pub tiles_storage_buffer: D::StorageBuffer,
-    pub clip_vertex_buffer: D::StorageBuffer,
+    pub clip_vertex_storage_buffer: D::StorageBuffer,
 }
 
 impl<D> GenerateClipProgram<D> where D: Device {
@@ -624,7 +626,19 @@ impl<D> GenerateClipProgram<D> where D: Device {
 
         let clipped_path_indices_storage_buffer =
             device.get_storage_buffer(&program, "ClippedPathIndices", 0);
-        let propagate_metadata_storage_buffer = device.get_storage_buffer(&program, name: &str, binding: u32)
+        let propagate_metadata_storage_buffer =
+            device.get_storage_buffer(&program, "PropagateMetadata", 1);
+        let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 2);
+        let clip_vertex_storage_buffer =
+            device.get_storage_buffer(&program, "ClipVertexBuffer", 3);
+
+        GenerateClipProgram {
+            program,
+            clipped_path_indices_storage_buffer,
+            propagate_metadata_storage_buffer,
+            tiles_storage_buffer,
+            clip_vertex_storage_buffer,
+        }
     }
 }
 

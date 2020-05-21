@@ -13,12 +13,12 @@ use crate::gpu::options::{DestFramebuffer, RendererOptions};
 use crate::gpu::shaders::{BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
 use crate::gpu::shaders::{ClipTileProgram, ClipTileVertexArray};
 use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
-use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
+use crate::gpu::shaders::{GenerateClipProgram, MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TileProgram, TileVertexArray};
-use crate::gpu_data::{ClipBatchKey, ClipBatchKind, Fill, PrepareTilesBatch, PropagateMetadata, RenderCommand};
+use crate::gpu_data::{Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PropagateMetadata, RenderCommand};
 use crate::gpu_data::{TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
-use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
+use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive};
 use crate::options::BoundingQuad;
 use crate::paint::PaintCompositeOp;
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
@@ -114,6 +114,7 @@ pub struct Renderer<D> where D: Device {
     tile_program: TileProgram<D>,
     tile_copy_program: CopyTileProgram<D>,
     tile_clip_program: ClipTileProgram<D>,
+    generate_clip_program: GenerateClipProgram<D>,
     stencil_program: StencilProgram<D>,
     reprojection_program: ReprojectionProgram<D>,
     propagate_program: PropagateProgram<D>,
@@ -190,6 +191,7 @@ impl<D> Renderer<D> where D: Device {
         let tile_program = TileProgram::new(&device, resources);
         let tile_copy_program = CopyTileProgram::new(&device, resources);
         let tile_clip_program = ClipTileProgram::new(&device, resources);
+        let generate_clip_program = GenerateClipProgram::new(&device, resources);
         let stencil_program = StencilProgram::new(&device, resources);
         let reprojection_program = ReprojectionProgram::new(&device, resources);
         let propagate_program = PropagateProgram::new(&device, resources);
@@ -246,6 +248,7 @@ impl<D> Renderer<D> where D: Device {
             tile_program,
             tile_copy_program,
             tile_clip_program,
+            generate_clip_program,
             propagate_program,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
@@ -298,7 +301,7 @@ impl<D> Renderer<D> where D: Device {
     }
 
     pub fn render_command(&mut self, command: &RenderCommand) {
-        debug!("render command: {:?}", command);
+        println!("render command: {:?}", command);
         match *command {
             RenderCommand::Start { bounding_quad, path_count, needs_readable_framebuffer } => {
                 self.start_rendering(bounding_quad, path_count, needs_readable_framebuffer);
@@ -833,14 +836,40 @@ impl<D> Renderer<D> where D: Device {
         buffered_fills.clear();
     }
 
-    // TODO(pcwalton): Reenable.
-    /*
-    fn draw_clip_batch(&mut self, batch: &ClipBatch) {
-        if batch.clips.is_empty() {
-            return;
-        }
+    fn clip_tiles(&mut self, tile_storage_id: StorageID, max_clipped_tile_count: u32) {
+        // FIXME(pcwalton): Recycle these.
+        let mask_framebuffer = self.back_frame
+                                   .mask_framebuffer
+                                   .as_ref()
+                                   .expect("Where's the mask framebuffer?");
+        let mask_texture = self.device.framebuffer_texture(mask_framebuffer);
+        let mask_texture_size = self.device.texture_size(&mask_texture);
+        let temp_texture = self.device.create_texture(TextureFormat::RGBA16F, mask_texture_size);
 
-        let ClipBatchKey { dest_page, src_page, kind } = batch.key;
+        println!("mask_texture_size={:?} mask_clipped_tile_count={}",
+                 mask_texture_size,
+                 max_clipped_tile_count);
+
+        self.device.draw_elements_instanced(6, max_clipped_tile_count, &RenderState {
+            target: &RenderTarget::Framebuffer(mask_framebuffer),
+            program: &self.tile_clip_program.program,
+            vertex_array: &self.back_frame.tile_clip_vertex_array.vertex_array,
+            primitive: Primitive::Triangles,
+            textures: &[(&self.tile_clip_program.src_texture, &temp_texture)],
+            images: &[],
+            uniforms: &[
+                (&self.tile_clip_program.framebuffer_size_uniform,
+                 UniformData::Vec2(mask_texture_size.to_f32().0)),
+            ],
+            storage_buffers: &[],
+            viewport: RectI::new(Vector2I::zero(), mask_texture_size),
+            // FIXME(pcwalton): Blend.
+            options: RenderOptions {
+                ..RenderOptions::default()
+            },
+        });
+
+        /*
 
         self.device.allocate_buffer(&self.back_frame.tile_clip_vertex_array.vertex_buffer,
                                     BufferData::Memory(&batch.clips),
@@ -901,8 +930,8 @@ impl<D> Renderer<D> where D: Device {
         }
 
         self.back_frame.framebuffer_flags.insert(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY);
+        */
     }
-    */
 
     fn prepare_tiles(&mut self, batch: &PrepareTilesBatch) {
         let count = batch.tiles.len();
@@ -910,12 +939,22 @@ impl<D> Renderer<D> where D: Device {
         let storage_id = self.upload_tiles(&batch.tiles);
         self.upload_propagate_data(&batch.propagate_metadata, &batch.backdrops);
         self.propagate_tiles(batch.propagate_metadata.len() as u32, storage_id);
+
         // TODO(pcwalton): Z-buffering.
 
         self.back_frame.tile_batch_info.insert(batch.batch_id.0 as usize, TileBatchInfo {
             tile_count: batch.tiles.len() as u32,
             storage_id,
         });
+
+        // Perform clipping if necessary.
+        if let Some(ref clipped_path_info) = batch.clipped_path_info {
+            self.prepare_clip_tiles(storage_id,
+                                    clipped_path_info.clip_batch_id,
+                                    &clipped_path_info.clipped_paths,
+                                    clipped_path_info.max_clipped_tile_count);
+            self.clip_tiles(storage_id, clipped_path_info.max_clipped_tile_count);
+        }
     }
 
     fn tile_transform(&self) -> Transform4F {
@@ -980,6 +1019,61 @@ impl<D> Renderer<D> where D: Device {
             ],
             viewport: RectI::new(Vector2I::zero(), z_buffer_size),
             options: RenderOptions::default(),
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().propagate_times.push(TimerFuture::new(timer_query));
+    }
+
+    fn prepare_clip_tiles(&mut self,
+                          tile_storage_id: StorageID,
+                          clip_batch_id: TileBatchId,
+                          clipped_paths: &[PathIndex],
+                          max_clipped_tile_count: u32) {
+        // Allocate paths.
+        // FIXME(pcwalton): Reuse buffers.
+        let clipped_path_indices_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        self.device.allocate_buffer::<PathIndex>(&clipped_path_indices_buffer,
+                                                 BufferData::Memory(clipped_paths),
+                                                 BufferTarget::Storage);
+
+        let alpha_tile_buffer = &self.back_frame
+                                     .tile_vertex_storage_allocator
+                                     .get(tile_storage_id)
+                                     .vertex_buffer;
+
+        // Allocate vertex buffer.
+        // FIXME(pcwalton): Reuse buffers.
+        self.device.allocate_buffer::<Clip>(
+            &self.back_frame.tile_clip_vertex_array.vertex_buffer,
+            BufferData::Uninitialized(max_clipped_tile_count as usize),
+            BufferTarget::Vertex);
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        let viewport_size = self.main_viewport().size();
+        let dimensions = viewport_size + Vector2I::splat(255);
+        let dimensions = ComputeDimensions {
+            x: dimensions.x() as u32 / 256,
+            y: dimensions.y() as u32 / 256,
+            z: clipped_paths.len() as u32,
+        };
+
+        self.device.dispatch_compute(dimensions, &ComputeState {
+            program: &self.generate_clip_program.program,
+            textures: &[],
+            images: &[],
+            uniforms: &[],
+            storage_buffers: &[
+                (&self.generate_clip_program.clipped_path_indices_storage_buffer,
+                 &clipped_path_indices_buffer),
+                (&self.generate_clip_program.propagate_metadata_storage_buffer,
+                 &self.back_frame.propagate_metadata_buffer),
+                (&self.generate_clip_program.tiles_storage_buffer, alpha_tile_buffer),
+                (&self.generate_clip_program.clip_vertex_storage_buffer,
+                 &self.back_frame.tile_clip_vertex_array.vertex_buffer),
+            ],
         });
 
         self.device.end_timer_query(&timer_query);
