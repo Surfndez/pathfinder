@@ -46,7 +46,7 @@ void writeTile(thread const int& tileOffset, thread uint4& originalTile, thread 
     v_39.iDrawTiles[tileOffset] = originalTile;
 }
 
-kernel void main0(device bDrawTiles& v_39 [[buffer(0)]], const device bClippedPathIndices& _60 [[buffer(1)]], const device bDrawPropagateMetadata& _73 [[buffer(2)]], const device bClipPropagateMetadata& _93 [[buffer(3)]], device bClipTiles& _230 [[buffer(4)]], device bClipVertexBuffer& _334 [[buffer(5)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]])
+kernel void main0(device bDrawTiles& v_39 [[buffer(0)]], const device bClippedPathIndices& _60 [[buffer(1)]], const device bDrawPropagateMetadata& _73 [[buffer(2)]], const device bClipPropagateMetadata& _93 [[buffer(3)]], device bClipTiles& _230 [[buffer(4)]], device bClipVertexBuffer& _310 [[buffer(5)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]])
 {
     uint2 tileCoord = uint2(gl_GlobalInvocationID.xy);
     uint drawPathIndex = _60.iClippedPathIndices[gl_WorkGroupID.z];
@@ -89,55 +89,35 @@ kernel void main0(device bDrawTiles& v_39 [[buffer(0)]], const device bClippedPa
         }
         else
         {
-            if ((clipTileIndex >= 0) && (drawTileIndex < 0))
+            if (((clipTileIndex >= 0) && (drawTileIndex < 0)) && (drawTileBackdrop != 0))
             {
-                if (drawTileBackdrop != 0)
-                {
-                    int param_4 = drawTileOffset;
-                    uint4 param_5 = drawTile;
-                    int param_6 = clipTileIndex;
-                    int param_7 = clipTileBackdrop;
-                    writeTile(param_4, param_5, param_6, param_7, v_39);
-                }
+                int param_4 = drawTileOffset;
+                uint4 param_5 = drawTile;
+                int param_6 = clipTileIndex;
+                int param_7 = clipTileBackdrop;
+                writeTile(param_4, param_5, param_6, param_7, v_39);
             }
             else
             {
-                if ((clipTileIndex < 0) && (drawTileIndex >= 0))
+                if ((clipTileIndex < 0) && (clipTileBackdrop == 0))
                 {
-                    if (clipTileBackdrop == 0)
-                    {
-                        int param_8 = drawTileOffset;
-                        uint4 param_9 = drawTile;
-                        int param_10 = -1;
-                        int param_11 = 0;
-                        writeTile(param_8, param_9, param_10, param_11, v_39);
-                    }
-                }
-                else
-                {
-                    if ((clipTileIndex < 0) && (drawTileIndex < 0))
-                    {
-                        if (clipTileBackdrop == 0)
-                        {
-                            int param_12 = drawTileOffset;
-                            uint4 param_13 = drawTile;
-                            int param_14 = -1;
-                            int param_15 = 0;
-                            writeTile(param_12, param_13, param_14, param_15, v_39);
-                        }
-                    }
+                    int param_8 = drawTileOffset;
+                    uint4 param_9 = drawTile;
+                    int param_10 = -1;
+                    int param_11 = 0;
+                    writeTile(param_8, param_9, param_10, param_11, v_39);
                 }
             }
         }
     }
     else
     {
-        int param_16 = drawTileOffset;
-        uint4 param_17 = drawTile;
-        int param_18 = -1;
-        int param_19 = 0;
-        writeTile(param_16, param_17, param_18, param_19, v_39);
+        int param_12 = drawTileOffset;
+        uint4 param_13 = drawTile;
+        int param_14 = -1;
+        int param_15 = 0;
+        writeTile(param_12, param_13, param_14, param_15, v_39);
     }
-    _334.iClipVertexBuffer[drawTileOffset] = clipTileData;
+    _310.iClipVertexBuffer[drawTileOffset] = clipTileData;
 }
 

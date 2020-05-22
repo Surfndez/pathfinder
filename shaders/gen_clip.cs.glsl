@@ -90,20 +90,23 @@ void main() {
         uvec4 clipTile = iClipTiles[clipTileOffset];
         int clipTileIndex = int(clipTile.y), clipTileBackdrop = int(clipTile.w << 8) >> 24;
 
+        // Process the tile appropriately.
         if (clipTileIndex >= 0 && drawTileIndex >= 0) {
+            // Hard case: We have an alpha tile and a clip tile with masks. Add a job to combine
+            // the two masks. Because the mask combining step applies the backdrops, zero out the
+            // backdrop in the draw tile itself so that we don't double-count it.
             clipTileData = ivec4(drawTileIndex, drawTileBackdrop, clipTileIndex, clipTileBackdrop);
             writeTile(drawTileOffset, drawTile, drawTileIndex, 0);
-        } else if (clipTileIndex >= 0 && drawTileIndex < 0) {
-            if (drawTileBackdrop != 0)
-                writeTile(drawTileOffset, drawTile, clipTileIndex, clipTileBackdrop);
-        } else if (clipTileIndex < 0 && drawTileIndex >= 0) {
-            if (clipTileBackdrop == 0)
-                writeTile(drawTileOffset, drawTile, -1, 0);
-        } else if (clipTileIndex < 0 && drawTileIndex < 0) {
-            if (clipTileBackdrop == 0)
-                writeTile(drawTileOffset, drawTile, -1, 0);
+        } else if (clipTileIndex >= 0 && drawTileIndex < 0 && drawTileBackdrop != 0) {
+            // This is a solid draw tile, but there's a clip applied. Replace it with an alpha tile
+            // pointing directly to the clip mask.
+            writeTile(drawTileOffset, drawTile, clipTileIndex, clipTileBackdrop);
+        } else if (clipTileIndex < 0 && clipTileBackdrop == 0) {
+            // This is a blank clip tile. Cull it entirely.
+            writeTile(drawTileOffset, drawTile, -1, 0);
         }
     } else {
+        // This tile is outside the clip rect, so it's blank. Cull it.
         writeTile(drawTileOffset, drawTile, -1, 0);
     }
 

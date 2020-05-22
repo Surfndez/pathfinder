@@ -31,6 +31,7 @@ void main() {
 
     if (aTileIndex < 0)
         position = vec2(0.0);
+
 #ifdef PF_ORIGIN_UPPER_LEFT
     position.y = 1.0 - position.y;
 #endif

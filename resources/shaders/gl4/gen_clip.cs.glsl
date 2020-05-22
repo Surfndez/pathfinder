@@ -120,20 +120,23 @@ void main(){
         uvec4 clipTile = iClipTiles[clipTileOffset];
         int clipTileIndex = int(clipTile . y), clipTileBackdrop = int(clipTile . w << 8)>> 24;
 
+
         if(clipTileIndex >= 0 && drawTileIndex >= 0){
+
+
+
             clipTileData = ivec4(drawTileIndex, drawTileBackdrop, clipTileIndex, clipTileBackdrop);
             writeTile(drawTileOffset, drawTile, drawTileIndex, 0);
-        } else if(clipTileIndex >= 0 && drawTileIndex < 0){
-            if(drawTileBackdrop != 0)
-                writeTile(drawTileOffset, drawTile, clipTileIndex, clipTileBackdrop);
-        } else if(clipTileIndex < 0 && drawTileIndex >= 0){
-            if(clipTileBackdrop == 0)
-                writeTile(drawTileOffset, drawTile, - 1, 0);
-        } else if(clipTileIndex < 0 && drawTileIndex < 0){
-            if(clipTileBackdrop == 0)
-                writeTile(drawTileOffset, drawTile, - 1, 0);
+        } else if(clipTileIndex >= 0 && drawTileIndex < 0 && drawTileBackdrop != 0){
+
+
+            writeTile(drawTileOffset, drawTile, clipTileIndex, clipTileBackdrop);
+        } else if(clipTileIndex < 0 && clipTileBackdrop == 0){
+
+            writeTile(drawTileOffset, drawTile, - 1, 0);
         }
     } else {
+
         writeTile(drawTileOffset, drawTile, - 1, 0);
     }
 

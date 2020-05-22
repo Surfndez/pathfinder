@@ -16,9 +16,6 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
-#define TILE_CLIP_COMBINE_CTRL_ENABLE_0     0x1u
-#define TILE_CLIP_COMBINE_CTRL_ENABLE_1     0x2u
-
 uniform vec2 uFramebufferSize;
 
 in ivec2 aTileOffset;
@@ -31,7 +28,6 @@ out vec2 vTexCoord0;
 out float vBackdrop0;
 out vec2 vTexCoord1;
 out float vBackdrop1;
-flat out uint vCtrl;
 
 void main() {
     vec2 destPosition = vec2(ivec2(aDestTileIndex % 256, aDestTileIndex / 256) + aTileOffset);
@@ -45,14 +41,7 @@ void main() {
     vBackdrop0 = float(aDestBackdrop);
     vBackdrop1 = float(aSrcBackdrop);
 
-    uint ctrl = 0u;
-    if (aDestTileIndex >= 0)
-        ctrl |= TILE_CLIP_COMBINE_CTRL_ENABLE_0;
-    if (aSrcTileIndex >= 0)
-        ctrl |= TILE_CLIP_COMBINE_CTRL_ENABLE_1;
-    vCtrl = ctrl;
-
-    if (ctrl == 0u && aDestBackdrop == 0 && aSrcBackdrop == 0)
+    if (aDestTileIndex < 0)
         destPosition = vec2(0.0);
 
 #ifdef PF_ORIGIN_UPPER_LEFT

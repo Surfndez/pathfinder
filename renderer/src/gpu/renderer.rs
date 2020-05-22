@@ -298,17 +298,16 @@ impl<D> Renderer<D> where D: Device {
         let framebuffer_tile_size = self.framebuffer_tile_size();
         let z_buffer_length = framebuffer_tile_size.x() as usize *
             framebuffer_tile_size.y() as usize;
-        let mut z_buffer_data = vec![0; z_buffer_length];
         self.device.upload_to_buffer::<i32>(&self.back_frame.z_buffer,
                                             0,
-                                            &z_buffer_data,
+                                            &vec![0; z_buffer_length],
                                             BufferTarget::Storage);
 
         self.back_frame.max_alpha_tile_index = 0;
     }
 
     pub fn render_command(&mut self, command: &RenderCommand) {
-        println!("render command: {:?}", command);
+        //println!("render command: {:?}", command);
         match *command {
             RenderCommand::Start { bounding_quad, path_count, needs_readable_framebuffer } => {
                 self.start_rendering(bounding_quad, path_count, needs_readable_framebuffer);
@@ -592,7 +591,7 @@ impl<D> Renderer<D> where D: Device {
                              propagate_metadata: &[PropagateMetadata],
                              backdrops: &[i32])
                              -> StorageID {
-        println!("propagate metadata: {:#?}", propagate_metadata);
+        //println!("propagate metadata: {:#?}", propagate_metadata);
 
         let device = &self.device;
         let propagate_metadata_storage_id = self.back_frame
@@ -876,9 +875,11 @@ impl<D> Renderer<D> where D: Device {
         let temp_texture = self.device.create_texture(TextureFormat::RGBA16F, mask_texture_size);
         let temp_framebuffer = self.device.create_framebuffer(temp_texture);
 
+        /*
         println!("mask_texture_size={:?} mask_clipped_tile_count={}",
                  mask_texture_size,
                  max_clipped_tile_count);
+                 */
 
         let clip_vertex_storage =
             self.back_frame.clip_vertex_storage_allocator.get(clip_storage_id);
@@ -1126,7 +1127,7 @@ impl<D> Renderer<D> where D: Device {
         self.device.allocate_buffer::<PathIndex>(&clipped_path_indices_buffer,
                                                  BufferData::Memory(clipped_paths),
                                                  BufferTarget::Storage);
-        println!("clipped path indices={:?}", clipped_paths);
+        //println!("clipped path indices={:?}", clipped_paths);
 
         let alpha_tile_buffer = &self.back_frame
                                      .tile_vertex_storage_allocator

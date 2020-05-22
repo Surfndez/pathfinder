@@ -10,7 +10,6 @@ struct main0_out
     float vBackdrop0 [[user(locn1)]];
     float2 vTexCoord1 [[user(locn2)]];
     float vBackdrop1 [[user(locn3)]];
-    uint vCtrl [[user(locn4)]];
     float4 gl_Position [[position]];
 };
 
@@ -34,36 +33,7 @@ vertex main0_out main0(main0_in in [[stage_in]], constant float2& uFramebufferSi
     out.vTexCoord1 = srcPosition;
     out.vBackdrop0 = float(in.aDestBackdrop);
     out.vBackdrop1 = float(in.aSrcBackdrop);
-    uint ctrl = 0u;
-    if (in.aDestTileIndex >= 0)
-    {
-        ctrl |= 1u;
-    }
-    if (in.aSrcTileIndex >= 0)
-    {
-        ctrl |= 2u;
-    }
-    out.vCtrl = ctrl;
-    bool _86 = ctrl == 0u;
-    bool _91;
-    if (_86)
-    {
-        _91 = in.aDestBackdrop == 0;
-    }
-    else
-    {
-        _91 = _86;
-    }
-    bool _96;
-    if (_91)
-    {
-        _96 = in.aSrcBackdrop == 0;
-    }
-    else
-    {
-        _96 = _91;
-    }
-    if (_96)
+    if (in.aDestTileIndex < 0)
     {
         destPosition = float2(0.0);
     }
