@@ -60,9 +60,10 @@ const SQRT_2_PI_INV: f32 = 0.3989422804014327;
 
 const TEXTURE_CACHE_SIZE: usize = 8;
 
-const MIN_FILL_STORAGE_CLASS: usize =          14;   // 16K entries, 128kB
-const MIN_FILL_TILE_MAP_STORAGE_CLASS: usize = 15;   // 32K entries, 128kB
-const MIN_TILE_STORAGE_CLASS: usize =          10;   // 1024 entries, 12kB
+const MIN_FILL_STORAGE_CLASS:                    usize = 14;    // 16K entries, 128kB
+const MIN_FILL_TILE_MAP_STORAGE_CLASS:           usize = 15;    // 32K entries, 128kB
+const MIN_TILE_STORAGE_CLASS:                    usize = 10;    // 1024 entries, 12kB
+const MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS: usize = 8;     // 256 entries
 
 const TEXTURE_METADATA_ENTRIES_PER_ROW: i32 = 128;
 const TEXTURE_METADATA_TEXTURE_WIDTH:   i32 = TEXTURE_METADATA_ENTRIES_PER_ROW * 4;
@@ -155,6 +156,7 @@ struct Frame<D> where D: Device {
     fill_vertex_storage_allocator: StorageAllocator<D, FillVertexStorage<D>>,
     fill_tile_map_storage_allocator: StorageAllocator<D, D::Buffer>,  
     tile_vertex_storage_allocator: StorageAllocator<D, TileVertexStorage<D>>,
+    tile_propagate_metadata_storage_allocator: StorageAllocator<D, D::Buffer>,
 
     // Maps tile batch IDs to tile vertex storage IDs.
     tile_batch_info: VecMap<TileBatchInfo>,
@@ -172,7 +174,6 @@ struct Frame<D> where D: Device {
     dest_blend_framebuffer: D::Framebuffer,
     intermediate_dest_framebuffer: D::Framebuffer,
     texture_metadata_texture: D::Texture,
-    propagate_metadata_buffer: D::Buffer,
     backdrops_buffer: D::Buffer,
     z_buffer: D::Buffer,
     z_buffer_framebuffer: D::Framebuffer,
@@ -323,11 +324,6 @@ impl<D> Renderer<D> where D: Device {
                 self.draw_buffered_fills();
             }
             RenderCommand::BeginTileDrawing => {}
-            /*
-            RenderCommand::ClipTiles(ref batches) => {
-                batches.iter().for_each(|batch| self.draw_clip_batch(batch))
-            }
-            */
             RenderCommand::PushRenderTarget(render_target_id) => {
                 self.push_render_target(render_target_id)
             }
@@ -336,7 +332,7 @@ impl<D> Renderer<D> where D: Device {
             RenderCommand::DrawTiles(ref batch) => {
                 let batch_info = self.back_frame.tile_batch_info[batch.tile_batch_id.0 as usize];
                 self.draw_tiles(batch_info.tile_count,
-                                batch_info.storage_id,
+                                batch_info.tile_vertex_storage_id,
                                 batch.color_texture,
                                 batch.blend_mode,
                                 batch.filter)
@@ -358,6 +354,7 @@ impl<D> Renderer<D> where D: Device {
         self.back_frame.fill_vertex_storage_allocator.end_frame();
         self.back_frame.fill_tile_map_storage_allocator.end_frame();
         self.back_frame.tile_vertex_storage_allocator.end_frame();
+        self.back_frame.tile_propagate_metadata_storage_allocator.end_frame();
 
         self.back_frame.tile_batch_info.clear();
 
@@ -586,13 +583,29 @@ impl<D> Renderer<D> where D: Device {
 
     fn upload_propagate_data(&mut self,
                              propagate_metadata: &[PropagateMetadata],
-                             backdrops: &[i32]) {
-        self.device.allocate_buffer(&self.back_frame.propagate_metadata_buffer,
-                                    BufferData::Memory(propagate_metadata),
-                                    BufferTarget::Storage);
+                             backdrops: &[i32])
+                             -> StorageID {
+        println!("propagate metadata: {:#?}", propagate_metadata);
+
+        let device = &self.device;
+        let propagate_metadata_storage_id = self.back_frame
+                                                .tile_propagate_metadata_storage_allocator
+                                                .allocate(device,
+                                                          propagate_metadata.len() as u64,
+                                                          |device, size| {
+            let buffer = device.create_buffer(BufferUploadMode::Dynamic);
+            device.allocate_buffer::<PropagateMetadata>(&buffer,
+                                                        BufferData::Uninitialized(size as usize),
+                                                        BufferTarget::Storage);
+            device.upload_to_buffer(&buffer, 0, propagate_metadata, BufferTarget::Storage);
+            buffer
+        });
+
         self.device.allocate_buffer(&self.back_frame.backdrops_buffer,
                                     BufferData::Memory(backdrops),
                                     BufferTarget::Storage);
+
+        propagate_metadata_storage_id
     }
 
     fn ensure_index_buffer(&mut self, mut length: usize) {
@@ -936,24 +949,29 @@ impl<D> Renderer<D> where D: Device {
     fn prepare_tiles(&mut self, batch: &PrepareTilesBatch) {
         let count = batch.tiles.len();
         self.stats.alpha_tile_count += count;
-        let storage_id = self.upload_tiles(&batch.tiles);
-        self.upload_propagate_data(&batch.propagate_metadata, &batch.backdrops);
-        self.propagate_tiles(batch.propagate_metadata.len() as u32, storage_id);
+        let tile_vertex_storage_id = self.upload_tiles(&batch.tiles);
+        let propagate_metadata_storage_id = self.upload_propagate_data(&batch.propagate_metadata,
+                                                                       &batch.backdrops);
+        self.propagate_tiles(batch.propagate_metadata.len() as u32,
+                             tile_vertex_storage_id,
+                             propagate_metadata_storage_id);
 
         // TODO(pcwalton): Z-buffering.
 
         self.back_frame.tile_batch_info.insert(batch.batch_id.0 as usize, TileBatchInfo {
             tile_count: batch.tiles.len() as u32,
-            storage_id,
+            tile_vertex_storage_id,
+            propagate_metadata_storage_id,
         });
 
         // Perform clipping if necessary.
         if let Some(ref clipped_path_info) = batch.clipped_path_info {
-            self.prepare_clip_tiles(storage_id,
+            self.prepare_clip_tiles(tile_vertex_storage_id,
+                                    propagate_metadata_storage_id,
                                     clipped_path_info.clip_batch_id,
                                     &clipped_path_info.clipped_paths,
                                     clipped_path_info.max_clipped_tile_count);
-            self.clip_tiles(storage_id, clipped_path_info.max_clipped_tile_count);
+            self.clip_tiles(tile_vertex_storage_id, clipped_path_info.max_clipped_tile_count);
         }
     }
 
@@ -963,11 +981,17 @@ impl<D> Renderer<D> where D: Device {
         Transform4F::from_scale(scale).translate(Vector4F::new(-1.0, 1.0, 0.0, 1.0))
     }
 
-    fn propagate_tiles(&mut self, path_count: u32, tile_storage_id: StorageID) {
+    fn propagate_tiles(&mut self,
+                       path_count: u32,
+                       tile_storage_id: StorageID,
+                       propagate_metadata_storage_id: StorageID) {
         let alpha_tile_buffer = &self.back_frame
                                      .tile_vertex_storage_allocator
                                      .get(tile_storage_id)
                                      .vertex_buffer;
+        let propagate_metadata_storage_buffer = &self.back_frame
+                                                     .tile_propagate_metadata_storage_allocator
+                                                     .get(propagate_metadata_storage_id);
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
@@ -983,7 +1007,7 @@ impl<D> Renderer<D> where D: Device {
             ],
             storage_buffers: &[
                 (&self.propagate_program.metadata_storage_buffer,
-                 &self.back_frame.propagate_metadata_buffer),
+                 propagate_metadata_storage_buffer),
                 (&self.propagate_program.backdrops_storage_buffer,
                  &self.back_frame.backdrops_buffer),
                 (&self.propagate_program.alpha_tiles_storage_buffer, alpha_tile_buffer),
@@ -1027,15 +1051,28 @@ impl<D> Renderer<D> where D: Device {
 
     fn prepare_clip_tiles(&mut self,
                           tile_storage_id: StorageID,
+                          tile_propagate_metadata_storage_id: StorageID,
                           clip_batch_id: TileBatchId,
                           clipped_paths: &[PathIndex],
                           max_clipped_tile_count: u32) {
+        let clip_propagate_metadata_storage_id = self.back_frame
+                                                     .tile_batch_info[clip_batch_id.0 as usize]
+                                                     .propagate_metadata_storage_id;
+
+        let tile_propagate_metadata_buffer = self.back_frame
+                                                 .tile_propagate_metadata_storage_allocator
+                                                 .get(tile_propagate_metadata_storage_id);
+        let clip_propagate_metadata_buffer = self.back_frame
+                                                 .tile_propagate_metadata_storage_allocator
+                                                 .get(clip_propagate_metadata_storage_id);
+
         // Allocate paths.
         // FIXME(pcwalton): Reuse buffers.
         let clipped_path_indices_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
         self.device.allocate_buffer::<PathIndex>(&clipped_path_indices_buffer,
                                                  BufferData::Memory(clipped_paths),
                                                  BufferTarget::Storage);
+        println!("clipped path indices={:?}", clipped_paths);
 
         let alpha_tile_buffer = &self.back_frame
                                      .tile_vertex_storage_allocator
@@ -1044,9 +1081,10 @@ impl<D> Renderer<D> where D: Device {
 
         // Allocate vertex buffer.
         // FIXME(pcwalton): Reuse buffers.
+        let clip_vertex_buffer = vec![Clip::default(); max_clipped_tile_count as usize];
         self.device.allocate_buffer::<Clip>(
             &self.back_frame.tile_clip_vertex_array.vertex_buffer,
-            BufferData::Uninitialized(max_clipped_tile_count as usize),
+            BufferData::Memory(&clip_vertex_buffer),
             BufferTarget::Vertex);
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
@@ -1068,8 +1106,10 @@ impl<D> Renderer<D> where D: Device {
             storage_buffers: &[
                 (&self.generate_clip_program.clipped_path_indices_storage_buffer,
                  &clipped_path_indices_buffer),
-                (&self.generate_clip_program.propagate_metadata_storage_buffer,
-                 &self.back_frame.propagate_metadata_buffer),
+                (&self.generate_clip_program.draw_propagate_metadata_storage_buffer,
+                 tile_propagate_metadata_buffer),
+                (&self.generate_clip_program.clip_propagate_metadata_storage_buffer,
+                 clip_propagate_metadata_buffer),
                 (&self.generate_clip_program.tiles_storage_buffer, alpha_tile_buffer),
                 (&self.generate_clip_program.clip_vertex_storage_buffer,
                  &self.back_frame.tile_clip_vertex_array.vertex_buffer),
@@ -1652,6 +1692,8 @@ impl<D> Frame<D> where D: Device {
         let fill_tile_map_storage_allocator =
             StorageAllocator::new(MIN_FILL_TILE_MAP_STORAGE_CLASS);
         let tile_vertex_storage_allocator = StorageAllocator::new(MIN_TILE_STORAGE_CLASS);
+        let tile_propagate_metadata_storage_allocator =
+            StorageAllocator::new(MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS);
 
         let texture_metadata_texture_size = vec2i(TEXTURE_METADATA_TEXTURE_WIDTH,
                                                   TEXTURE_METADATA_TEXTURE_HEIGHT);
@@ -1687,6 +1729,7 @@ impl<D> Frame<D> where D: Device {
             tile_vertex_storage_allocator,
             fill_vertex_storage_allocator,
             fill_tile_map_storage_allocator,
+            tile_propagate_metadata_storage_allocator,
             tile_clip_vertex_array,
             reprojection_vertex_array,
             stencil_vertex_array,
@@ -1701,7 +1744,6 @@ impl<D> Frame<D> where D: Device {
             mask_framebuffer: None,
             intermediate_dest_framebuffer,
             dest_blend_framebuffer,
-            propagate_metadata_buffer,
             backdrops_buffer,
             z_buffer_framebuffer,
             z_buffer,
@@ -1713,7 +1755,8 @@ impl<D> Frame<D> where D: Device {
 #[derive(Clone, Copy)]
 struct TileBatchInfo {
     tile_count: u32,
-    storage_id: StorageID,
+    tile_vertex_storage_id: StorageID,
+    propagate_metadata_storage_id: StorageID,
 }
 
 // Buffer management

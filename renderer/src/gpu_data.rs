@@ -258,6 +258,20 @@ pub struct Clip {
     pub pad2: u8,
 }
 
+impl Default for Clip {
+    #[inline]
+    fn default() -> Clip {
+        Clip {
+            dest_tile_id: AlphaTileId(!0),
+            src_tile_id: AlphaTileId(!0),
+            backdrop: 0,
+            pad0: 0,
+            pad1: 0,
+            pad2: 0,
+        }
+    }
+}
+
 /*
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]

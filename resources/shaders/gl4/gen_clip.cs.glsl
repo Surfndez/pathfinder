@@ -59,15 +59,19 @@ layout(std430, binding = 0)buffer bClippedPathIndices {
     restrict readonly uint iClippedPathIndices[];
 };
 
-layout(std430, binding = 1)buffer bPropagateMetadata {
-    restrict readonly uvec4 iPropagateMetadata[];
+layout(std430, binding = 1)buffer bDrawPropagateMetadata {
+    restrict readonly uvec4 iDrawPropagateMetadata[];
 };
 
-layout(std430, binding = 2)buffer bTiles {
+layout(std430, binding = 2)buffer bClipPropagateMetadata {
+    restrict readonly uvec4 iClipPropagateMetadata[];
+};
+
+layout(std430, binding = 3)buffer bTiles {
     restrict uvec4 iTiles[];
 };
 
-layout(std430, binding = 3)buffer bClipVertexBuffer {
+layout(std430, binding = 4)buffer bClipVertexBuffer {
     restrict uint iClipVertexBuffer[];
 };
 
@@ -75,20 +79,20 @@ void main(){
     uvec2 tileCoord = uvec2(gl_GlobalInvocationID . xy);
 
     uint drawPathIndex = iClippedPathIndices[gl_WorkGroupID . z];
-    uvec4 drawTileRect = iPropagateMetadata[drawPathIndex * 2 + 0];
-    uvec4 drawPathMetadata = iPropagateMetadata[drawPathIndex * 2 + 1];
+    uvec4 drawTileRect = iDrawPropagateMetadata[drawPathIndex * 2 + 0];
+    uvec4 drawPathMetadata = iDrawPropagateMetadata[drawPathIndex * 2 + 1];
 
     uint clipPathIndex = drawPathMetadata . w;
-    uvec4 clipTileRect = iPropagateMetadata[clipPathIndex * 2 + 0];
-    uvec4 clipPathMetadata = iPropagateMetadata[clipPathIndex * 2 + 1];
+    uvec4 clipTileRect = iClipPropagateMetadata[clipPathIndex * 2 + 0];
+    uvec4 clipPathMetadata = iClipPropagateMetadata[clipPathIndex * 2 + 1];
 
-    uint drawOffset = drawPathMetadata . x, clipOffset = clipPathMetadata . x;
+    int drawOffset = int(drawPathMetadata . x), clipOffset = int(clipPathMetadata . x);
     ivec2 drawTileOffset2D = ivec2(tileCoord)- ivec2(drawTileRect . xy);
     ivec2 clipTileOffset2D = ivec2(tileCoord)- ivec2(clipTileRect . xy);
     int drawTilesAcross = int(drawTileRect . z - drawTileRect . x);
     int clipTilesAcross = int(clipTileRect . z - clipTileRect . x);
-    int drawTileOffset = drawTileOffset2D . x + drawTileOffset2D . y * drawTilesAcross;
-    int clipTileOffset = clipTileOffset2D . x + clipTileOffset2D . y * clipTilesAcross;
+    int drawTileOffset = drawOffset + drawTileOffset2D . x + drawTileOffset2D . y * drawTilesAcross;
+    int clipTileOffset = clipOffset + clipTileOffset2D . x + clipTileOffset2D . y * clipTilesAcross;
 
     bool inBoundsDraw = all(bvec4(greaterThanEqual(tileCoord, drawTileRect . xy),
                                   lessThan(tileCoord, drawTileRect . zw)));
