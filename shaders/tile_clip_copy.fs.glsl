@@ -1,6 +1,6 @@
 #version 330
 
-// pathfinder/shaders/tile_clip.fs.glsl
+// pathfinder/shaders/tile_clip_copy.fs.glsl
 //
 // Copyright © 2020 The Pathfinder Project Developers.
 //
@@ -19,11 +19,9 @@ precision highp sampler2D;
 uniform sampler2D uSrc;
 
 in vec2 vTexCoord;
-in float vBackdrop;
 
 out vec4 oFragColor;
 
 void main() {
-    //oFragColor = clamp(abs(texture(uSrc, vTexCoord) + vBackdrop), 0.0, 1.0);
-    oFragColor = vec4(1.0);
+    oFragColor = texture(uSrc, vTexCoord);
 }

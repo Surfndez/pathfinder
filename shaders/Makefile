@@ -23,8 +23,10 @@ SHADERS=\
 	stencil.vs.glsl \
 	tile.fs.glsl \
 	tile.vs.glsl \
-	tile_clip.fs.glsl \
-	tile_clip.vs.glsl \
+	tile_clip_combine.fs.glsl \
+	tile_clip_combine.vs.glsl \
+	tile_clip_copy.fs.glsl \
+	tile_clip_copy.vs.glsl \
 	tile_copy.fs.glsl \
 	tile_copy.vs.glsl \
 	$(EMPTY)

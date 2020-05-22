@@ -67,13 +67,23 @@ layout(std430, binding = 2)buffer bClipPropagateMetadata {
     restrict readonly uvec4 iClipPropagateMetadata[];
 };
 
-layout(std430, binding = 3)buffer bTiles {
-    restrict uvec4 iTiles[];
+layout(std430, binding = 3)buffer bDrawTiles {
+    restrict uvec4 iDrawTiles[];
 };
 
-layout(std430, binding = 4)buffer bClipVertexBuffer {
-    restrict uint iClipVertexBuffer[];
+layout(std430, binding = 4)buffer bClipTiles {
+    restrict uvec4 iClipTiles[];
 };
+
+layout(std430, binding = 5)buffer bClipVertexBuffer {
+    restrict ivec4 iClipVertexBuffer[];
+};
+
+void writeTile(int tileOffset, uvec4 originalTile, int newTileIndex, int newBackdrop){
+    originalTile . y = uint(newTileIndex);
+    originalTile . w = uint(originalTile . w & 0xff00ffff)|((uint(newBackdrop)& 0xff)<< 16);
+    iDrawTiles[tileOffset]= originalTile;
+}
 
 void main(){
     uvec2 tileCoord = uvec2(gl_GlobalInvocationID . xy);
@@ -102,18 +112,31 @@ void main(){
     bool inBoundsClip = all(bvec4(greaterThanEqual(tileCoord, clipTileRect . xy),
                                   lessThan(tileCoord, clipTileRect . zw)));
 
-    int drawTileIndex = - 1, clipTileIndex = - 1, clipTileBackdrop = 0;
+    uvec4 drawTile = iDrawTiles[drawTileOffset];
+    int drawTileIndex = int(drawTile . y), drawTileBackdrop = int(drawTile . w << 8)>> 24;
+
+    ivec4 clipTileData = ivec4(- 1, 0, - 1, 0);
     if(inBoundsClip){
-        uvec4 drawTile = iTiles[drawTileOffset], clipTile = iTiles[clipTileOffset];
-        drawTileIndex = int(drawTile . y);
-        clipTileIndex = int(clipTile . y);
-        clipTileBackdrop = int(clipTile . w << 8)>> 24;
+        uvec4 clipTile = iClipTiles[clipTileOffset];
+        int clipTileIndex = int(clipTile . y), clipTileBackdrop = int(clipTile . w << 8)>> 24;
 
-
+        if(clipTileIndex >= 0 && drawTileIndex >= 0){
+            clipTileData = ivec4(drawTileIndex, drawTileBackdrop, clipTileIndex, clipTileBackdrop);
+            writeTile(drawTileOffset, drawTile, drawTileIndex, 0);
+        } else if(clipTileIndex >= 0 && drawTileIndex < 0){
+            if(drawTileBackdrop != 0)
+                writeTile(drawTileOffset, drawTile, clipTileIndex, clipTileBackdrop);
+        } else if(clipTileIndex < 0 && drawTileIndex >= 0){
+            if(clipTileBackdrop == 0)
+                writeTile(drawTileOffset, drawTile, - 1, 0);
+        } else if(clipTileIndex < 0 && drawTileIndex < 0){
+            if(clipTileBackdrop == 0)
+                writeTile(drawTileOffset, drawTile, - 1, 0);
+        }
+    } else {
+        writeTile(drawTileOffset, drawTile, - 1, 0);
     }
 
-    iClipVertexBuffer[drawTileOffset * 3 + 0]= drawTileIndex;
-    iClipVertexBuffer[drawTileOffset * 3 + 1]= clipTileIndex;
-    iClipVertexBuffer[drawTileOffset * 3 + 2]= clipTileBackdrop;
+    iClipVertexBuffer[drawTileOffset]= clipTileData;
 }
 

@@ -18,7 +18,7 @@ use pathfinder_resources::ResourceLoader;
 // TODO(pcwalton): Replace with `mem::size_of` calls?
 pub(crate) const TILE_INSTANCE_SIZE: usize = 16;
 const FILL_INSTANCE_SIZE: usize = 12;
-const CLIP_TILE_INSTANCE_SIZE: usize = 12;
+const CLIP_TILE_INSTANCE_SIZE: usize = 16;
 
 pub const MAX_FILLS_PER_BATCH: usize = 0x10000;
 pub const MAX_TILES_PER_BATCH: usize = MASK_TILES_ACROSS as usize * MASK_TILES_DOWN as usize;
@@ -286,28 +286,73 @@ impl<D> CopyTileVertexArray<D> where D: Device {
     }
 }
 
-pub struct ClipTileVertexArray<D> where D: Device {
+pub struct ClipTileCopyVertexArray<D> where D: Device {
     pub vertex_array: D::VertexArray,
-    pub vertex_buffer: D::Buffer,
 }
 
-impl<D> ClipTileVertexArray<D> where D: Device {
+impl<D> ClipTileCopyVertexArray<D> where D: Device {
     pub fn new(device: &D,
-               clip_tile_program: &ClipTileProgram<D>,
+               clip_tile_copy_program: &ClipTileCopyProgram<D>,
+               vertex_buffer: &D::Buffer,
                quad_vertex_positions_buffer: &D::Buffer,
                quad_vertex_indices_buffer: &D::Buffer)
-               -> ClipTileVertexArray<D> {
+               -> ClipTileCopyVertexArray<D> {
         let vertex_array = device.create_vertex_array();
-        let vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
 
         let tile_offset_attr =
-            device.get_vertex_attr(&clip_tile_program.program, "TileOffset").unwrap();
+            device.get_vertex_attr(&clip_tile_copy_program.program, "TileOffset").unwrap();
+        let tile_index_attr =
+            device.get_vertex_attr(&clip_tile_copy_program.program, "TileIndex").unwrap();
+
+        device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, BufferTarget::Vertex);
+        device.configure_vertex_attr(&vertex_array, &tile_offset_attr, &VertexAttrDescriptor {
+            size: 2,
+            class: VertexAttrClass::Int,
+            attr_type: VertexAttrType::I16,
+            stride: 4,
+            offset: 0,
+            divisor: 0,
+            buffer_index: 0,
+        });
+        device.bind_buffer(&vertex_array, &vertex_buffer, BufferTarget::Vertex);
+        device.configure_vertex_attr(&vertex_array, &tile_index_attr, &VertexAttrDescriptor {
+            size: 1,
+            class: VertexAttrClass::Int,
+            attr_type: VertexAttrType::I32,
+            stride: CLIP_TILE_INSTANCE_SIZE / 2,
+            offset: 0,
+            divisor: 1,
+            buffer_index: 1,
+        });
+        device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, BufferTarget::Index);
+
+        ClipTileCopyVertexArray { vertex_array }
+    }
+}
+
+pub struct ClipTileCombineVertexArray<D> where D: Device {
+    pub vertex_array: D::VertexArray,
+}
+
+impl<D> ClipTileCombineVertexArray<D> where D: Device {
+    pub fn new(device: &D,
+               clip_tile_combine_program: &ClipTileCombineProgram<D>,
+               vertex_buffer: &D::Buffer,
+               quad_vertex_positions_buffer: &D::Buffer,
+               quad_vertex_indices_buffer: &D::Buffer)
+               -> ClipTileCombineVertexArray<D> {
+        let vertex_array = device.create_vertex_array();
+
+        let tile_offset_attr =
+            device.get_vertex_attr(&clip_tile_combine_program.program, "TileOffset").unwrap();
         let dest_tile_index_attr =
-            device.get_vertex_attr(&clip_tile_program.program, "DestTileIndex").unwrap();
+            device.get_vertex_attr(&clip_tile_combine_program.program, "DestTileIndex").unwrap();
+        let dest_backdrop_attr =
+            device.get_vertex_attr(&clip_tile_combine_program.program, "DestBackdrop").unwrap();
         let src_tile_index_attr =
-            device.get_vertex_attr(&clip_tile_program.program, "SrcTileIndex").unwrap();
+            device.get_vertex_attr(&clip_tile_combine_program.program, "SrcTileIndex").unwrap();
         let src_backdrop_attr =
-            device.get_vertex_attr(&clip_tile_program.program, "SrcBackdrop").unwrap();
+            device.get_vertex_attr(&clip_tile_combine_program.program, "SrcBackdrop").unwrap();
 
         device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, BufferTarget::Vertex);
         device.configure_vertex_attr(&vertex_array, &tile_offset_attr, &VertexAttrDescriptor {
@@ -329,7 +374,7 @@ impl<D> ClipTileVertexArray<D> where D: Device {
             divisor: 1,
             buffer_index: 1,
         });
-        device.configure_vertex_attr(&vertex_array, &src_tile_index_attr, &VertexAttrDescriptor {
+        device.configure_vertex_attr(&vertex_array, &dest_backdrop_attr, &VertexAttrDescriptor {
             size: 1,
             class: VertexAttrClass::Int,
             attr_type: VertexAttrType::I32,
@@ -338,21 +383,29 @@ impl<D> ClipTileVertexArray<D> where D: Device {
             divisor: 1,
             buffer_index: 1,
         });
-        device.configure_vertex_attr(&vertex_array, &src_backdrop_attr, &VertexAttrDescriptor {
+        device.configure_vertex_attr(&vertex_array, &src_tile_index_attr, &VertexAttrDescriptor {
             size: 1,
             class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::I8,
+            attr_type: VertexAttrType::I32,
             stride: CLIP_TILE_INSTANCE_SIZE,
             offset: 8,
             divisor: 1,
             buffer_index: 1,
         });
+        device.configure_vertex_attr(&vertex_array, &src_backdrop_attr, &VertexAttrDescriptor {
+            size: 1,
+            class: VertexAttrClass::Int,
+            attr_type: VertexAttrType::I32,
+            stride: CLIP_TILE_INSTANCE_SIZE,
+            offset: 12,
+            divisor: 1,
+            buffer_index: 1,
+        });
         device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, BufferTarget::Index);
 
-        ClipTileVertexArray { vertex_array, vertex_buffer }
+        ClipTileCombineVertexArray { vertex_array }
     }
 }
-
 
 pub struct BlitProgram<D> where D: Device {
     pub program: D::Program,
@@ -564,18 +617,33 @@ impl<D> CopyTileProgram<D> where D: Device {
     }
 }
 
-pub struct ClipTileProgram<D> where D: Device {
+pub struct ClipTileCombineProgram<D> where D: Device {
     pub program: D::Program,
     pub src_texture: D::TextureParameter,
     pub framebuffer_size_uniform: D::Uniform,
 }
 
-impl<D> ClipTileProgram<D> where D: Device {
-    pub fn new(device: &D, resources: &dyn ResourceLoader) -> ClipTileProgram<D> {
-        let program = device.create_raster_program(resources, "tile_clip");
+impl<D> ClipTileCombineProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> ClipTileCombineProgram<D> {
+        let program = device.create_raster_program(resources, "tile_clip_combine");
         let src_texture = device.get_texture_parameter(&program, "Src");
         let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
-        ClipTileProgram { program, src_texture, framebuffer_size_uniform }
+        ClipTileCombineProgram { program, src_texture, framebuffer_size_uniform }
+    }
+}
+
+pub struct ClipTileCopyProgram<D> where D: Device {
+    pub program: D::Program,
+    pub src_texture: D::TextureParameter,
+    pub framebuffer_size_uniform: D::Uniform,
+}
+
+impl<D> ClipTileCopyProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> ClipTileCopyProgram<D> {
+        let program = device.create_raster_program(resources, "tile_clip_copy");
+        let src_texture = device.get_texture_parameter(&program, "Src");
+        let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
+        ClipTileCopyProgram { program, src_texture, framebuffer_size_uniform }
     }
 }
 
@@ -615,7 +683,8 @@ pub struct GenerateClipProgram<D> where D: Device {
     pub clipped_path_indices_storage_buffer: D::StorageBuffer,
     pub draw_propagate_metadata_storage_buffer: D::StorageBuffer,
     pub clip_propagate_metadata_storage_buffer: D::StorageBuffer,
-    pub tiles_storage_buffer: D::StorageBuffer,
+    pub draw_tiles_storage_buffer: D::StorageBuffer,
+    pub clip_tiles_storage_buffer: D::StorageBuffer,
     pub clip_vertex_storage_buffer: D::StorageBuffer,
 }
 
@@ -631,16 +700,18 @@ impl<D> GenerateClipProgram<D> where D: Device {
             device.get_storage_buffer(&program, "DrawPropagateMetadata", 1);
         let clip_propagate_metadata_storage_buffer =
             device.get_storage_buffer(&program, "ClipPropagateMetadata", 2);
-        let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 3);
+        let draw_tiles_storage_buffer = device.get_storage_buffer(&program, "DrawTiles", 3);
+        let clip_tiles_storage_buffer = device.get_storage_buffer(&program, "ClipTiles", 4);
         let clip_vertex_storage_buffer =
-            device.get_storage_buffer(&program, "ClipVertexBuffer", 4);
+            device.get_storage_buffer(&program, "ClipVertexBuffer", 5);
 
         GenerateClipProgram {
             program,
             clipped_path_indices_storage_buffer,
             draw_propagate_metadata_storage_buffer,
             clip_propagate_metadata_storage_buffer,
-            tiles_storage_buffer,
+            draw_tiles_storage_buffer,
+            clip_tiles_storage_buffer,
             clip_vertex_storage_buffer,
         }
     }

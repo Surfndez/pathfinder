@@ -11,7 +11,7 @@
 use crate::gpu::debug::DebugUIPresenter;
 use crate::gpu::options::{DestFramebuffer, RendererOptions};
 use crate::gpu::shaders::{BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
-use crate::gpu::shaders::{ClipTileProgram, ClipTileVertexArray};
+use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram, ClipTileCopyVertexArray};
 use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
 use crate::gpu::shaders::{GenerateClipProgram, MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
@@ -64,6 +64,7 @@ const MIN_FILL_STORAGE_CLASS:                    usize = 14;    // 16K entries, 
 const MIN_FILL_TILE_MAP_STORAGE_CLASS:           usize = 15;    // 32K entries, 128kB
 const MIN_TILE_STORAGE_CLASS:                    usize = 10;    // 1024 entries, 12kB
 const MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS: usize = 8;     // 256 entries
+const MIN_CLIP_VERTEX_STORAGE_CLASS:             usize = 10;    // 1024 entries, 16kB
 
 const TEXTURE_METADATA_ENTRIES_PER_ROW: i32 = 128;
 const TEXTURE_METADATA_TEXTURE_WIDTH:   i32 = TEXTURE_METADATA_ENTRIES_PER_ROW * 4;
@@ -114,7 +115,8 @@ pub struct Renderer<D> where D: Device {
     fill_program: FillProgram<D>,
     tile_program: TileProgram<D>,
     tile_copy_program: CopyTileProgram<D>,
-    tile_clip_program: ClipTileProgram<D>,
+    tile_clip_combine_program: ClipTileCombineProgram<D>,
+    tile_clip_copy_program: ClipTileCopyProgram<D>,
     generate_clip_program: GenerateClipProgram<D>,
     stencil_program: StencilProgram<D>,
     reprojection_program: ReprojectionProgram<D>,
@@ -157,6 +159,7 @@ struct Frame<D> where D: Device {
     fill_tile_map_storage_allocator: StorageAllocator<D, D::Buffer>,  
     tile_vertex_storage_allocator: StorageAllocator<D, TileVertexStorage<D>>,
     tile_propagate_metadata_storage_allocator: StorageAllocator<D, D::Buffer>,
+    clip_vertex_storage_allocator: StorageAllocator<D, ClipVertexStorage<D>>,
 
     // Maps tile batch IDs to tile vertex storage IDs.
     tile_batch_info: VecMap<TileBatchInfo>,
@@ -168,7 +171,6 @@ struct Frame<D> where D: Device {
     max_alpha_tile_index: u32,
     allocated_alpha_tile_page_count: u32,
     mask_framebuffer: Option<D::Framebuffer>,
-    tile_clip_vertex_array: ClipTileVertexArray<D>,
     stencil_vertex_array: StencilVertexArray<D>,
     reprojection_vertex_array: ReprojectionVertexArray<D>,
     dest_blend_framebuffer: D::Framebuffer,
@@ -191,7 +193,8 @@ impl<D> Renderer<D> where D: Device {
         let fill_program = FillProgram::new(&device, resources, &options);
         let tile_program = TileProgram::new(&device, resources);
         let tile_copy_program = CopyTileProgram::new(&device, resources);
-        let tile_clip_program = ClipTileProgram::new(&device, resources);
+        let tile_clip_combine_program = ClipTileCombineProgram::new(&device, resources);
+        let tile_clip_copy_program = ClipTileCopyProgram::new(&device, resources);
         let generate_clip_program = GenerateClipProgram::new(&device, resources);
         let stencil_program = StencilProgram::new(&device, resources);
         let reprojection_program = ReprojectionProgram::new(&device, resources);
@@ -220,7 +223,8 @@ impl<D> Renderer<D> where D: Device {
                                      &blit_program,
                                      &blit_buffer_program,
                                      &clear_program,
-                                     &tile_clip_program,
+                                     &tile_clip_combine_program,
+                                     &tile_clip_copy_program,
                                      &reprojection_program,
                                      &stencil_program,
                                      &quad_vertex_positions_buffer,
@@ -230,7 +234,8 @@ impl<D> Renderer<D> where D: Device {
                                     &blit_program,
                                     &blit_buffer_program,
                                     &clear_program,
-                                    &tile_clip_program,
+                                    &tile_clip_combine_program,
+                                    &tile_clip_copy_program,
                                     &reprojection_program,
                                     &stencil_program,
                                     &quad_vertex_positions_buffer,
@@ -248,7 +253,8 @@ impl<D> Renderer<D> where D: Device {
             fill_program,
             tile_program,
             tile_copy_program,
-            tile_clip_program,
+            tile_clip_combine_program,
+            tile_clip_copy_program,
             generate_clip_program,
             propagate_program,
             quad_vertex_positions_buffer,
@@ -355,6 +361,7 @@ impl<D> Renderer<D> where D: Device {
         self.back_frame.fill_tile_map_storage_allocator.end_frame();
         self.back_frame.tile_vertex_storage_allocator.end_frame();
         self.back_frame.tile_propagate_metadata_storage_allocator.end_frame();
+        self.back_frame.clip_vertex_storage_allocator.end_frame();
 
         self.back_frame.tile_batch_info.clear();
 
@@ -597,9 +604,16 @@ impl<D> Renderer<D> where D: Device {
             device.allocate_buffer::<PropagateMetadata>(&buffer,
                                                         BufferData::Uninitialized(size as usize),
                                                         BufferTarget::Storage);
-            device.upload_to_buffer(&buffer, 0, propagate_metadata, BufferTarget::Storage);
             buffer
         });
+
+        let propagate_metadata_buffer = self.back_frame
+                                            .tile_propagate_metadata_storage_allocator
+                                            .get(propagate_metadata_storage_id);
+        device.upload_to_buffer(propagate_metadata_buffer,
+                                0,
+                                propagate_metadata,
+                                BufferTarget::Storage);
 
         self.device.allocate_buffer(&self.back_frame.backdrops_buffer,
                                     BufferData::Memory(backdrops),
@@ -807,7 +821,6 @@ impl<D> Renderer<D> where D: Device {
         let fill_map_buffer =
             self.back_frame.fill_tile_map_storage_allocator.get(fill_map_storage_id);
 
-
         self.device.upload_to_buffer(&fill_vertex_storage.vertex_buffer,
                                      0,
                                      &buffered_fills,
@@ -849,7 +862,10 @@ impl<D> Renderer<D> where D: Device {
         buffered_fills.clear();
     }
 
-    fn clip_tiles(&mut self, tile_storage_id: StorageID, max_clipped_tile_count: u32) {
+    fn clip_tiles(&mut self,
+                  clip_storage_id: StorageID,
+                  tile_storage_id: StorageID,
+                  max_clipped_tile_count: u32) {
         // FIXME(pcwalton): Recycle these.
         let mask_framebuffer = self.back_frame
                                    .mask_framebuffer
@@ -858,29 +874,62 @@ impl<D> Renderer<D> where D: Device {
         let mask_texture = self.device.framebuffer_texture(mask_framebuffer);
         let mask_texture_size = self.device.texture_size(&mask_texture);
         let temp_texture = self.device.create_texture(TextureFormat::RGBA16F, mask_texture_size);
+        let temp_framebuffer = self.device.create_framebuffer(temp_texture);
 
         println!("mask_texture_size={:?} mask_clipped_tile_count={}",
                  mask_texture_size,
                  max_clipped_tile_count);
 
-        self.device.draw_elements_instanced(6, max_clipped_tile_count, &RenderState {
-            target: &RenderTarget::Framebuffer(mask_framebuffer),
-            program: &self.tile_clip_program.program,
-            vertex_array: &self.back_frame.tile_clip_vertex_array.vertex_array,
+        let clip_vertex_storage =
+            self.back_frame.clip_vertex_storage_allocator.get(clip_storage_id);
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        // Copy out tiles.
+        //
+        // TODO(pcwalton): Don't do this on GL4.
+        self.device.draw_elements_instanced(6, max_clipped_tile_count * 2, &RenderState {
+            target: &RenderTarget::Framebuffer(&temp_framebuffer),
+            program: &self.tile_clip_copy_program.program,
+            vertex_array: &clip_vertex_storage.tile_clip_copy_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
-            textures: &[(&self.tile_clip_program.src_texture, &temp_texture)],
+            textures: &[
+                (&self.tile_clip_copy_program.src_texture,
+                 self.device.framebuffer_texture(mask_framebuffer)),
+            ],
             images: &[],
             uniforms: &[
-                (&self.tile_clip_program.framebuffer_size_uniform,
+                (&self.tile_clip_copy_program.framebuffer_size_uniform,
                  UniformData::Vec2(mask_texture_size.to_f32().0)),
             ],
             storage_buffers: &[],
             viewport: RectI::new(Vector2I::zero(), mask_texture_size),
-            // FIXME(pcwalton): Blend.
-            options: RenderOptions {
-                ..RenderOptions::default()
-            },
+            options: RenderOptions::default(),
         });
+
+        // Combine clip tiles.
+        self.device.draw_elements_instanced(6, max_clipped_tile_count, &RenderState {
+            target: &RenderTarget::Framebuffer(mask_framebuffer),
+            program: &self.tile_clip_combine_program.program,
+            vertex_array: &clip_vertex_storage.tile_clip_combine_vertex_array.vertex_array,
+            primitive: Primitive::Triangles,
+            textures: &[
+                (&self.tile_clip_combine_program.src_texture,
+                 self.device.framebuffer_texture(&temp_framebuffer)),
+            ],
+            images: &[],
+            uniforms: &[
+                (&self.tile_clip_combine_program.framebuffer_size_uniform,
+                 UniformData::Vec2(mask_texture_size.to_f32().0)),
+            ],
+            storage_buffers: &[],
+            viewport: RectI::new(Vector2I::zero(), mask_texture_size),
+            options: RenderOptions::default(),
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().tile_times.push(TimerFuture::new(timer_query));
 
         /*
 
@@ -966,12 +1015,15 @@ impl<D> Renderer<D> where D: Device {
 
         // Perform clipping if necessary.
         if let Some(ref clipped_path_info) = batch.clipped_path_info {
-            self.prepare_clip_tiles(tile_vertex_storage_id,
-                                    propagate_metadata_storage_id,
-                                    clipped_path_info.clip_batch_id,
-                                    &clipped_path_info.clipped_paths,
-                                    clipped_path_info.max_clipped_tile_count);
-            self.clip_tiles(tile_vertex_storage_id, clipped_path_info.max_clipped_tile_count);
+            let clip_storage_id =
+                self.prepare_clip_tiles(tile_vertex_storage_id,
+                                        propagate_metadata_storage_id,
+                                        clipped_path_info.clip_batch_id,
+                                        &clipped_path_info.clipped_paths,
+                                        clipped_path_info.max_clipped_tile_count);
+            self.clip_tiles(clip_storage_id,
+                            tile_vertex_storage_id,
+                            clipped_path_info.max_clipped_tile_count);
         }
     }
 
@@ -1054,10 +1106,12 @@ impl<D> Renderer<D> where D: Device {
                           tile_propagate_metadata_storage_id: StorageID,
                           clip_batch_id: TileBatchId,
                           clipped_paths: &[PathIndex],
-                          max_clipped_tile_count: u32) {
-        let clip_propagate_metadata_storage_id = self.back_frame
-                                                     .tile_batch_info[clip_batch_id.0 as usize]
-                                                     .propagate_metadata_storage_id;
+                          max_clipped_tile_count: u32)
+                          -> StorageID {
+        let clip_tile_batch_info = self.back_frame.tile_batch_info[clip_batch_id.0 as usize];
+        let clip_propagate_metadata_storage_id =
+            clip_tile_batch_info.propagate_metadata_storage_id;
+        let clip_tile_vertex_storage_id = clip_tile_batch_info.tile_vertex_storage_id;
 
         let tile_propagate_metadata_buffer = self.back_frame
                                                  .tile_propagate_metadata_storage_allocator
@@ -1078,14 +1132,38 @@ impl<D> Renderer<D> where D: Device {
                                      .tile_vertex_storage_allocator
                                      .get(tile_storage_id)
                                      .vertex_buffer;
+        let clip_tile_buffer = &self.back_frame
+                                    .tile_vertex_storage_allocator
+                                    .get(clip_tile_vertex_storage_id)
+                                    .vertex_buffer;
 
         // Allocate vertex buffer.
-        // FIXME(pcwalton): Reuse buffers.
-        let clip_vertex_buffer = vec![Clip::default(); max_clipped_tile_count as usize];
-        self.device.allocate_buffer::<Clip>(
-            &self.back_frame.tile_clip_vertex_array.vertex_buffer,
-            BufferData::Memory(&clip_vertex_buffer),
-            BufferTarget::Vertex);
+        let tile_clip_combine_program = &self.tile_clip_combine_program;
+        let tile_clip_copy_program = &self.tile_clip_copy_program;
+        let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
+        let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
+        let clip_storage_id =
+            self.back_frame.clip_vertex_storage_allocator.allocate(&self.device,
+                                                                   max_clipped_tile_count as u64,
+                                                                   |device, size| {
+            ClipVertexStorage::new(size,
+                                   device,
+                                   tile_clip_combine_program,
+                                   tile_clip_copy_program,
+                                   quad_vertex_positions_buffer,
+                                   quad_vertex_indices_buffer)
+        });
+
+        let clip_vertex_storage = self.back_frame
+                                      .clip_vertex_storage_allocator
+                                      .get(clip_storage_id);
+
+
+        let initial_clip_vertex_buffer = vec![Clip::default(); max_clipped_tile_count as usize];
+        self.device.upload_to_buffer(&clip_vertex_storage.vertex_buffer,
+                                     0,
+                                     &initial_clip_vertex_buffer,
+                                     BufferTarget::Vertex);
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
@@ -1110,14 +1188,17 @@ impl<D> Renderer<D> where D: Device {
                  tile_propagate_metadata_buffer),
                 (&self.generate_clip_program.clip_propagate_metadata_storage_buffer,
                  clip_propagate_metadata_buffer),
-                (&self.generate_clip_program.tiles_storage_buffer, alpha_tile_buffer),
+                (&self.generate_clip_program.draw_tiles_storage_buffer, alpha_tile_buffer),
+                (&self.generate_clip_program.clip_tiles_storage_buffer, clip_tile_buffer),
                 (&self.generate_clip_program.clip_vertex_storage_buffer,
-                 &self.back_frame.tile_clip_vertex_array.vertex_buffer),
+                 &clip_vertex_storage.vertex_buffer),
             ],
         });
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().propagate_times.push(TimerFuture::new(timer_query));
+
+        clip_storage_id
     }
 
     fn draw_tiles(&mut self,
@@ -1657,7 +1738,8 @@ impl<D> Frame<D> where D: Device {
            blit_program: &BlitProgram<D>,
            blit_buffer_program: &BlitBufferProgram<D>,
            clear_program: &ClearProgram<D>,
-           tile_clip_program: &ClipTileProgram<D>,
+           tile_clip_combine_program: &ClipTileCombineProgram<D>,
+           tile_clip_copy_program: &ClipTileCopyProgram<D>,
            reprojection_program: &ReprojectionProgram<D>,
            stencil_program: &StencilProgram<D>,
            quad_vertex_positions_buffer: &D::Buffer,
@@ -1678,10 +1760,6 @@ impl<D> Frame<D> where D: Device {
                                                        &clear_program,
                                                        &quad_vertex_positions_buffer,
                                                        &quad_vertex_indices_buffer);
-        let tile_clip_vertex_array = ClipTileVertexArray::new(device,
-                                                              &tile_clip_program,
-                                                              &quad_vertex_positions_buffer,
-                                                              &quad_vertex_indices_buffer);
         let reprojection_vertex_array = ReprojectionVertexArray::new(device,
                                                                      &reprojection_program,
                                                                      &quad_vertex_positions_buffer,
@@ -1694,6 +1772,7 @@ impl<D> Frame<D> where D: Device {
         let tile_vertex_storage_allocator = StorageAllocator::new(MIN_TILE_STORAGE_CLASS);
         let tile_propagate_metadata_storage_allocator =
             StorageAllocator::new(MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS);
+        let clip_vertex_storage_allocator = StorageAllocator::new(MIN_CLIP_VERTEX_STORAGE_CLASS);
 
         let texture_metadata_texture_size = vec2i(TEXTURE_METADATA_TEXTURE_WIDTH,
                                                   TEXTURE_METADATA_TEXTURE_HEIGHT);
@@ -1730,7 +1809,7 @@ impl<D> Frame<D> where D: Device {
             fill_vertex_storage_allocator,
             fill_tile_map_storage_allocator,
             tile_propagate_metadata_storage_allocator,
-            tile_clip_vertex_array,
+            clip_vertex_storage_allocator,
             reprojection_vertex_array,
             stencil_vertex_array,
             quads_vertex_indices_buffer,
@@ -1822,6 +1901,12 @@ struct TileVertexStorage<D> where D: Device {
     vertex_buffer: D::Buffer,
 }
 
+struct ClipVertexStorage<D> where D: Device {
+    tile_clip_copy_vertex_array: ClipTileCopyVertexArray<D>,
+    tile_clip_combine_vertex_array: ClipTileCombineVertexArray<D>,
+    vertex_buffer: D::Buffer,
+}
+
 impl<D> FillVertexStorage<D> where D: Device {
     fn new(size: u64,
            device: &D,
@@ -1870,6 +1955,38 @@ impl<D> TileVertexStorage<D> where D: Device {
                                                               &vertex_buffer,
                                                               &quad_vertex_indices_buffer);
         TileVertexStorage { vertex_buffer, tile_vertex_array, tile_copy_vertex_array }
+    }
+}
+
+impl<D> ClipVertexStorage<D> where D: Device {
+    fn new(size: u64,
+           device: &D,
+           tile_clip_combine_program: &ClipTileCombineProgram<D>,
+           tile_clip_copy_program: &ClipTileCopyProgram<D>,
+           quad_vertex_positions_buffer: &D::Buffer,
+           quad_vertex_indices_buffer: &D::Buffer)
+           -> ClipVertexStorage<D> {
+        let vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        device.allocate_buffer::<Clip>(&vertex_buffer,
+                                       BufferData::Uninitialized(size as usize),
+                                       BufferTarget::Vertex);
+        let tile_clip_combine_vertex_array =
+            ClipTileCombineVertexArray::new(device,
+                                            &tile_clip_combine_program,
+                                            &vertex_buffer,
+                                            &quad_vertex_positions_buffer,
+                                            &quad_vertex_indices_buffer);
+        let tile_clip_copy_vertex_array =
+            ClipTileCopyVertexArray::new(device,
+                                         &tile_clip_copy_program,
+                                         &vertex_buffer,
+                                         &quad_vertex_positions_buffer,
+                                         &quad_vertex_indices_buffer);
+        ClipVertexStorage {
+            vertex_buffer,
+            tile_clip_combine_vertex_array,
+            tile_clip_copy_vertex_array,
+        }
     }
 }
 

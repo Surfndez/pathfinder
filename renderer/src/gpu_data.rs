@@ -251,11 +251,9 @@ pub enum ClipBatchKind {
 #[repr(C)]
 pub struct Clip {
     pub dest_tile_id: AlphaTileId,
+    pub dest_backdrop: i32,
     pub src_tile_id: AlphaTileId,
-    pub backdrop: i8,
-    pub pad0: u8,
-    pub pad1: u8,
-    pub pad2: u8,
+    pub src_backdrop: i32,
 }
 
 impl Default for Clip {
@@ -263,11 +261,9 @@ impl Default for Clip {
     fn default() -> Clip {
         Clip {
             dest_tile_id: AlphaTileId(!0),
+            dest_backdrop: 0,
             src_tile_id: AlphaTileId(!0),
-            backdrop: 0,
-            pad0: 0,
-            pad1: 0,
-            pad2: 0,
+            src_backdrop: 0,
         }
     }
 }
