@@ -868,10 +868,7 @@ impl<D> Renderer<D> where D: Device {
         buffered_fills.clear();
     }
 
-    fn clip_tiles(&mut self,
-                  clip_storage_id: StorageID,
-                  tile_storage_id: StorageID,
-                  max_clipped_tile_count: u32) {
+    fn clip_tiles(&mut self, clip_storage_id: StorageID, max_clipped_tile_count: u32) {
         // FIXME(pcwalton): Recycle these.
         let mask_framebuffer = self.back_frame
                                    .mask_framebuffer
@@ -1019,13 +1016,14 @@ impl<D> Renderer<D> where D: Device {
 
             // TODO(pcwalton): Z-buffering.
 
-            self.back_frame.tile_batch_info.insert(batch.batch_id.0 as usize, TileBatchInfo {
-                tile_count: batch.tiles.len() as u32,
-                tile_vertex_storage_id,
-                propagate_metadata_storage_id,
-            });
-
             propagate_metadata_storage_id
+        });
+
+        // Record tile batch info.
+        self.back_frame.tile_batch_info.insert(batch.batch_id.0 as usize, TileBatchInfo {
+            tile_count: batch.tiles.len() as u32,
+            tile_vertex_storage_id,
+            propagate_metadata_storage_id,
         });
 
         // Perform clipping if necessary.
@@ -1045,9 +1043,7 @@ impl<D> Renderer<D> where D: Device {
                 }
             };
 
-            self.clip_tiles(clip_storage_id,
-                            tile_vertex_storage_id,
-                            clipped_path_info.max_clipped_tile_count);
+            self.clip_tiles(clip_storage_id, clipped_path_info.max_clipped_tile_count);
         }
     }
 
@@ -1145,7 +1141,8 @@ impl<D> Renderer<D> where D: Device {
 
         let clip_tile_batch_info = self.back_frame.tile_batch_info[clip_batch_id.0 as usize];
         let clip_propagate_metadata_storage_id =
-            clip_tile_batch_info.propagate_metadata_storage_id;
+            clip_tile_batch_info.propagate_metadata_storage_id
+                                .expect("Where's the propagate metadata?");
         let clip_tile_vertex_storage_id = clip_tile_batch_info.tile_vertex_storage_id;
 
         let tile_propagate_metadata_buffer = self.back_frame
@@ -1876,7 +1873,8 @@ impl<D> Frame<D> where D: Device {
 struct TileBatchInfo {
     tile_count: u32,
     tile_vertex_storage_id: StorageID,
-    propagate_metadata_storage_id: StorageID,
+    // Only present if we're doing tile preparation on GPU.
+    propagate_metadata_storage_id: Option<StorageID>,
 }
 
 // Buffer management

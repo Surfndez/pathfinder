@@ -35,6 +35,7 @@ pub(crate) struct SolidTiles {
 pub(crate) struct DepthMetadata {
     pub(crate) paint_id: PaintId,
 }
+
 impl ZBuffer {
     pub(crate) fn new(view_box: RectF) -> ZBuffer {
         let tile_rect = tiles::round_rect_out_to_tile_bounds(view_box);
