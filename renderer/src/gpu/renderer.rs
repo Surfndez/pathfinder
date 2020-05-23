@@ -1028,10 +1028,13 @@ impl<D> Renderer<D> where D: Device {
 
         // Perform clipping if necessary.
         if let Some(ref clipped_path_info) = batch.clipped_path_info {
-            let clip_storage_id = match propagate_metadata_storage_id {
+            let clip_storage_id =
+                self.allocate_clip_storage(clipped_path_info.max_clipped_tile_count);
+            match propagate_metadata_storage_id {
                 Some(propagate_metadata_storage_id) => {
                     // GPU path.
                     self.prepare_clip_tiles(tile_vertex_storage_id,
+                                            clip_storage_id,
                                             propagate_metadata_storage_id,
                                             clipped_path_info.clip_batch_id,
                                             &clipped_path_info.clipped_paths,
@@ -1039,9 +1042,10 @@ impl<D> Renderer<D> where D: Device {
                 }
                 None => {
                     // CPU path.
-                    self.upload_clip_tiles()
+                    let clips = clipped_path_info.clips.as_ref().expect("Where are the clips?");
+                    self.upload_clip_tiles(clip_storage_id, clips);
                 }
-            };
+            }
 
             self.clip_tiles(clip_storage_id, clipped_path_info.max_clipped_tile_count);
         }
@@ -1127,13 +1131,30 @@ impl<D> Renderer<D> where D: Device {
         self.current_timer.as_mut().unwrap().propagate_times.push(TimerFuture::new(timer_query));
     }
 
+    fn allocate_clip_storage(&mut self, max_clipped_tile_count: u32) -> StorageID {
+        let tile_clip_combine_program = &self.tile_clip_combine_program;
+        let tile_clip_copy_program = &self.tile_clip_copy_program;
+        let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
+        let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
+        self.back_frame.clip_vertex_storage_allocator.allocate(&self.device,
+                                                               max_clipped_tile_count as u64,
+                                                               |device, size| {
+            ClipVertexStorage::new(size,
+                                   device,
+                                   tile_clip_combine_program,
+                                   tile_clip_copy_program,
+                                   quad_vertex_positions_buffer,
+                                   quad_vertex_indices_buffer)
+        })
+    }
+
     fn prepare_clip_tiles(&mut self,
                           tile_storage_id: StorageID,
+                          clip_storage_id: StorageID,
                           tile_propagate_metadata_storage_id: StorageID,
                           clip_batch_id: TileBatchId,
                           clipped_paths: &[PathIndex],
-                          max_clipped_tile_count: u32)
-                          -> StorageID {
+                          max_clipped_tile_count: u32) {
         let generate_clip_program = &self.tile_post_programs
                                          .as_ref()
                                          .expect("GPU tile postprocessing is disabled!")
@@ -1169,27 +1190,9 @@ impl<D> Renderer<D> where D: Device {
                                     .get(clip_tile_vertex_storage_id)
                                     .vertex_buffer;
 
-        // Allocate vertex buffer.
-        let tile_clip_combine_program = &self.tile_clip_combine_program;
-        let tile_clip_copy_program = &self.tile_clip_copy_program;
-        let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
-        let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
-        let clip_storage_id =
-            self.back_frame.clip_vertex_storage_allocator.allocate(&self.device,
-                                                                   max_clipped_tile_count as u64,
-                                                                   |device, size| {
-            ClipVertexStorage::new(size,
-                                   device,
-                                   tile_clip_combine_program,
-                                   tile_clip_copy_program,
-                                   quad_vertex_positions_buffer,
-                                   quad_vertex_indices_buffer)
-        });
-
         let clip_vertex_storage = self.back_frame
                                       .clip_vertex_storage_allocator
                                       .get(clip_storage_id);
-
 
         let initial_clip_vertex_buffer = vec![Clip::default(); max_clipped_tile_count as usize];
         self.device.upload_to_buffer(&clip_vertex_storage.vertex_buffer,
@@ -1229,14 +1232,17 @@ impl<D> Renderer<D> where D: Device {
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().propagate_times.push(TimerFuture::new(timer_query));
-
-        clip_storage_id
     }
 
     // Uploads clip tiles from CPU to GPU.
-    fn upload_clip_tiles(&mut self) -> StorageID {
-        // TODO(pcwalton)
-        unimplemented!()
+    fn upload_clip_tiles(&mut self, clip_storage_id: StorageID, clips: &[Clip]) {
+        let clip_vertex_storage = self.back_frame
+                                      .clip_vertex_storage_allocator
+                                      .get(clip_storage_id);
+        self.device.upload_to_buffer(&clip_vertex_storage.vertex_buffer,
+                                     0,
+                                     clips,
+                                     BufferTarget::Vertex);
     }
 
     fn draw_tiles(&mut self,

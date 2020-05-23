@@ -77,7 +77,7 @@ pub(crate) struct BuiltPath {
     pub clip_tiles: Vec<BuiltClip>,
     */
     pub tiles: DenseTileMap<TileObjectPrimitive>,
-    //pub clip_tiles: Option<DenseTileMap<Clip>>,
+    pub clip_tiles: Option<DenseTileMap<Clip>>,
     /// During tiling, or if backdrop computation is done on GPU, this stores the sum of backdrops
     /// for tile columns above the viewport.
     pub backdrops: Vec<i32>,
@@ -769,6 +769,21 @@ impl BuiltPath {
             }
         }, tiles::round_rect_out_to_tile_bounds(tile_map_bounds));
 
+        let clip_tiles = match *tiling_path_info {
+            TilingPathInfo::Draw(ref draw_tiling_path_info) if
+                    draw_tiling_path_info.built_clip_path.is_some() => {
+                Some(DenseTileMap::from_builder(|tile_coord| {
+                    Clip {
+                        dest_tile_id: AlphaTileId(!0),
+                        dest_backdrop: 0,
+                        src_tile_id: AlphaTileId(!0),
+                        src_backdrop: 0,
+                    }
+                }, tiles::round_rect_out_to_tile_bounds(tile_map_bounds)))
+            }
+            _ => None,
+        };
+
         BuiltPath {
             /*
             empty_tiles: vec![],
@@ -778,6 +793,7 @@ impl BuiltPath {
             backdrops: vec![0; tiles.rect.width() as usize],
             occluders: if occludes { Some(vec![]) } else { None },
             tiles,
+            clip_tiles,
             fill_rule,
         }
     }
@@ -1059,6 +1075,7 @@ impl PrepareTilesBatch {
                     clip_batch_id: TileBatchId(0),
                     clipped_paths: vec![],
                     max_clipped_tile_count: 0,
+                    clips: None,
                 });
             }
             let clipped_path_info = self.clipped_path_info.as_mut().unwrap();

@@ -155,6 +155,9 @@ pub struct ClippedPathInfo {
     /// 
     /// This is used to allocate vertex buffers.
     pub max_clipped_tile_count: u32,
+
+    /// The actual clips, if calculated on CPU.
+    pub clips: Option<Vec<Clip>>,
 }
 
 /// Together with the `TileBatchId`, uniquely identifies a path on the renderer side.

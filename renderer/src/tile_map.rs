@@ -36,6 +36,14 @@ impl<T> DenseTileMap<T> where T: Clone + Copy {
     }
 
     #[inline]
+    pub fn get_mut(&mut self, coords: Vector2I) -> Option<&mut T> {
+        match self.coords_to_index(coords) {
+            None => None,
+            Some(index) => self.data.get_mut(index),
+        }
+    }
+
+    #[inline]
     pub fn coords_to_index(&self, coords: Vector2I) -> Option<usize> {
         if self.rect.contains_point(coords) {
             Some(self.coords_to_index_unchecked(coords))

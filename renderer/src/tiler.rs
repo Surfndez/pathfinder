@@ -12,7 +12,9 @@
 //! of General Vector Graphics" 2006.
 
 use crate::builder::{ObjectBuilder, Occluder, SceneBuilder};
-use crate::tiles::{PackedTile, TILE_HEIGHT, TILE_WIDTH, TileType, TilingPathInfo};
+use crate::gpu::options::RendererGPUFeatures;
+use crate::gpu_data::AlphaTileId;
+use crate::tiles::{DrawTilingPathInfo, PackedTile, TILE_HEIGHT, TILE_WIDTH, TileType, TilingPathInfo};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::outline::{ContourIterFlags, Outline};
 use pathfinder_content::segment::Segment;
@@ -50,12 +52,19 @@ impl<'a, 'b> Tiler<'a, 'b> {
             }
         }
 
-        //self.propagate_backdrops();
-        self.pack_and_cull();
+        self.prepare_tiles_if_necessary();
     }
 
-    /*
-    fn propagate_backdrops(&mut self) {
+    fn prepare_tiles_if_necessary(&mut self) {
+        // Don't do this here if the GPU will do it.
+        if self.scene_builder
+               .listener
+               .gpu_features
+               .contains(RendererGPUFeatures::PREPARE_TILES_ON_GPU) {
+            return;
+        }
+
+        // Propagate backdrops.
         let tiles_across = self.object_builder.built_path.tiles.rect.width() as usize;
         for (draw_tile_index, draw_tile) in self.object_builder
                                                 .built_path
@@ -64,11 +73,43 @@ impl<'a, 'b> Tiler<'a, 'b> {
                                                 .iter_mut()
                                                 .enumerate() {
             let column = draw_tile_index % tiles_across;
-            let delta = draw_tile.backdrop;
-            draw_tile.backdrop = self.object_builder.current_backdrops[column];
-            self.object_builder.current_backdrops[column] += delta;
+            let delta = draw_tile.backdrop as i32;
+            draw_tile.backdrop = self.object_builder.built_path.backdrops[column] as i8;
+            self.object_builder.built_path.backdrops[column] += delta;
         }
-    }*/
+
+        // Calculate clips.
+        let built_clip_path = match self.path_info {
+            TilingPathInfo::Draw(DrawTilingPathInfo {
+                built_clip_path: Some(built_clip_path),
+                ..
+            }) => built_clip_path,
+            _ => return,
+        };
+
+        let clip_tiles = self.object_builder
+                             .built_path
+                             .clip_tiles
+                             .as_mut()
+                             .expect("Where are the clip tiles?");
+
+        for draw_tile in &mut self.object_builder.built_path.tiles.data {
+            let tile_coords = vec2i(draw_tile.tile_x as i32, draw_tile.tile_y as i32);
+            let built_clip_tile = match built_clip_path.tiles.get(tile_coords) {
+                None => {
+                    draw_tile.alpha_tile_id = AlphaTileId(!0);
+                    continue;
+                }
+                Some(built_clip_tile) => built_clip_tile,
+            };
+
+            let clip_tile = clip_tiles.get_mut(tile_coords).unwrap();
+            clip_tile.dest_tile_id = draw_tile.alpha_tile_id;
+            clip_tile.dest_backdrop = draw_tile.backdrop as i32;
+            clip_tile.src_tile_id = built_clip_tile.alpha_tile_id;
+            clip_tile.src_backdrop = built_clip_tile.backdrop as i32;
+        }
+    }
 
     fn pack_and_cull(&mut self) {
         let draw_tiling_path_info = match self.path_info {
