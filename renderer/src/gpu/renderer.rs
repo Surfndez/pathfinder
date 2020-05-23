@@ -1011,12 +1011,8 @@ impl<D> Renderer<D> where D: Device {
                 let clip_batch_id = clipped_path_info.clip_batch_id;
                 let clip_tile_batch_info =
                     self.back_frame.tile_batch_info[clip_batch_id.0 as usize];
-                let clip_propagate_metadata_storage_id =
-                    clip_tile_batch_info.propagate_metadata_storage_id
-                                        .expect("Where's the propagate metadata?");
                 Some(ClipStorageIDs {
-                    metadata: clip_tile_batch_info.propagate_metadata_storage_id
-                                                  .expect("Where's the clip propagate metadata?"),
+                    metadata: clip_tile_batch_info.propagate_metadata_storage_id,
                     tiles: clip_tile_batch_info.tile_vertex_storage_id,
                     vertices: self.allocate_clip_storage(clipped_path_info.max_clipped_tile_count),
                 })
@@ -1069,6 +1065,12 @@ impl<D> Renderer<D> where D: Device {
             }
             */
 
+            // Upload clip tiles to GPU if they were computed on CPU.
+            if clip_storage_ids.metadata.is_none() {
+                let clips = clipped_path_info.clips.as_ref().expect("Where are the clips?");
+                self.upload_clip_tiles(clip_storage_ids.vertices, clips);
+            }
+
             self.clip_tiles(clip_storage_ids.vertices, clipped_path_info.max_clipped_tile_count);
         }
     }
@@ -1105,9 +1107,11 @@ impl<D> Renderer<D> where D: Device {
         ];
 
         if let Some(clip_storage_ids) = clip_storage_ids {
+            let clip_metadata_storage_id =
+                clip_storage_ids.metadata.expect("Where's the clip metadata storage?");
             let clip_metadata_buffer = self.back_frame
                                            .tile_propagate_metadata_storage_allocator
-                                           .get(clip_storage_ids.metadata);
+                                           .get(clip_metadata_storage_id);
             let clip_tile_buffer = &self.back_frame
                                         .tile_vertex_storage_allocator
                                         .get(clip_storage_ids.tiles)
@@ -1281,10 +1285,10 @@ impl<D> Renderer<D> where D: Device {
     */
 
     // Uploads clip tiles from CPU to GPU.
-    fn upload_clip_tiles(&mut self, clip_storage_id: StorageID, clips: &[Clip]) {
+    fn upload_clip_tiles(&mut self, clip_vertex_storage_id: StorageID, clips: &[Clip]) {
         let clip_vertex_storage = self.back_frame
                                       .clip_vertex_storage_allocator
-                                      .get(clip_storage_id);
+                                      .get(clip_vertex_storage_id);
         self.device.upload_to_buffer(&clip_vertex_storage.vertex_buffer,
                                      0,
                                      clips,
@@ -2538,7 +2542,7 @@ fn pixel_size_to_tile_size(pixel_size: Vector2I) -> Vector2I {
 
 #[derive(Clone, Copy)]
 struct ClipStorageIDs {
-    metadata: StorageID,
+    metadata: Option<StorageID>,
     tiles: StorageID,
     vertices: StorageID,
 }

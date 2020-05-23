@@ -119,8 +119,8 @@ void main() {
                 } else if (clipAlphaTileIndex >= 0 &&
                            drawAlphaTileIndex < 0 &&
                            drawTileBackdrop != 0) {
-                    // This is a solid draw tile, but there's a clip applied. Replace it with an alpha tile
-                    // pointing directly to the clip mask.
+                    // This is a solid draw tile, but there's a clip applied. Replace it with an
+                    // alpha tile pointing directly to the clip mask.
                     drawAlphaTileIndex = clipAlphaTileIndex;
                     drawTileBackdrop = clipTileBackdrop;
                 } else if (clipAlphaTileIndex < 0 && clipTileBackdrop == 0) {

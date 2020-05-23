@@ -64,6 +64,12 @@ impl<'a, 'b> Tiler<'a, 'b> {
             return;
         }
 
+        let built_clip_path = match self.path_info {
+            TilingPathInfo::Draw(DrawTilingPathInfo { built_clip_path, .. }) => built_clip_path,
+            _ => None,
+        };
+        let clips = &mut self.object_builder.built_path.clip_tiles;
+
         // Propagate backdrops.
         let tiles_across = self.object_builder.built_path.tiles.rect.width() as usize;
         for (draw_tile_index, draw_tile) in self.object_builder
@@ -72,11 +78,60 @@ impl<'a, 'b> Tiler<'a, 'b> {
                                                 .data
                                                 .iter_mut()
                                                 .enumerate() {
+            let tile_coords = vec2i(draw_tile.tile_x as i32, draw_tile.tile_y as i32);
             let column = draw_tile_index % tiles_across;
             let delta = draw_tile.backdrop as i32;
-            draw_tile.backdrop = self.object_builder.built_path.backdrops[column] as i8;
+
+            let mut draw_alpha_tile_id = draw_tile.alpha_tile_id;
+            let mut draw_tile_backdrop = self.object_builder.built_path.backdrops[column] as i8;
+
+            if let Some(built_clip_path) = built_clip_path {
+                match built_clip_path.tiles.get(tile_coords) {
+                    Some(clip_tile) => {
+                        if clip_tile.alpha_tile_id != AlphaTileId(!0) &&
+                                draw_alpha_tile_id != AlphaTileId(!0) {
+                            // Hard case: We have an alpha tile and a clip tile with masks. Add a
+                            // job to combine the two masks. Because the mask combining step
+                            // applies the backdrops, zero out the backdrop in the draw tile itself
+                            // so that we don't double-count it.
+                            let clip = clips.as_mut()
+                                            .expect("Where are the clips?")
+                                            .get_mut(tile_coords)
+                                            .unwrap();
+                            clip.dest_tile_id = draw_tile.alpha_tile_id;
+                            clip.dest_backdrop = draw_tile_backdrop as i32;
+                            clip.src_tile_id = clip_tile.alpha_tile_id;
+                            clip.src_backdrop = clip_tile.backdrop as i32;
+                            draw_tile_backdrop = 0;
+                        } else if clip_tile.alpha_tile_id != AlphaTileId(!0) &&
+                                draw_alpha_tile_id == AlphaTileId(!0) &&
+                                draw_tile_backdrop != 0 {
+                            // This is a solid draw tile, but there's a clip applied. Replace it
+                            // with an alpha tile pointing directly to the clip mask.
+                            draw_alpha_tile_id = clip_tile.alpha_tile_id;
+                            draw_tile_backdrop = clip_tile.backdrop;
+                        } else if clip_tile.alpha_tile_id == AlphaTileId(!0) &&
+                                clip_tile.backdrop == 0 {
+                            // This is a blank clip tile. Cull the draw tile entirely.
+                            draw_alpha_tile_id = AlphaTileId(!0);
+                            draw_tile_backdrop = 0;
+                        }
+                    }
+                    None => {
+                        // This draw tile is outside the clip path rect. Cull the tile.
+                        draw_alpha_tile_id = AlphaTileId(!0);
+                        draw_tile_backdrop = 0;
+                    }
+                }
+            }
+
+            draw_tile.alpha_tile_id = draw_alpha_tile_id;
+            draw_tile.backdrop = draw_tile_backdrop;
+
             self.object_builder.built_path.backdrops[column] += delta;
         }
+
+        /*
 
         // Calculate clips.
         let built_clip_path = match self.path_info {
@@ -109,6 +164,7 @@ impl<'a, 'b> Tiler<'a, 'b> {
             clip_tile.src_tile_id = built_clip_tile.alpha_tile_id;
             clip_tile.src_backdrop = built_clip_tile.backdrop as i32;
         }
+        */
     }
 
     fn pack_and_cull(&mut self) {

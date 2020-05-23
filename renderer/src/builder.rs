@@ -351,9 +351,9 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         }
         */
 
+        let gpu_features = self.listener.gpu_features;
         let (mut prepare_commands, mut draw_commands) = (vec![], vec![]);
-        let mut clip_prepare_batch = PrepareTilesBatch::new(TileBatchId(0),
-                                                            self.listener.gpu_features);
+        let mut clip_prepare_batch = PrepareTilesBatch::new(TileBatchId(0), gpu_features);
         let mut next_batch_id = TileBatchId(1);
         let mut clip_id_to_path_index = FxHashMap::default();
 
@@ -396,8 +396,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                         // Create a new batch if necessary.
                         if batches.is_none() {
                             batches = Some(PathBatches {
-                                prepare: PrepareTilesBatch::new(next_batch_id,
-                                                                self.listener.gpu_features),
+                                prepare: PrepareTilesBatch::new(next_batch_id, gpu_features),
                                 draw: DrawTileBatch {
                                     tile_batch_id: next_batch_id,
                                     color_texture: draw_path.color_texture,
@@ -414,7 +413,8 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                                 Some(&clip_path_index) => clip_path_index,
                                 None => {
                                     let clip_path = &built_clip_paths[clip_path_id.0 as usize];
-                                    let clip_path_index = clip_prepare_batch.push(clip_path, None);
+                                    let clip_path_index =
+                                        clip_prepare_batch.push(clip_path, None, gpu_features);
                                     clip_id_to_path_index.insert(clip_path_id, clip_path_index);
                                     clip_path_index
                                 }
@@ -422,7 +422,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                         });
 
                         let batches = batches.as_mut().unwrap();
-                        batches.prepare.push(&draw_path.path, clip_path);
+                        batches.prepare.push(&draw_path.path, clip_path, gpu_features);
                     }
 
                     if let Some(PathBatches { draw, prepare }) = batches {
@@ -1055,7 +1055,11 @@ impl PrepareTilesBatch {
         }
     }
 
-    fn push(&mut self, path: &BuiltPath, clip_path_id: Option<PathIndex>) -> PathIndex {
+    fn push(&mut self,
+            path: &BuiltPath,
+            clip_path_id: Option<PathIndex>,
+            gpu_features: RendererGPUFeatures)
+            -> PathIndex {
         let path_index = PathIndex(self.path_count);
         if let Some(ref mut gpu) = self.gpu {
             gpu.propagate_metadata.push(PropagateMetadata {
@@ -1075,12 +1079,25 @@ impl PrepareTilesBatch {
                     clip_batch_id: TileBatchId(0),
                     clipped_paths: vec![],
                     max_clipped_tile_count: 0,
-                    clips: None,
+                    clips: if !gpu_features.contains(RendererGPUFeatures::PREPARE_TILES_ON_GPU) {
+                        Some(vec![])
+                    } else {
+                        None
+                    },
                 });
             }
+
             let clipped_path_info = self.clipped_path_info.as_mut().unwrap();
             clipped_path_info.clipped_paths.push(path_index);
             clipped_path_info.max_clipped_tile_count += path.tiles.data.len() as u32;
+
+            // If clips are computed on CPU, add them to this batch.
+            if let Some(ref mut dest_clips) = clipped_path_info.clips {
+                let src_tiles = path.clip_tiles
+                                    .as_ref()
+                                    .expect("Clip tiles weren't computed on CPU!");
+                dest_clips.extend_from_slice(&src_tiles.data);
+            }
         }
 
         path_index
