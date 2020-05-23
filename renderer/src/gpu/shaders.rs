@@ -651,7 +651,6 @@ impl<D> ClipTileCopyProgram<D> where D: Device {
 pub struct TilePostPrograms<D> where D: Device {
     pub blit_buffer_program: BlitBufferProgram<D>,
     pub propagate_program: PropagateProgram<D>,
-    pub generate_clip_program: GenerateClipProgram<D>,
 }
 
 impl<D> TilePostPrograms<D> where D: Device {
@@ -659,7 +658,6 @@ impl<D> TilePostPrograms<D> where D: Device {
         TilePostPrograms {
             blit_buffer_program: BlitBufferProgram::new(device, resources),
             propagate_program: PropagateProgram::new(device, resources),
-            generate_clip_program: GenerateClipProgram::new(device, resources),
         }
     }
 }
@@ -667,9 +665,12 @@ impl<D> TilePostPrograms<D> where D: Device {
 pub struct PropagateProgram<D> where D: Device {
     pub program: D::Program,
     pub framebuffer_tile_size_uniform: D::Uniform,
-    pub metadata_storage_buffer: D::StorageBuffer,
+    pub draw_metadata_storage_buffer: D::StorageBuffer,
+    pub clip_metadata_storage_buffer: D::StorageBuffer,
     pub backdrops_storage_buffer: D::StorageBuffer,
-    pub alpha_tiles_storage_buffer: D::StorageBuffer,
+    pub draw_tiles_storage_buffer: D::StorageBuffer,
+    pub clip_tiles_storage_buffer: D::StorageBuffer,
+    pub clip_vertex_storage_buffer: D::StorageBuffer,
     pub z_buffer_storage_buffer: D::StorageBuffer,
 }
 
@@ -680,21 +681,29 @@ impl<D> PropagateProgram<D> where D: Device {
         device.set_compute_program_local_size(&mut program, local_size);
 
         let framebuffer_tile_size_uniform = device.get_uniform(&program, "FramebufferTileSize");
-        let metadata_storage_buffer = device.get_storage_buffer(&program, "Metadata", 0);
-        let backdrops_storage_buffer = device.get_storage_buffer(&program, "Backdrops", 1);
-        let alpha_tiles_storage_buffer = device.get_storage_buffer(&program, "AlphaTiles", 2);
-        let z_buffer_storage_buffer = device.get_storage_buffer(&program, "ZBuffer", 3);
+        let draw_metadata_storage_buffer = device.get_storage_buffer(&program, "DrawMetadata", 0);
+        let clip_metadata_storage_buffer = device.get_storage_buffer(&program, "ClipMetadata", 1);
+        let backdrops_storage_buffer = device.get_storage_buffer(&program, "Backdrops", 2);
+        let draw_tiles_storage_buffer = device.get_storage_buffer(&program, "DrawTiles", 3);
+        let clip_tiles_storage_buffer = device.get_storage_buffer(&program, "ClipTiles", 4);
+        let clip_vertex_storage_buffer =
+            device.get_storage_buffer(&program, "ClipVertexBuffer", 5);
+        let z_buffer_storage_buffer = device.get_storage_buffer(&program, "ZBuffer", 6);
         PropagateProgram {
             program,
             framebuffer_tile_size_uniform,
-            metadata_storage_buffer,
+            draw_metadata_storage_buffer,
+            clip_metadata_storage_buffer,
             backdrops_storage_buffer,
-            alpha_tiles_storage_buffer,
+            draw_tiles_storage_buffer,
+            clip_tiles_storage_buffer,
+            clip_vertex_storage_buffer,
             z_buffer_storage_buffer,
         }
     }
 }
 
+/*
 pub struct GenerateClipProgram<D> where D: Device {
     pub program: D::Program,
     pub clipped_path_indices_storage_buffer: D::StorageBuffer,
@@ -733,6 +742,7 @@ impl<D> GenerateClipProgram<D> where D: Device {
         }
     }
 }
+*/
 
 pub struct StencilProgram<D>
 where

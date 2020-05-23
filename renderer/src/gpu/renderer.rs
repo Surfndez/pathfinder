@@ -13,7 +13,7 @@ use crate::gpu::options::{DestFramebuffer, RendererGPUFeatures, RendererOptions}
 use crate::gpu::shaders::{BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
 use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram, ClipTileCopyVertexArray};
 use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
-use crate::gpu::shaders::{GenerateClipProgram, MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
+use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
 use crate::gpu_data::{Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PropagateMetadata, RenderCommand};
@@ -1000,19 +1000,38 @@ impl<D> Renderer<D> where D: Device {
         */
     }
 
-    // Performs tile preparation/postprocessing.
+    // Computes backdrops, performs clipping, and populates Z buffers.
     fn prepare_tiles(&mut self, batch: &PrepareTilesBatch) {
         let count = batch.tiles.len();
         self.stats.alpha_tile_count += count;
         let tile_vertex_storage_id = self.upload_tiles(&batch.tiles);
 
-        // Propagate backdrops on GPU if necessary.
+        let clip_storage_ids = match batch.clipped_path_info {
+            Some(ref clipped_path_info) => {
+                let clip_batch_id = clipped_path_info.clip_batch_id;
+                let clip_tile_batch_info =
+                    self.back_frame.tile_batch_info[clip_batch_id.0 as usize];
+                let clip_propagate_metadata_storage_id =
+                    clip_tile_batch_info.propagate_metadata_storage_id
+                                        .expect("Where's the propagate metadata?");
+                Some(ClipStorageIDs {
+                    metadata: clip_tile_batch_info.propagate_metadata_storage_id
+                                                  .expect("Where's the clip propagate metadata?"),
+                    tiles: clip_tile_batch_info.tile_vertex_storage_id,
+                    vertices: self.allocate_clip_storage(clipped_path_info.max_clipped_tile_count),
+                })
+            }
+            None => None,
+        };
+
+        // Propagate backdrops and perform clipping on GPU if necessary.
         let propagate_metadata_storage_id = batch.gpu.as_ref().map(|gpu| {
             let propagate_metadata_storage_id =
                 self.upload_propagate_data(&gpu.propagate_metadata, &gpu.backdrops);
             self.propagate_tiles(gpu.propagate_metadata.len() as u32,
                                  tile_vertex_storage_id,
-                                 propagate_metadata_storage_id);
+                                 propagate_metadata_storage_id,
+                                 clip_storage_ids.as_ref());
 
             // TODO(pcwalton): Z-buffering.
 
@@ -1027,7 +1046,9 @@ impl<D> Renderer<D> where D: Device {
         });
 
         // Perform clipping if necessary.
-        if let Some(ref clipped_path_info) = batch.clipped_path_info {
+        if let (Some(clip_storage_ids), Some(clipped_path_info)) =
+                (clip_storage_ids.as_ref(), batch.clipped_path_info.as_ref()) {
+            /*
             let clip_storage_id =
                 self.allocate_clip_storage(clipped_path_info.max_clipped_tile_count);
             match propagate_metadata_storage_id {
@@ -1046,8 +1067,9 @@ impl<D> Renderer<D> where D: Device {
                     self.upload_clip_tiles(clip_storage_id, clips);
                 }
             }
+            */
 
-            self.clip_tiles(clip_storage_id, clipped_path_info.max_clipped_tile_count);
+            self.clip_tiles(clip_storage_ids.vertices, clipped_path_info.max_clipped_tile_count);
         }
     }
 
@@ -1060,7 +1082,8 @@ impl<D> Renderer<D> where D: Device {
     fn propagate_tiles(&mut self,
                        path_count: u32,
                        tile_storage_id: StorageID,
-                       propagate_metadata_storage_id: StorageID) {
+                       propagate_metadata_storage_id: StorageID,
+                       clip_storage_ids: Option<&ClipStorageIDs>) {
         let propagate_program = &self.tile_post_programs
                                      .as_ref()
                                      .expect("GPU tile postprocessing is disabled!")
@@ -1070,9 +1093,35 @@ impl<D> Renderer<D> where D: Device {
                                      .tile_vertex_storage_allocator
                                      .get(tile_storage_id)
                                      .vertex_buffer;
-        let propagate_metadata_storage_buffer = &self.back_frame
-                                                     .tile_propagate_metadata_storage_allocator
-                                                     .get(propagate_metadata_storage_id);
+        let propagate_metadata_storage_buffer = self.back_frame
+                                                    .tile_propagate_metadata_storage_allocator
+                                                    .get(propagate_metadata_storage_id);
+
+        let mut storage_buffers = vec![
+            (&propagate_program.draw_metadata_storage_buffer, propagate_metadata_storage_buffer),
+            (&propagate_program.backdrops_storage_buffer, &self.back_frame.backdrops_buffer),
+            (&propagate_program.draw_tiles_storage_buffer, alpha_tile_buffer),
+            (&propagate_program.z_buffer_storage_buffer, &self.back_frame.z_buffer),
+        ];
+
+        if let Some(clip_storage_ids) = clip_storage_ids {
+            let clip_metadata_buffer = self.back_frame
+                                           .tile_propagate_metadata_storage_allocator
+                                           .get(clip_storage_ids.metadata);
+            let clip_tile_buffer = &self.back_frame
+                                        .tile_vertex_storage_allocator
+                                        .get(clip_storage_ids.tiles)
+                                        .vertex_buffer;
+            let clip_vertex_storage = self.back_frame
+                                          .clip_vertex_storage_allocator
+                                          .get(clip_storage_ids.vertices);
+            storage_buffers.push((&propagate_program.clip_metadata_storage_buffer,
+                                  clip_metadata_buffer));
+            storage_buffers.push((&propagate_program.clip_tiles_storage_buffer,
+                                  clip_tile_buffer));
+            storage_buffers.push((&propagate_program.clip_vertex_storage_buffer,
+                                  &clip_vertex_storage.vertex_buffer));
+        }
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
@@ -1086,12 +1135,7 @@ impl<D> Renderer<D> where D: Device {
                 (&propagate_program.framebuffer_tile_size_uniform,
                  UniformData::IVec2(self.framebuffer_tile_size().0)),
             ],
-            storage_buffers: &[
-                (&propagate_program.metadata_storage_buffer, propagate_metadata_storage_buffer),
-                (&propagate_program.backdrops_storage_buffer, &self.back_frame.backdrops_buffer),
-                (&propagate_program.alpha_tiles_storage_buffer, alpha_tile_buffer),
-                (&propagate_program.z_buffer_storage_buffer, &self.back_frame.z_buffer),
-            ],
+            storage_buffers: &storage_buffers,
         });
 
         self.device.end_timer_query(&timer_query);
@@ -1148,6 +1192,7 @@ impl<D> Renderer<D> where D: Device {
         })
     }
 
+    /*
     fn prepare_clip_tiles(&mut self,
                           tile_storage_id: StorageID,
                           clip_storage_id: StorageID,
@@ -1233,6 +1278,7 @@ impl<D> Renderer<D> where D: Device {
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().propagate_times.push(TimerFuture::new(timer_query));
     }
+    */
 
     // Uploads clip tiles from CPU to GPU.
     fn upload_clip_tiles(&mut self, clip_storage_id: StorageID, clips: &[Clip]) {
@@ -2488,4 +2534,11 @@ fn pixel_size_to_tile_size(pixel_size: Vector2I) -> Vector2I {
     let tile_size = vec2i(TILE_WIDTH as i32, TILE_HEIGHT as i32);
     let size = pixel_size + tile_size;
     vec2i(size.x() / TILE_WIDTH as i32, size.y() / TILE_HEIGHT as i32)
+}
+
+#[derive(Clone, Copy)]
+struct ClipStorageIDs {
+    metadata: StorageID,
+    tiles: StorageID,
+    vertices: StorageID,
 }
