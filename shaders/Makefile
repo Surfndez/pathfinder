@@ -33,7 +33,6 @@ SHADERS=\
 
 COMPUTE_SHADERS=\
 	fill.cs.glsl \
-	gen_clip.cs.glsl \
 	propagate.cs.glsl \
 	$(EMPTY)
 
