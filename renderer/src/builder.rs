@@ -1077,20 +1077,19 @@ impl PrepareTilesBatch {
         let path_index = PathIndex(self.path_count);
 
         match self.modal {
-            PrepareTilesModalInfo::CPU(ref mut cpu_info) => {
-                if z_write {
-                    for tile in &self.tiles {
-                        if tile.backdrop == 0 || tile.alpha_tile_id != AlphaTileId(!0) {
-                            continue;
-                        }
-                        let tile_coords = vec2i(tile.tile_x as i32, tile.tile_y as i32);
-                        let z_value = cpu_info.z_buffer
-                                              .get_mut(tile_coords)
-                                              .expect("Z value out of bounds!");
-                        *z_value = (*z_value).max(path_index.0 as i32);
+            PrepareTilesModalInfo::CPU(ref mut cpu_info) if z_write => {
+                for tile in &path.tiles.data {
+                    if tile.backdrop == 0 || tile.alpha_tile_id != AlphaTileId(!0) {
+                        continue;
                     }
+                    let tile_coords = vec2i(tile.tile_x as i32, tile.tile_y as i32);
+                    let z_value = cpu_info.z_buffer
+                                          .get_mut(tile_coords)
+                                          .expect("Z value out of bounds!");
+                    *z_value = (*z_value).max(path_index.0 as i32);
                 }
             }
+            PrepareTilesModalInfo::CPU(_) => {}
             PrepareTilesModalInfo::GPU(ref mut gpu_info) => {
                 gpu_info.propagate_metadata.push(PropagateMetadata {
                     tile_rect: path.tiles.rect,
