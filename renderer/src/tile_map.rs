@@ -11,7 +11,7 @@
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::vector::{Vector2I, vec2i};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DenseTileMap<T> where T: Clone + Copy {
     pub data: Vec<T>,
     pub rect: RectI,

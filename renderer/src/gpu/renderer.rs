@@ -16,11 +16,12 @@ use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, Fil
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
-use crate::gpu_data::{Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PropagateMetadata, RenderCommand};
+use crate::gpu_data::{Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
 use crate::gpu_data::{TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive};
 use crate::options::BoundingQuad;
 use crate::paint::PaintCompositeOp;
+use crate::tile_map::DenseTileMap;
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
 use fxhash::FxHashMap;
 use half::f16;
@@ -1021,18 +1022,18 @@ impl<D> Renderer<D> where D: Device {
         };
 
         // Propagate backdrops and perform clipping on GPU if necessary.
-        let propagate_metadata_storage_id = batch.gpu.as_ref().map(|gpu| {
-            let propagate_metadata_storage_id =
-                self.upload_propagate_data(&gpu.propagate_metadata, &gpu.backdrops);
-            self.propagate_tiles(gpu.propagate_metadata.len() as u32,
-                                 tile_vertex_storage_id,
-                                 propagate_metadata_storage_id,
-                                 clip_storage_ids.as_ref());
-
-            // TODO(pcwalton): Z-buffering.
-
-            propagate_metadata_storage_id
-        });
+        let propagate_metadata_storage_id = match batch.modal {
+            PrepareTilesModalInfo::CPU(_) => None,
+            PrepareTilesModalInfo::GPU(ref gpu_info) => {
+                let propagate_metadata_storage_id =
+                    self.upload_propagate_data(&gpu_info.propagate_metadata, &gpu_info.backdrops);
+                self.propagate_tiles(gpu_info.propagate_metadata.len() as u32,
+                                     tile_vertex_storage_id,
+                                     propagate_metadata_storage_id,
+                                     clip_storage_ids.as_ref());
+                Some(propagate_metadata_storage_id)
+            }
+        };
 
         // Record tile batch info.
         self.back_frame.tile_batch_info.insert(batch.batch_id.0 as usize, TileBatchInfo {
@@ -1040,6 +1041,12 @@ impl<D> Renderer<D> where D: Device {
             tile_vertex_storage_id,
             propagate_metadata_storage_id,
         });
+
+        // Perform occlusion culling.
+        match batch.modal {
+            PrepareTilesModalInfo::GPU(_) => self.prepare_z_buffer(),
+            PrepareTilesModalInfo::CPU(ref cpu_info) => self.upload_z_buffer(&cpu_info.z_buffer),
+        } 
 
         // Perform clipping if necessary.
         if let (Some(clip_storage_ids), Some(clipped_path_info)) =
@@ -1177,6 +1184,17 @@ impl<D> Renderer<D> where D: Device {
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().propagate_times.push(TimerFuture::new(timer_query));
+    }
+
+    fn upload_z_buffer(&mut self, z_buffer: &DenseTileMap<i32>) {
+        // TODO(pcwalton)
+        let z_buffer_texture =
+            self.device.framebuffer_texture(&self.back_frame.z_buffer_framebuffer);
+        debug_assert_eq!(z_buffer.rect.origin(), Vector2I::default());
+        debug_assert_eq!(z_buffer.rect.size(), self.device.texture_size(z_buffer_texture));
+        self.device.upload_to_texture(z_buffer_texture,
+                                      z_buffer.rect,
+                                      TextureDataRef::I32(&z_buffer.data));
     }
 
     fn allocate_clip_storage(&mut self, max_clipped_tile_count: u32) -> StorageID {
@@ -2535,7 +2553,7 @@ impl ToCombineMode for PaintCompositeOp {
 
 fn pixel_size_to_tile_size(pixel_size: Vector2I) -> Vector2I {
     // Round up.
-    let tile_size = vec2i(TILE_WIDTH as i32, TILE_HEIGHT as i32);
+    let tile_size = vec2i(TILE_WIDTH as i32 - 1, TILE_HEIGHT as i32 - 1);
     let size = pixel_size + tile_size;
     vec2i(size.x() / TILE_WIDTH as i32, size.y() / TILE_HEIGHT as i32)
 }

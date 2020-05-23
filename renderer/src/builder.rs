@@ -14,7 +14,7 @@ use crate::concurrent::executor::Executor;
 use crate::gpu::options::{RendererGPUFeatures, RendererOptions};
 use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
 use crate::gpu_data::{AlphaTileId, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, ClippedPathInfo, DrawTileBatch, Fill};
-use crate::gpu_data::{PathIndex, PrepareTilesBatch, PrepareTilesGPUBatch, PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
+use crate::gpu_data::{PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
 use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatchId};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::{PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
@@ -30,7 +30,7 @@ use pathfinder_content::effects::{BlendMode, Filter};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_geometry::line_segment::{LineSegment2F, LineSegmentU16};
-use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::rect::{RectF, RectI};
 use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::{Vector2I, vec2i};
 use pathfinder_gpu::TextureSamplingFlags;
@@ -353,7 +353,12 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
 
         let gpu_features = self.listener.gpu_features;
         let (mut prepare_commands, mut draw_commands) = (vec![], vec![]);
-        let mut clip_prepare_batch = PrepareTilesBatch::new(TileBatchId(0), gpu_features);
+
+        let scene_tile_rect = tiles::round_rect_out_to_tile_bounds(self.scene.view_box());
+        let mut clip_prepare_batch = PrepareTilesBatch::new(TileBatchId(0),
+                                                            scene_tile_rect,
+                                                            gpu_features);
+
         let mut next_batch_id = TileBatchId(1);
         let mut clip_id_to_path_index = FxHashMap::default();
 
@@ -396,7 +401,9 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                         // Create a new batch if necessary.
                         if batches.is_none() {
                             batches = Some(PathBatches {
-                                prepare: PrepareTilesBatch::new(next_batch_id, gpu_features),
+                                prepare: PrepareTilesBatch::new(next_batch_id,
+                                                                scene_tile_rect,
+                                                                gpu_features),
                                 draw: DrawTileBatch {
                                     tile_batch_id: next_batch_id,
                                     color_texture: draw_path.color_texture,
@@ -1041,15 +1048,21 @@ struct PathBatches {
 }
 
 impl PrepareTilesBatch {
-    fn new(batch_id: TileBatchId, gpu_features: RendererGPUFeatures) -> PrepareTilesBatch {
+    fn new(batch_id: TileBatchId, tile_rect: RectI, gpu_features: RendererGPUFeatures)
+           -> PrepareTilesBatch {
         PrepareTilesBatch {
             batch_id,
             path_count: 0,
             tiles: vec![],
-            gpu: if gpu_features.contains(RendererGPUFeatures::PREPARE_TILES_ON_GPU) {
-                Some(PrepareTilesGPUBatch { backdrops: vec![], propagate_metadata: vec![] })
+            modal: if gpu_features.contains(RendererGPUFeatures::PREPARE_TILES_ON_GPU) {
+                PrepareTilesModalInfo::GPU(PrepareTilesGPUInfo {
+                    backdrops: vec![],
+                    propagate_metadata: vec![],
+                })
             } else {
-                None
+                PrepareTilesModalInfo::CPU(PrepareTilesCPUInfo {
+                    z_buffer: DenseTileMap::from_builder(|_| 0, tile_rect),
+                })
             },
             clipped_path_info: None,
         }
@@ -1060,17 +1073,36 @@ impl PrepareTilesBatch {
             clip_path_id: Option<PathIndex>,
             gpu_features: RendererGPUFeatures)
             -> PathIndex {
+        let z_write = path.occluders.is_some();
         let path_index = PathIndex(self.path_count);
-        if let Some(ref mut gpu) = self.gpu {
-            gpu.propagate_metadata.push(PropagateMetadata {
-                tile_rect: path.tiles.rect,
-                tile_offset: self.tiles.len() as u32,
-                backdrops_offset: gpu.backdrops.len() as u32,
-                z_write: path.occluders.is_some() as u32,
-                clip_path: clip_path_id.unwrap_or(PathIndex(!0)),
-            });
-            gpu.backdrops.extend_from_slice(&path.backdrops);
+
+        match self.modal {
+            PrepareTilesModalInfo::CPU(ref mut cpu_info) => {
+                if z_write {
+                    for tile in &self.tiles {
+                        if tile.backdrop == 0 || tile.alpha_tile_id != AlphaTileId(!0) {
+                            continue;
+                        }
+                        let tile_coords = vec2i(tile.tile_x as i32, tile.tile_y as i32);
+                        let z_value = cpu_info.z_buffer
+                                              .get_mut(tile_coords)
+                                              .expect("Z value out of bounds!");
+                        *z_value = (*z_value).max(path_index.0 as i32);
+                    }
+                }
+            }
+            PrepareTilesModalInfo::GPU(ref mut gpu_info) => {
+                gpu_info.propagate_metadata.push(PropagateMetadata {
+                    tile_rect: path.tiles.rect,
+                    tile_offset: self.tiles.len() as u32,
+                    backdrops_offset: gpu_info.backdrops.len() as u32,
+                    z_write: z_write as u32,
+                    clip_path: clip_path_id.unwrap_or(PathIndex(!0)),
+                });
+                gpu_info.backdrops.extend_from_slice(&path.backdrops);
+            }
         }
+
         self.tiles.extend_from_slice(&path.tiles.data);
 
         if clip_path_id.is_some() {

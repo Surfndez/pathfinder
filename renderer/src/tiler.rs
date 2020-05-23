@@ -14,6 +14,7 @@
 use crate::builder::{ObjectBuilder, Occluder, SceneBuilder};
 use crate::gpu::options::RendererGPUFeatures;
 use crate::gpu_data::AlphaTileId;
+use crate::tile_map::DenseTileMap;
 use crate::tiles::{DrawTilingPathInfo, PackedTile, TILE_HEIGHT, TILE_WIDTH, TileType, TilingPathInfo};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::outline::{ContourIterFlags, Outline};

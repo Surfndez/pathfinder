@@ -1894,6 +1894,7 @@ impl TextureFormatExt for TextureFormat {
         match metal_pixel_format {
             MTLPixelFormat::R8Unorm => Some(TextureFormat::R8),
             MTLPixelFormat::R16Float => Some(TextureFormat::R16F),
+            MTLPixelFormat::R32Sint => Some(TextureFormat::R32I),
             MTLPixelFormat::RGBA8Unorm => Some(TextureFormat::RGBA8),
             MTLPixelFormat::BGRA8Unorm => {
                 // FIXME(pcwalton): This is wrong! But it prevents a crash for now.

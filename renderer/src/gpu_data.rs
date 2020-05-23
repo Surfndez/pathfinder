@@ -13,6 +13,7 @@
 use crate::builder::{ALPHA_TILES_PER_LEVEL, ALPHA_TILE_LEVEL_COUNT};
 use crate::options::BoundingQuad;
 use crate::paint::PaintCompositeOp;
+use crate::tile_map::DenseTileMap;
 use pathfinder_color::ColorU;
 use pathfinder_content::effects::{BlendMode, Filter};
 use pathfinder_content::render_target::RenderTargetId;
@@ -120,17 +121,30 @@ pub struct PrepareTilesBatch {
     /// Otherwise, they will simply be raw delta values.
     pub tiles: Vec<TileObjectPrimitive>,
 
-    /// Information about a batch of tiles to be prepared on GPU, if GPU tile postprocessing is
-    /// enabled.
-    pub gpu: Option<PrepareTilesGPUBatch>,
+    /// Information about a batch of tiles specific to the rendering mode (CPU or GPU).
+    pub modal: PrepareTilesModalInfo,
 
     /// Information about clips applied to paths, if any of the paths have clips.
     pub clipped_path_info: Option<ClippedPathInfo>,
 }
 
+/// Information about a batch of tiles to be prepared specific to the rendering mode (CPU or GPU).
+#[derive(Clone, Debug)]
+pub enum PrepareTilesModalInfo {
+    CPU(PrepareTilesCPUInfo),
+    GPU(PrepareTilesGPUInfo),
+}
+
+/// Information about a batch of tiles to be prepared on CPU.
+#[derive(Clone, Debug)]
+pub struct PrepareTilesCPUInfo {
+    /// The Z-buffer used for occlusion culling.
+    pub z_buffer: DenseTileMap<i32>,
+}
+
 /// Information about a batch of tiles to be prepared on GPU.
 #[derive(Clone, Debug)]
-pub struct PrepareTilesGPUBatch {
+pub struct PrepareTilesGPUInfo {
     /// Initial backdrop values for each tile column, packed together.
     pub backdrops: Vec<i32>,
 
