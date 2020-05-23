@@ -9,13 +9,13 @@
 // except according to those terms.
 
 use crate::gpu::debug::DebugUIPresenter;
-use crate::gpu::options::{DestFramebuffer, RendererOptions};
+use crate::gpu::options::{DestFramebuffer, RendererGPUFeatures, RendererOptions};
 use crate::gpu::shaders::{BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
 use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram, ClipTileCopyVertexArray};
 use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
 use crate::gpu::shaders::{GenerateClipProgram, MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
-use crate::gpu::shaders::{TileProgram, TileVertexArray};
+use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
 use crate::gpu_data::{Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PropagateMetadata, RenderCommand};
 use crate::gpu_data::{TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive};
@@ -35,7 +35,7 @@ use pathfinder_geometry::util;
 use pathfinder_geometry::vector::{Vector2F, Vector2I, Vector4F, vec2f, vec2i};
 use pathfinder_gpu::{BlendFactor, BlendOp, BlendState, BufferData, BufferTarget, BufferUploadMode};
 use pathfinder_gpu::{ClearOps, ComputeDimensions, ComputeState, DepthFunc, DepthState, Device};
-use pathfinder_gpu::{ImageAccess, Primitive, RenderOptions, RenderState, RenderTarget};
+use pathfinder_gpu::{FeatureLevel, ImageAccess, Primitive, RenderOptions, RenderState, RenderTarget};
 use pathfinder_gpu::{StencilFunc, StencilState, TextureBinding, TextureDataRef, TextureFormat};
 use pathfinder_gpu::{TextureSamplingFlags, UniformBinding, UniformData};
 use pathfinder_resources::ResourceLoader;
@@ -110,17 +110,15 @@ pub struct Renderer<D> where D: Device {
     dest_framebuffer: DestFramebuffer<D>,
     options: RendererOptions,
     blit_program: BlitProgram<D>,
-    blit_buffer_program: BlitBufferProgram<D>,
     clear_program: ClearProgram<D>,
     fill_program: FillProgram<D>,
     tile_program: TileProgram<D>,
     tile_copy_program: CopyTileProgram<D>,
     tile_clip_combine_program: ClipTileCombineProgram<D>,
     tile_clip_copy_program: ClipTileCopyProgram<D>,
-    generate_clip_program: GenerateClipProgram<D>,
+    tile_post_programs: Option<TilePostPrograms<D>>,
     stencil_program: StencilProgram<D>,
     reprojection_program: ReprojectionProgram<D>,
-    propagate_program: PropagateProgram<D>,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
     fill_tile_map: Vec<i32>,
@@ -195,10 +193,16 @@ impl<D> Renderer<D> where D: Device {
         let tile_copy_program = CopyTileProgram::new(&device, resources);
         let tile_clip_combine_program = ClipTileCombineProgram::new(&device, resources);
         let tile_clip_copy_program = ClipTileCopyProgram::new(&device, resources);
-        let generate_clip_program = GenerateClipProgram::new(&device, resources);
         let stencil_program = StencilProgram::new(&device, resources);
         let reprojection_program = ReprojectionProgram::new(&device, resources);
         let propagate_program = PropagateProgram::new(&device, resources);
+
+        let postprocess_tiles_on_gpu =
+            options.gpu_features.contains(RendererGPUFeatures::PREPARE_TILES_ON_GPU);
+        let tile_post_programs = match (postprocess_tiles_on_gpu, device.feature_level()) {
+            (true, FeatureLevel::D3D11) => Some(TilePostPrograms::new(&device, resources)),
+            _ => None,
+        };
 
         let area_lut_texture =
             device.create_texture_from_png(resources, "area-lut", TextureFormat::RGBA8);
@@ -248,15 +252,13 @@ impl<D> Renderer<D> where D: Device {
             dest_framebuffer,
             options,
             blit_program,
-            blit_buffer_program,
             clear_program,
             fill_program,
             tile_program,
             tile_copy_program,
             tile_clip_combine_program,
             tile_clip_copy_program,
-            generate_clip_program,
-            propagate_program,
+            tile_post_programs,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             fill_tile_map: vec![],
@@ -286,6 +288,11 @@ impl<D> Renderer<D> where D: Device {
 
             flags: RendererFlags::empty(),
         }
+    }
+
+    #[inline]
+    pub fn gpu_features(&self) -> RendererGPUFeatures {
+        self.options.gpu_features
     }
 
     pub fn begin_scene(&mut self) {
@@ -996,32 +1003,48 @@ impl<D> Renderer<D> where D: Device {
         */
     }
 
+    // Performs tile preparation/postprocessing.
     fn prepare_tiles(&mut self, batch: &PrepareTilesBatch) {
         let count = batch.tiles.len();
         self.stats.alpha_tile_count += count;
         let tile_vertex_storage_id = self.upload_tiles(&batch.tiles);
-        let propagate_metadata_storage_id = self.upload_propagate_data(&batch.propagate_metadata,
-                                                                       &batch.backdrops);
-        self.propagate_tiles(batch.propagate_metadata.len() as u32,
-                             tile_vertex_storage_id,
-                             propagate_metadata_storage_id);
 
-        // TODO(pcwalton): Z-buffering.
+        // Propagate backdrops on GPU if necessary.
+        let propagate_metadata_storage_id = batch.gpu.as_ref().map(|gpu| {
+            let propagate_metadata_storage_id =
+                self.upload_propagate_data(&gpu.propagate_metadata, &gpu.backdrops);
+            self.propagate_tiles(gpu.propagate_metadata.len() as u32,
+                                 tile_vertex_storage_id,
+                                 propagate_metadata_storage_id);
 
-        self.back_frame.tile_batch_info.insert(batch.batch_id.0 as usize, TileBatchInfo {
-            tile_count: batch.tiles.len() as u32,
-            tile_vertex_storage_id,
-            propagate_metadata_storage_id,
+            // TODO(pcwalton): Z-buffering.
+
+            self.back_frame.tile_batch_info.insert(batch.batch_id.0 as usize, TileBatchInfo {
+                tile_count: batch.tiles.len() as u32,
+                tile_vertex_storage_id,
+                propagate_metadata_storage_id,
+            });
+
+            propagate_metadata_storage_id
         });
 
         // Perform clipping if necessary.
         if let Some(ref clipped_path_info) = batch.clipped_path_info {
-            let clip_storage_id =
-                self.prepare_clip_tiles(tile_vertex_storage_id,
-                                        propagate_metadata_storage_id,
-                                        clipped_path_info.clip_batch_id,
-                                        &clipped_path_info.clipped_paths,
-                                        clipped_path_info.max_clipped_tile_count);
+            let clip_storage_id = match propagate_metadata_storage_id {
+                Some(propagate_metadata_storage_id) => {
+                    // GPU path.
+                    self.prepare_clip_tiles(tile_vertex_storage_id,
+                                            propagate_metadata_storage_id,
+                                            clipped_path_info.clip_batch_id,
+                                            &clipped_path_info.clipped_paths,
+                                            clipped_path_info.max_clipped_tile_count)
+                }
+                None => {
+                    // CPU path.
+                    self.upload_clip_tiles()
+                }
+            };
+
             self.clip_tiles(clip_storage_id,
                             tile_vertex_storage_id,
                             clipped_path_info.max_clipped_tile_count);
@@ -1038,6 +1061,11 @@ impl<D> Renderer<D> where D: Device {
                        path_count: u32,
                        tile_storage_id: StorageID,
                        propagate_metadata_storage_id: StorageID) {
+        let propagate_program = &self.tile_post_programs
+                                     .as_ref()
+                                     .expect("GPU tile postprocessing is disabled!")
+                                     .propagate_program;
+
         let alpha_tile_buffer = &self.back_frame
                                      .tile_vertex_storage_allocator
                                      .get(tile_storage_id)
@@ -1051,21 +1079,18 @@ impl<D> Renderer<D> where D: Device {
 
         let dimensions = ComputeDimensions { x: 1, y: path_count, z: 1 };
         self.device.dispatch_compute(dimensions, &ComputeState {
-            program: &self.propagate_program.program,
+            program: &propagate_program.program,
             textures: &[],
             images: &[],
             uniforms: &[
-                (&self.propagate_program.framebuffer_tile_size_uniform,
+                (&propagate_program.framebuffer_tile_size_uniform,
                  UniformData::IVec2(self.framebuffer_tile_size().0)),
             ],
             storage_buffers: &[
-                (&self.propagate_program.metadata_storage_buffer,
-                 propagate_metadata_storage_buffer),
-                (&self.propagate_program.backdrops_storage_buffer,
-                 &self.back_frame.backdrops_buffer),
-                (&self.propagate_program.alpha_tiles_storage_buffer, alpha_tile_buffer),
-                (&self.propagate_program.z_buffer_storage_buffer,
-                 &self.back_frame.z_buffer),
+                (&propagate_program.metadata_storage_buffer, propagate_metadata_storage_buffer),
+                (&propagate_program.backdrops_storage_buffer, &self.back_frame.backdrops_buffer),
+                (&propagate_program.alpha_tiles_storage_buffer, alpha_tile_buffer),
+                (&propagate_program.z_buffer_storage_buffer, &self.back_frame.z_buffer),
             ],
         });
 
@@ -1074,6 +1099,11 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn prepare_z_buffer(&mut self) {
+        let blit_buffer_program = &self.tile_post_programs
+                                       .as_ref()
+                                       .expect("GPU tile postprocessing is disabled!")
+                                       .blit_buffer_program;
+
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
@@ -1081,17 +1111,16 @@ impl<D> Renderer<D> where D: Device {
 
         self.device.draw_elements(6, &RenderState {
             target: &RenderTarget::Framebuffer(&self.back_frame.z_buffer_framebuffer),
-            program: &self.blit_buffer_program.program,
+            program: &blit_buffer_program.program,
             vertex_array: &self.back_frame.blit_buffer_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &[],
             images: &[],
             storage_buffers: &[
-                (&self.blit_buffer_program.buffer_storage_buffer, &self.back_frame.z_buffer),
+                (&blit_buffer_program.buffer_storage_buffer, &self.back_frame.z_buffer),
             ],
             uniforms: &[
-                (&self.blit_buffer_program.buffer_size_uniform,
-                 UniformData::IVec2(z_buffer_size.0)),
+                (&blit_buffer_program.buffer_size_uniform, UniformData::IVec2(z_buffer_size.0)),
                  
             ],
             viewport: RectI::new(Vector2I::zero(), z_buffer_size),
@@ -1109,6 +1138,11 @@ impl<D> Renderer<D> where D: Device {
                           clipped_paths: &[PathIndex],
                           max_clipped_tile_count: u32)
                           -> StorageID {
+        let generate_clip_program = &self.tile_post_programs
+                                         .as_ref()
+                                         .expect("GPU tile postprocessing is disabled!")
+                                         .generate_clip_program;
+
         let clip_tile_batch_info = self.back_frame.tile_batch_info[clip_batch_id.0 as usize];
         let clip_propagate_metadata_storage_id =
             clip_tile_batch_info.propagate_metadata_storage_id;
@@ -1178,20 +1212,20 @@ impl<D> Renderer<D> where D: Device {
         };
 
         self.device.dispatch_compute(dimensions, &ComputeState {
-            program: &self.generate_clip_program.program,
+            program: &generate_clip_program.program,
             textures: &[],
             images: &[],
             uniforms: &[],
             storage_buffers: &[
-                (&self.generate_clip_program.clipped_path_indices_storage_buffer,
+                (&generate_clip_program.clipped_path_indices_storage_buffer,
                  &clipped_path_indices_buffer),
-                (&self.generate_clip_program.draw_propagate_metadata_storage_buffer,
+                (&generate_clip_program.draw_propagate_metadata_storage_buffer,
                  tile_propagate_metadata_buffer),
-                (&self.generate_clip_program.clip_propagate_metadata_storage_buffer,
+                (&generate_clip_program.clip_propagate_metadata_storage_buffer,
                  clip_propagate_metadata_buffer),
-                (&self.generate_clip_program.draw_tiles_storage_buffer, alpha_tile_buffer),
-                (&self.generate_clip_program.clip_tiles_storage_buffer, clip_tile_buffer),
-                (&self.generate_clip_program.clip_vertex_storage_buffer,
+                (&generate_clip_program.draw_tiles_storage_buffer, alpha_tile_buffer),
+                (&generate_clip_program.clip_tiles_storage_buffer, clip_tile_buffer),
+                (&generate_clip_program.clip_vertex_storage_buffer,
                  &clip_vertex_storage.vertex_buffer),
             ],
         });
@@ -1200,6 +1234,12 @@ impl<D> Renderer<D> where D: Device {
         self.current_timer.as_mut().unwrap().propagate_times.push(TimerFuture::new(timer_query));
 
         clip_storage_id
+    }
+
+    // Uploads clip tiles from CPU to GPU.
+    fn upload_clip_tiles(&mut self) -> StorageID {
+        // TODO(pcwalton)
+        unimplemented!()
     }
 
     fn draw_tiles(&mut self,

@@ -10,6 +10,7 @@
 
 //! Options that control how rendering is to be performed.
 
+use crate::gpu::options::RendererGPUFeatures;
 use crate::gpu_data::RenderCommand;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::transform2d::Transform2F;
@@ -17,17 +18,23 @@ use pathfinder_geometry::transform3d::Perspective;
 use pathfinder_geometry::vector::{Vector2F, Vector4F};
 use pathfinder_content::clip::PolygonClipper3D;
 
-pub trait RenderCommandListener: Send + Sync {
-    fn send(&self, command: RenderCommand);
+pub struct RenderCommandListener<'a> {
+    send_fn: RenderCommandSendFunction<'a>,
+    pub gpu_features: RendererGPUFeatures,
 }
 
-impl<F> RenderCommandListener for F
-where
-    F: Fn(RenderCommand) + Send + Sync,
-{
+pub type RenderCommandSendFunction<'a> = Box<dyn Fn(RenderCommand) + Send + Sync + 'a>;
+
+impl<'a> RenderCommandListener<'a> {
     #[inline]
-    fn send(&self, command: RenderCommand) {
-        (*self)(command)
+    pub fn new(send_fn: RenderCommandSendFunction<'a>, gpu_features: RendererGPUFeatures)
+               -> RenderCommandListener<'a> {
+        RenderCommandListener { send_fn, gpu_features }
+    }
+
+    #[inline]
+    pub fn send(&self, render_command: RenderCommand) {
+        (self.send_fn)(render_command)
     }
 }
 

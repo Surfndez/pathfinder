@@ -35,7 +35,7 @@ use pathfinder_geometry::transform3d::Transform4F;
 use pathfinder_geometry::vector::{Vector2F, Vector2I, Vector4F, vec2f, vec2i};
 use pathfinder_gpu::Device;
 use pathfinder_renderer::concurrent::scene_proxy::{RenderCommandStream, SceneProxy};
-use pathfinder_renderer::gpu::options::{DestFramebuffer, RendererOptions};
+use pathfinder_renderer::gpu::options::{DestFramebuffer, RendererGPUFeatures, RendererOptions};
 use pathfinder_renderer::gpu::renderer::{RenderStats, RenderTime, Renderer};
 use pathfinder_renderer::options::{BuildOptions, RenderTransform};
 use pathfinder_renderer::paint::Paint;
@@ -137,7 +137,7 @@ impl<W> DemoApp<W> where W: Window {
         let mut ui_model = DemoUIModel::new(&options);
         let render_options = RendererOptions {
             background_color: None,
-            no_compute: options.no_compute,
+            gpu_features: options.gpu_features,
         };
 
         let filter = build_filter(&ui_model);
@@ -265,7 +265,8 @@ impl<W> DemoApp<W> where W: Window {
             subpixel_aa_enabled: self.ui_model.subpixel_aa_effect_enabled,
         };
 
-        self.render_command_stream = Some(self.scene_proxy.build_with_stream(build_options));
+        self.render_command_stream =    
+            Some(self.scene_proxy.build_with_stream(build_options, self.renderer.gpu_features()));
     }
 
     fn handle_events(&mut self, events: Vec<Event>) -> Vec<UIEvent> {
@@ -625,7 +626,7 @@ pub struct Options {
     pub ui: UIVisibility,
     pub background_color: BackgroundColor,
     pub high_performance_gpu: bool,
-    pub no_compute: bool,
+    pub gpu_features: RendererGPUFeatures,
     hidden_field_for_future_proofing: (),
 }
 
@@ -638,7 +639,7 @@ impl Default for Options {
             ui: UIVisibility::All,
             background_color: BackgroundColor::Light,
             high_performance_gpu: false,
-            no_compute: false,
+            gpu_features: RendererGPUFeatures::all(),
             hidden_field_for_future_proofing: (),
         }
     }
@@ -692,10 +693,14 @@ impl Options {
                     .help("Use the high-performance (discrete) GPU, if available")
             )
             .arg(
-                Arg::with_name("no-compute")
-                    .short("c")
-                    .long("no-compute")
-                    .help("Never use compute shaders")
+                Arg::with_name("no-fill-in-compute")
+                    .long("no-fill-in-compute")
+                    .help("Fill in raster even if GPU compute is available")
+            )
+            .arg(
+                Arg::with_name("no-prepare-tiles-on-gpu")
+                    .long("no-prepare-tiles-on-gpu")
+                    .help("Prepare tiles on CPU even if GPU compute is available")
             )
             .arg(
                 Arg::with_name("INPUT")
@@ -734,8 +739,11 @@ impl Options {
             self.high_performance_gpu = true;
         }
 
-        if matches.is_present("no-compute") {
-            self.no_compute = true;
+        if matches.is_present("no-fill-in-compute") {
+            self.gpu_features.remove(RendererGPUFeatures::FILL_IN_COMPUTE);
+        }
+        if matches.is_present("no-prepare-tiles-on-gpu") {
+            self.gpu_features.remove(RendererGPUFeatures::PREPARE_TILES_ON_GPU);
         }
 
         if let Some(path) = matches.value_of("INPUT") {

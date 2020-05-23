@@ -239,10 +239,10 @@ impl Scene {
 
     #[inline]
     pub fn build<'a, E>(&mut self,
-                    options: BuildOptions,
-                    listener: Box<dyn RenderCommandListener + 'a>,
-                    executor: &E)
-                    where E: Executor {
+                        options: BuildOptions,
+                        listener: RenderCommandListener<'a>,
+                        executor: &E)
+                        where E: Executor {
         let prepared_options = options.prepare(self.bounds);
         SceneBuilder::new(self, &prepared_options, listener).build(executor)
     }

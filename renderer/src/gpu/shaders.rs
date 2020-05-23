@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::gpu::options::RendererOptions;
+use crate::gpu::options::{RendererGPUFeatures, RendererOptions};
 use crate::gpu::renderer::{MASK_TILES_ACROSS, MASK_TILES_DOWN};
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
 use pathfinder_gpu::{BufferTarget, BufferUploadMode, ComputeDimensions, Device, FeatureLevel};
@@ -460,11 +460,12 @@ pub enum FillProgram<D> where D: Device {
 impl<D> FillProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader, options: &RendererOptions)
                -> FillProgram<D> {
-        match (options.no_compute, device.feature_level()) {
-            (false, FeatureLevel::D3D11) => {
+        match (options.gpu_features.contains(RendererGPUFeatures::FILL_IN_COMPUTE),
+               device.feature_level()) {
+            (true, FeatureLevel::D3D11) => {
                 FillProgram::Compute(FillComputeProgram::new(device, resources))
             }
-            (_, FeatureLevel::D3D10) | (true, _) => {
+            (_, FeatureLevel::D3D10) | (false, _) => {
                 FillProgram::Raster(FillRasterProgram::new(device, resources))
             }
         }
@@ -644,6 +645,22 @@ impl<D> ClipTileCopyProgram<D> where D: Device {
         let src_texture = device.get_texture_parameter(&program, "Src");
         let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
         ClipTileCopyProgram { program, src_texture, framebuffer_size_uniform }
+    }
+}
+
+pub struct TilePostPrograms<D> where D: Device {
+    pub blit_buffer_program: BlitBufferProgram<D>,
+    pub propagate_program: PropagateProgram<D>,
+    pub generate_clip_program: GenerateClipProgram<D>,
+}
+
+impl<D> TilePostPrograms<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> TilePostPrograms<D> {
+        TilePostPrograms {
+            blit_buffer_program: BlitBufferProgram::new(device, resources),
+            propagate_program: PropagateProgram::new(device, resources),
+            generate_clip_program: GenerateClipProgram::new(device, resources),
+        }
     }
 }
 

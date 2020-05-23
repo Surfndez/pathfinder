@@ -11,9 +11,10 @@
 //! Packs data onto the GPU.
 
 use crate::concurrent::executor::Executor;
+use crate::gpu::options::{RendererGPUFeatures, RendererOptions};
 use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
 use crate::gpu_data::{AlphaTileId, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, ClippedPathInfo, DrawTileBatch, Fill};
-use crate::gpu_data::{PathIndex, PrepareTilesBatch, PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
+use crate::gpu_data::{PathIndex, PrepareTilesBatch, PrepareTilesGPUBatch, PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
 use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatchId};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::{PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
@@ -45,7 +46,7 @@ pub(crate) struct SceneBuilder<'a, 'b> {
     scene: &'a mut Scene,
     built_options: &'b PreparedBuildOptions,
     next_alpha_tile_indices: [AtomicUsize; ALPHA_TILE_LEVEL_COUNT],
-    pub(crate) listener: Box<dyn RenderCommandListener + 'a>,
+    pub(crate) listener: RenderCommandListener<'a>,
 }
 
 #[derive(Debug)]
@@ -111,11 +112,10 @@ pub(crate) struct Occluder {
 }
 
 impl<'a, 'b> SceneBuilder<'a, 'b> {
-    pub(crate) fn new(
-        scene: &'a mut Scene,
-        built_options: &'b PreparedBuildOptions,
-        listener: Box<dyn RenderCommandListener + 'a>,
-    ) -> SceneBuilder<'a, 'b> {
+    pub(crate) fn new(scene: &'a mut Scene,
+                      built_options: &'b PreparedBuildOptions,
+                      listener: RenderCommandListener<'a>)
+                      -> SceneBuilder<'a, 'b> {
         SceneBuilder {
             scene,
             built_options,
@@ -352,7 +352,8 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         */
 
         let (mut prepare_commands, mut draw_commands) = (vec![], vec![]);
-        let mut clip_prepare_batch = PrepareTilesBatch::new(TileBatchId(0));
+        let mut clip_prepare_batch = PrepareTilesBatch::new(TileBatchId(0),
+                                                            self.listener.gpu_features);
         let mut next_batch_id = TileBatchId(1);
         let mut clip_id_to_path_index = FxHashMap::default();
 
@@ -395,7 +396,8 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                         // Create a new batch if necessary.
                         if batches.is_none() {
                             batches = Some(PathBatches {
-                                prepare: PrepareTilesBatch::new(next_batch_id),
+                                prepare: PrepareTilesBatch::new(next_batch_id,
+                                                                self.listener.gpu_features),
                                 draw: DrawTileBatch {
                                     tile_batch_id: next_batch_id,
                                     color_texture: draw_path.color_texture,
@@ -432,7 +434,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
         }
 
         // Send commands.
-        if !clip_prepare_batch.propagate_metadata.is_empty() {
+        if !clip_prepare_batch.tiles.is_empty() {
             self.listener.send(RenderCommand::PrepareTiles(clip_prepare_batch));
         }
         for command in prepare_commands {
@@ -1023,27 +1025,33 @@ struct PathBatches {
 }
 
 impl PrepareTilesBatch {
-    fn new(batch_id: TileBatchId) -> PrepareTilesBatch {
+    fn new(batch_id: TileBatchId, gpu_features: RendererGPUFeatures) -> PrepareTilesBatch {
         PrepareTilesBatch {
             batch_id,
+            path_count: 0,
             tiles: vec![],
-            backdrops: vec![],
-            propagate_metadata: vec![],
+            gpu: if gpu_features.contains(RendererGPUFeatures::PREPARE_TILES_ON_GPU) {
+                Some(PrepareTilesGPUBatch { backdrops: vec![], propagate_metadata: vec![] })
+            } else {
+                None
+            },
             clipped_path_info: None,
         }
     }
 
     fn push(&mut self, path: &BuiltPath, clip_path_id: Option<PathIndex>) -> PathIndex {
-        let path_index = PathIndex(self.propagate_metadata.len() as u32);
-        self.propagate_metadata.push(PropagateMetadata {
-            tile_rect: path.tiles.rect,
-            tile_offset: self.tiles.len() as u32,
-            backdrops_offset: self.backdrops.len() as u32,
-            z_write: path.occluders.is_some() as u32,
-            clip_path: clip_path_id.unwrap_or(PathIndex(!0)),
-        });
+        let path_index = PathIndex(self.path_count);
+        if let Some(ref mut gpu) = self.gpu {
+            gpu.propagate_metadata.push(PropagateMetadata {
+                tile_rect: path.tiles.rect,
+                tile_offset: self.tiles.len() as u32,
+                backdrops_offset: gpu.backdrops.len() as u32,
+                z_write: path.occluders.is_some() as u32,
+                clip_path: clip_path_id.unwrap_or(PathIndex(!0)),
+            });
+            gpu.backdrops.extend_from_slice(&path.backdrops);
+        }
         self.tiles.extend_from_slice(&path.tiles.data);
-        self.backdrops.extend_from_slice(&path.backdrops);
 
         if clip_path_id.is_some() {
             if self.clipped_path_info.is_none() {

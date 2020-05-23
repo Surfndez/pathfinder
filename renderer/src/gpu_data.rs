@@ -22,7 +22,6 @@ use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::Vector2I;
 use pathfinder_gpu::TextureSamplingFlags;
 use std::fmt::{Debug, Formatter, Result as DebugResult};
-use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -104,7 +103,7 @@ pub struct TextureLocation {
     pub rect: RectI,
 }
 
-/// Information about a group of prepared tiles.
+/// Information about a batch of tiles to be prepared (postprocessed).
 #[derive(Clone, Debug)]
 pub struct PrepareTilesBatch {
     /// The ID of this batch.
@@ -112,24 +111,33 @@ pub struct PrepareTilesBatch {
     /// The renderer should not assume that these values are consecutive.
     pub batch_id: TileBatchId,
 
+    /// The number of paths in this batch.
+    pub path_count: u32,
+
     /// Information about all the allocated tiles.
     /// 
-    /// If backdrops are being computed on CPU, then the backdrop values will already being summed.
+    /// If backdrops are being computed on CPU, then the backdrop values will already be summed.
     /// Otherwise, they will simply be raw delta values.
     pub tiles: Vec<TileObjectPrimitive>,
 
+    /// Information about a batch of tiles to be prepared on GPU, if GPU tile postprocessing is
+    /// enabled.
+    pub gpu: Option<PrepareTilesGPUBatch>,
+
+    /// Information about clips applied to paths, if any of the paths have clips.
+    pub clipped_path_info: Option<ClippedPathInfo>,
+}
+
+/// Information about a batch of tiles to be prepared on GPU.
+#[derive(Clone, Debug)]
+pub struct PrepareTilesGPUBatch {
     /// Initial backdrop values for each tile column, packed together.
-    /// 
-    /// This value is ignored if backdrops are being computed on CPU.
     pub backdrops: Vec<i32>,
 
     /// Mapping from path ID to metadata needed to compute propagation on GPU.
     /// 
     /// This contains indices into the `tiles` and `backdrops` vectors.
     pub propagate_metadata: Vec<PropagateMetadata>,
-
-    /// Information about clips applied to paths, if any of the paths have clips.
-    pub clipped_path_info: Option<ClippedPathInfo>,
 }
 
 /// Information about clips applied to paths in a batch.
@@ -343,10 +351,9 @@ impl Debug for RenderCommand {
                     Some(ref clipped_path_info) => clipped_path_info.clipped_paths.len(),
                 };
                 write!(formatter,
-                       "PrepareTiles({:?}, T {}, B {}, C {})",
+                       "PrepareTiles({:?}, T {}, C {})",
                        batch.batch_id,
                        batch.tiles.len(),
-                       batch.backdrops.len(),
                        clipped_path_count)
             }
             RenderCommand::PushRenderTarget(render_target_id) => {

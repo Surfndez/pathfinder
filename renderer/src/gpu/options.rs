@@ -14,10 +14,40 @@ use pathfinder_geometry::vector::Vector2I;
 use pathfinder_gpu::Device;
 
 /// Options that influence rendering.
-#[derive(Default)]
 pub struct RendererOptions {
+    /// The background color. If not present, transparent is assumed.
     pub background_color: Option<ColorF>,
-    pub no_compute: bool,
+    /// Options controlling how the renderer uses the GPU.
+    pub gpu_features: RendererGPUFeatures,
+}
+
+bitflags! {
+    /// Options controlling how the renderer uses the GPU.
+    pub struct RendererGPUFeatures: u8 {
+        /// Perform fill calculation in software using compute shader on DX11-class hardware.
+        /// 
+        /// If this flag is not set, or the hardware is not DX11-class, fill calculation is done
+        /// with the hardware rasterizer, which is usually moderately slower.
+        const FILL_IN_COMPUTE = 0x01;
+
+        /// Perform tile preparation--backdrop computation, Z-buffering, and clipping--on the GPU,
+        /// using compute shader on DX11-class hardware.
+        /// 
+        /// If this flag is not set, or the hardware is not DX11-class, these are done on CPU.
+        /// There is usually little performance difference between the CPU and GPU here, but this
+        /// flag is necessary for GPU tiling.
+        const PREPARE_TILES_ON_GPU = 0x02;
+    }
+}
+
+impl Default for RendererOptions {
+    #[inline]
+    fn default() -> RendererOptions {
+        RendererOptions {
+            background_color: None,
+            gpu_features: RendererGPUFeatures::all(),
+        }
+    }
 }
 
 #[derive(Clone)]

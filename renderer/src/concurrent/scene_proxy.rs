@@ -20,6 +20,7 @@
 //! You don't need to use this API to use Pathfinder; it's only a convenience.
 
 use crate::concurrent::executor::Executor;
+use crate::gpu::options::RendererGPUFeatures;
 use crate::gpu::renderer::Renderer;
 use crate::gpu_data::RenderCommand;
 use crate::options::{BuildOptions, RenderCommandListener};
@@ -61,14 +62,17 @@ impl SceneProxy {
     #[inline]
     pub fn build_with_listener(&self,
                                options: BuildOptions,
-                               listener: Box<dyn RenderCommandListener>) {
+                               listener: RenderCommandListener<'static>) {
         self.sender.send(MainToWorkerMsg::Build(options, listener)).unwrap();
     }
 
     #[inline]
-    pub fn build_with_stream(&self, options: BuildOptions) -> RenderCommandStream {
+    pub fn build_with_stream(&self, options: BuildOptions, gpu_features: RendererGPUFeatures)
+                             -> RenderCommandStream {
         let (sender, receiver) = crossbeam_channel::bounded(MAX_MESSAGES_IN_FLIGHT);
-        let listener = Box::new(move |command| drop(sender.send(command)));
+        let listener = RenderCommandListener::new(Box::new(move |command| {
+            drop(sender.send(command))
+        }), gpu_features);
         self.build_with_listener(options, listener);
         RenderCommandStream::new(receiver)
     }
@@ -87,7 +91,7 @@ impl SceneProxy {
     pub fn build_and_render<D>(&self, renderer: &mut Renderer<D>, build_options: BuildOptions)
                                where D: Device {
         renderer.begin_scene();
-        for command in self.build_with_stream(build_options) {
+        for command in self.build_with_stream(build_options, renderer.gpu_features()) {
             renderer.render_command(&command);
         }
         renderer.end_scene();
@@ -119,7 +123,7 @@ enum MainToWorkerMsg {
     ReplaceScene(Scene),
     CopyScene(Sender<Scene>),
     SetViewBox(RectF),
-    Build(BuildOptions, Box<dyn RenderCommandListener>),
+    Build(BuildOptions, RenderCommandListener<'static>),
 }
 
 pub struct RenderCommandStream {
