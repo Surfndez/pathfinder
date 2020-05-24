@@ -423,7 +423,6 @@ impl<D> UIPresenter<D> where D: Device {
                 (&self.texture_program.texture_size_uniform,
                  UniformData::Vec2(device.texture_size(&texture).0.to_f32x2()))
             ],
-            storage_buffers: &[],
             viewport: RectI::new(Vector2I::default(), self.framebuffer_size),
             options: RenderOptions {
                 blend: Some(alpha_blend_state()),

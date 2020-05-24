@@ -42,7 +42,14 @@ impl<'a, 'b> Tiler<'a, 'b> {
                       path_info: TilingPathInfo<'a>)
                       -> Tiler<'a, 'b> {
         let bounds = outline.bounds().intersection(view_box).unwrap_or(RectF::default());
-        let object_builder = ObjectBuilder::new(path_id, bounds, view_box, fill_rule, &path_info);
+        // FIXME(pcwalton): Only if GPU binning is enabled.
+        let segments = create_segments(outline);
+        let object_builder = ObjectBuilder::new(path_id,
+                                                bounds,
+                                                view_box,
+                                                fill_rule,
+                                                segments,
+                                                &path_info);
         Tiler { scene_builder, object_builder, outline, path_info }
     }
 
@@ -366,4 +373,32 @@ fn process_line_segment(line_segment: LineSegment2F,
 enum StepDirection {
     X,
     Y,
+}
+
+fn create_segments(outline: &Outline) -> Vec<LineSegment2F> {
+    let mut segments = vec![];
+    for contour in outline.contours() {
+        for segment in contour.iter(ContourIterFlags::empty()) {
+            flatten_segment(&mut segments, &segment);
+        }
+    }
+    segments
+}
+
+fn flatten_segment(segments: &mut Vec<LineSegment2F>, segment: &Segment) {
+    // TODO(pcwalton): Stop degree elevating.
+    if segment.is_quadratic() {
+        let cubic = segment.to_cubic();
+        return flatten_segment(segments, &cubic);
+    }
+
+    if segment.is_line() || (segment.is_cubic() && segment.as_cubic_segment().is_flat(0.25)) {
+        segments.push(segment.baseline);
+        return;
+    }
+
+    // TODO(pcwalton): Use a smarter flattening algorithm.
+    let (prev, next) = segment.split(0.5);
+    flatten_segment(segments, &prev);
+    flatten_segment(segments, &next);
 }

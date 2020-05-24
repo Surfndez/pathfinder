@@ -16,7 +16,7 @@ use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, Fil
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
-use crate::gpu_data::{Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
+use crate::gpu_data::{BinSegment, Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
 use crate::gpu_data::{TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive};
 use crate::options::BoundingQuad;
@@ -174,11 +174,10 @@ struct Frame<D> where D: Device {
     stencil_vertex_array: StencilVertexArray<D>,
     bin_vertex_array: BinVertexArray<D>,
     reprojection_vertex_array: ReprojectionVertexArray<D>,
-    bin_path_tile_info_buffer: D::Buffer,
-    bin_metadata_buffer: D::Buffer,
-    bin_fills_buffer: D::Buffer,
-    bin_alpha_tiles_buffer: D::Buffer,
-    bin_alpha_tile_map_buffer: D::Buffer,
+
+    // FIXME(pcwalton): Reuse!
+    fill_indirect_draw_params_buffer: D::Buffer,
+
     dest_blend_framebuffer: D::Framebuffer,
     intermediate_dest_framebuffer: D::Framebuffer,
     texture_metadata_texture: D::Texture,
@@ -342,9 +341,6 @@ impl<D> Renderer<D> where D: Device {
             }
             RenderCommand::UploadTextureMetadata(ref metadata) => {
                 self.upload_texture_metadata(metadata)
-            }
-            RenderCommand::BinPaths { ref segments, ref path_tile_bounds } => {
-                self.bin_segments(segments, path_tile_bounds);
             }
             RenderCommand::AddFills(ref fills) => self.add_fills(fills),
             RenderCommand::FlushFills => {
@@ -703,46 +699,49 @@ impl<D> Renderer<D> where D: Device {
         self.back_frame.quads_vertex_indices_length = length;
     }
 
-    fn bin_segments(&mut self, segments: &[LineSegment2F], path_tile_bounds: &[RectI]) {
+    fn bin_segments(&mut self,
+                    segments: &[BinSegment],
+                    propagate_metadata_storage_id: StorageID,
+                    tile_storage_id: StorageID) {
+        // FIXME(pcwalton): Buffer reuse
         self.device.allocate_buffer(&self.back_frame.bin_vertex_array.vertex_buffer,
                                     BufferData::Memory(segments),
                                     BufferTarget::Vertex);
 
-        //println!("{:?}", segments);
+        // FIXME(pcwalton): Don't hardcode 3M fills!!
+        let fill_storage_id = {
+            let fill_program = &self.fill_program;
+            let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
+            let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
+            self.back_frame
+                .fill_vertex_storage_allocator
+                .allocate(&self.device, 3 * 1024 * 1024, |device, size| {
+                FillVertexStorage::new(size,
+                                       device,
+                                       fill_program,
+                                       quad_vertex_positions_buffer,
+                                       quad_vertex_indices_buffer)
+            })
+        };
+        let fill_vertex_storage =
+            self.back_frame.fill_vertex_storage_allocator.get(fill_storage_id);
 
         let main_viewport = self.main_viewport();
 
-        let (mut path_tile_info, mut tile_map) = (vec![], vec![]);
-        for tile_bounds in path_tile_bounds {
-            path_tile_info.push(PathTileInfo {
-                tile_bounds: *tile_bounds,
-                tile_start_index: tile_map.len() as u32,
-                pad0: 0,
-                pad1: 0,
-                pad2: 0,
-            });
-            for _ in 0..(tile_bounds.width() as usize * tile_bounds.height() as usize) {
-                tile_map.push(0);
-            }
-        }
+        let alpha_tile_buffer = &self.back_frame
+                                     .tile_vertex_storage_allocator
+                                     .get(tile_storage_id)
+                                     .vertex_buffer;
+        let propagate_metadata_storage_buffer = self.back_frame
+                                                    .tile_propagate_metadata_storage_allocator
+                                                    .get(propagate_metadata_storage_id);
 
-        self.device.allocate_buffer(&self.back_frame.bin_path_tile_info_buffer,
-                                    BufferData::Memory(&path_tile_info),
-                                    BufferTarget::Storage);
-        self.device.allocate_buffer::<u32>(&self.back_frame.bin_metadata_buffer,
-                                           BufferData::Memory(&[0; 4]),
+        // FIXME(pcwalton): Buffer reuse
+        self.device.allocate_buffer::<u32>(&self.back_frame.fill_indirect_draw_params_buffer,
+                                           BufferData::Memory(&[6, 0, 0, 0, 0, 0, 0, 0]),
                                            BufferTarget::Storage);
-        self.device.allocate_buffer::<u32>(&self.back_frame.bin_fills_buffer,
-                                           BufferData::Uninitialized(3 * 4 * 1024 * 1024),
-                                           BufferTarget::Storage);
-        self.device.allocate_buffer::<I32x4>(&self.back_frame.bin_alpha_tiles_buffer,
-                                             BufferData::Uninitialized(tile_map.len()),
-                                             BufferTarget::Storage);
-        self.device.allocate_buffer(&self.back_frame.bin_alpha_tile_map_buffer,
-                                    BufferData::Memory(&tile_map),
-                                    BufferTarget::Storage);
 
-        println!("main_viewport={:?}", main_viewport);
+        //println!("main_viewport={:?}", main_viewport);
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
@@ -759,23 +758,18 @@ impl<D> Renderer<D> where D: Device {
             ],
             images: &[],
             storage_buffers: &[
-                (&self.bin_program.path_tile_info_storage_buffer,
-                 &self.back_frame.bin_path_tile_info_buffer),
-                (&self.bin_program.metadata_storage_buffer, &self.back_frame.bin_metadata_buffer),
-                (&self.bin_program.fills_storage_buffer, &self.back_frame.bin_fills_buffer),
-                (&self.bin_program.alpha_tiles_storage_buffer,
-                 &self.back_frame.bin_alpha_tiles_buffer),
-                (&self.bin_program.alpha_tile_map_storage_buffer,
-                 &self.back_frame.bin_alpha_tile_map_buffer),
+                (&self.bin_program.metadata_storage_buffer, propagate_metadata_storage_buffer),
+                (&self.bin_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
+                (&self.bin_program.indirect_draw_params_storage_buffer,
+                 &self.back_frame.fill_indirect_draw_params_buffer),
+                (&self.bin_program.tiles_storage_buffer, alpha_tile_buffer),
             ],
             viewport: main_viewport,
             options: RenderOptions::default(),
         });
 
         self.device.end_timer_query(&timer_query);
-
-        //let duration = self.device.recv_timer_query(&timer_query);
-        self.current_timer.as_mut().unwrap().tile_times.push(TimerFuture::new(timer_query));
+        self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
 
                                                       /*
         let metadata_buffer = self.device.read_buffer(&self.back_frame.bin_metadata_buffer,
@@ -789,15 +783,6 @@ impl<D> Renderer<D> where D: Device {
                  segments.len(),
                  duration.as_secs_f64() * 1000.0);
                  */
-
-        #[repr(C)]
-        struct PathTileInfo {
-            tile_bounds: RectI,
-            tile_start_index: u32,
-            pad0: u32,
-            pad1: u32,
-            pad2: u32,
-        }
     }
 
     fn add_fills(&mut self, fill_batch: &[Fill]) {
@@ -1115,6 +1100,14 @@ impl<D> Renderer<D> where D: Device {
             PrepareTilesModalInfo::GPU(ref gpu_info) => {
                 let propagate_metadata_storage_id =
                     self.upload_propagate_data(&gpu_info.propagate_metadata, &gpu_info.backdrops);
+
+                // Bin if requested.
+                if let Some(ref segments) = gpu_info.segments {
+                    self.bin_segments(segments,
+                                      propagate_metadata_storage_id,
+                                      tile_vertex_storage_id)
+                }
+
                 self.propagate_tiles(gpu_info.propagate_metadata.len() as u32,
                                      tile_vertex_storage_id,
                                      propagate_metadata_storage_id,
@@ -1902,11 +1895,7 @@ impl<D> Frame<D> where D: Device {
                                       BufferData::Uninitialized(z_buffer_length),
                                       BufferTarget::Storage);
 
-        let bin_path_tile_info_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-        let bin_metadata_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-        let bin_fills_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-        let bin_alpha_tiles_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-        let bin_alpha_tile_map_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let fill_indirect_draw_params_buffer = device.create_buffer(BufferUploadMode::Dynamic);
 
         Frame {
             blit_vertex_array,
@@ -1929,14 +1918,10 @@ impl<D> Frame<D> where D: Device {
             allocated_alpha_tile_page_count: 0,
             tile_batch_info: VecMap::new(),
             mask_framebuffer: None,
-            bin_path_tile_info_buffer,
-            bin_metadata_buffer,
-            bin_fills_buffer,
-            bin_alpha_tiles_buffer,
-            bin_alpha_tile_map_buffer,
             intermediate_dest_framebuffer,
             dest_blend_framebuffer,
             backdrops_buffer,
+            fill_indirect_draw_params_buffer,
             z_buffer_framebuffer,
             z_buffer,
             framebuffer_flags: FramebufferFlags::empty(),
@@ -2146,6 +2131,7 @@ struct TimerQueryCache<D> where D: Device {
 }
 
 struct PendingTimer<D> where D: Device {
+    bin_times: Vec<TimerFuture<D>>,
     fill_times: Vec<TimerFuture<D>>,
     propagate_times: Vec<TimerFuture<D>>,
     tile_times: Vec<TimerFuture<D>>,
@@ -2172,13 +2158,19 @@ impl<D> TimerQueryCache<D> where D: Device {
 
 impl<D> PendingTimer<D> where D: Device {
     fn new() -> PendingTimer<D> {
-        PendingTimer { fill_times: vec![], propagate_times: vec![], tile_times: vec![] }
+        PendingTimer {
+            bin_times: vec![],
+            fill_times: vec![],
+            propagate_times: vec![],
+            tile_times: vec![],
+        }
     }
 
     fn poll(&mut self, device: &D) -> Vec<D::TimerQuery> {
         let mut old_queries = vec![];
-        for future in self.fill_times.iter_mut().chain(self.propagate_times.iter_mut())
-                                                .chain(self.tile_times.iter_mut()) {
+        for future in self.bin_times.iter_mut().chain(self.fill_times.iter_mut())
+                                               .chain(self.propagate_times.iter_mut())
+                                               .chain(self.tile_times.iter_mut()) {
             if let Some(old_query) = future.poll(device) {
                 old_queries.push(old_query)
             }
@@ -2187,12 +2179,13 @@ impl<D> PendingTimer<D> where D: Device {
     }
 
     fn total_time(&self) -> Option<RenderTime> {
+        let bin_time = total_time_of_timer_futures(&self.bin_times);
         let fill_time = total_time_of_timer_futures(&self.fill_times);
         let propagate_time = total_time_of_timer_futures(&self.propagate_times);
         let tile_time = total_time_of_timer_futures(&self.tile_times);
-        match (fill_time, propagate_time, tile_time) {
-            (Some(fill_time), Some(propagate_time), Some(tile_time)) => {
-                Some(RenderTime { fill_time, propagate_time, tile_time })
+        match (bin_time, fill_time, propagate_time, tile_time) {
+            (Some(bin_time), Some(fill_time), Some(propagate_time), Some(tile_time)) => {
+                Some(RenderTime { bin_time, fill_time, propagate_time, tile_time })
             }
             _ => None,
         }
@@ -2234,6 +2227,7 @@ fn total_time_of_timer_futures<D>(futures: &[TimerFuture<D>]) -> Option<Duration
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderTime {
+    pub bin_time: Duration,
     pub fill_time: Duration,
     pub propagate_time: Duration,
     pub tile_time: Duration,
@@ -2243,6 +2237,7 @@ impl Default for RenderTime {
     #[inline]
     fn default() -> RenderTime {
         RenderTime {
+            bin_time: Duration::new(0, 0),
             fill_time: Duration::new(0, 0),
             propagate_time: Duration::new(0, 0),
             tile_time: Duration::new(0, 0),
@@ -2256,6 +2251,7 @@ impl Add<RenderTime> for RenderTime {
     #[inline]
     fn add(self, other: RenderTime) -> RenderTime {
         RenderTime {
+            bin_time: self.bin_time + other.bin_time,
             fill_time: self.fill_time + other.fill_time,
             propagate_time: self.propagate_time + other.propagate_time,
             tile_time: self.tile_time + other.tile_time,
@@ -2270,6 +2266,7 @@ impl Div<usize> for RenderTime {
     fn div(self, divisor: usize) -> RenderTime {
         let divisor = divisor as u32;
         RenderTime {
+            bin_time: self.bin_time / divisor,
             fill_time: self.fill_time / divisor,
             propagate_time: self.propagate_time / divisor,
             tile_time: self.tile_time / divisor,

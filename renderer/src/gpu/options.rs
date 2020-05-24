@@ -37,6 +37,12 @@ bitflags! {
         /// There is usually little performance difference between the CPU and GPU here, but this
         /// flag is necessary for GPU tiling.
         const PREPARE_TILES_ON_GPU = 0x02;
+
+        /// Perform tile assignment/binning on GPU, using Shader Storage Buffer Objects on
+        /// DX11-class hardware.
+        /// 
+        /// If this flag is not set, or the hardware is not DX11-class, these are done on CPU.
+        const BIN_ON_GPU = 0x04;
     }
 }
 

@@ -64,12 +64,6 @@ pub enum RenderCommand {
     // Upload texture metadata.
     UploadTextureMetadata(Vec<TextureMetadataEntry>),
 
-    // Bin paths into tiles.
-    BinPaths {
-        segments: Vec<LineSegment2F>,
-        path_tile_bounds: Vec<RectI>,
-    },
-
     // Adds fills to the queue.
     AddFills(Vec<Fill>),
 
@@ -158,6 +152,9 @@ pub struct PrepareTilesGPUInfo {
     /// 
     /// This contains indices into the `tiles` and `backdrops` vectors.
     pub propagate_metadata: Vec<PropagateMetadata>,
+
+    /// All line segments, if binning is being done on GPU.
+    pub segments: Option<Vec<BinSegment>>,
 }
 
 /// Information about clips applied to paths in a batch.
@@ -299,6 +296,14 @@ impl Default for Clip {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct BinSegment {
+    pub segment: LineSegment2F,
+    pub path_index: PathIndex,
+    pub pad: u32,
+}
+
 /*
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
@@ -363,9 +368,6 @@ impl Debug for RenderCommand {
             }
             RenderCommand::UploadTextureMetadata(ref metadata) => {
                 write!(formatter, "UploadTextureMetadata(x{})", metadata.len())
-            }
-            RenderCommand::BinPaths { ref segments, ref path_tile_bounds } => {
-                write!(formatter, "BinPaths(Sx{}, Tx{})", segments.len(), path_tile_bounds.len())
             }
             RenderCommand::AddFills(ref fills) => {
                 write!(formatter, "AddFills(x{})", fills.len())

@@ -13,7 +13,7 @@
 use crate::concurrent::executor::Executor;
 use crate::gpu::options::{RendererGPUFeatures, RendererOptions};
 use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
-use crate::gpu_data::{AlphaTileId, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, ClippedPathInfo, DrawTileBatch, Fill};
+use crate::gpu_data::{AlphaTileId, BinSegment, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, ClippedPathInfo, DrawTileBatch, Fill};
 use crate::gpu_data::{PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
 use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatchId};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
@@ -28,7 +28,7 @@ use fxhash::FxHashMap;
 use instant::Instant;
 use pathfinder_content::effects::{BlendMode, Filter};
 use pathfinder_content::fill::FillRule;
-use pathfinder_content::outline::ContourIterFlags;
+use pathfinder_content::outline::{ContourIterFlags, Outline};
 use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_content::segment::Segment;
 use pathfinder_geometry::line_segment::{LineSegment2F, LineSegmentU16};
@@ -80,6 +80,8 @@ pub(crate) struct BuiltPath {
     */
     pub tiles: DenseTileMap<TileObjectPrimitive>,
     pub clip_tiles: Option<DenseTileMap<Clip>>,
+    /// FIXME(pcwalton): Only if GPU filling is enabled?
+    pub segments: Vec<LineSegment2F>,
     /// During tiling, or if backdrop computation is done on GPU, this stores the sum of backdrops
     /// for tile columns above the viewport.
     pub backdrops: Vec<i32>,
@@ -166,41 +168,6 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                 built_clip_paths: &built_clip_paths,
             })
         });
-
-        let (mut segments, mut path_tile_bounds) = (vec![], vec![]);
-        for path_index in 0..draw_path_count {
-            let path_object = &self.scene.paths[path_index];
-            let outline = self.scene.apply_render_options(path_object.outline(),
-                                                          &self.built_options);
-
-            path_tile_bounds.push(tiles::round_rect_out_to_tile_bounds(outline.bounds()));
-
-            for contour in outline.contours() {
-                for segment in contour.iter(ContourIterFlags::empty()) {
-                    flatten_segment(&mut segments, &segment);
-                }
-            }
-
-            fn flatten_segment(segments: &mut Vec<LineSegment2F>, segment: &Segment) {
-                // TODO(pcwalton): Stop degree elevating.
-                if segment.is_quadratic() {
-                    let cubic = segment.to_cubic();
-                    return flatten_segment(segments, &cubic);
-                }
-
-                if segment.is_line() ||
-                        (segment.is_cubic() && segment.as_cubic_segment().is_flat(0.25)) {
-                    segments.push(segment.baseline);
-                    return;
-                }
-
-                // TODO(pcwalton): Use a smarter flattening algorithm.
-                let (prev, next) = segment.split(0.5);
-                flatten_segment(segments, &prev);
-                flatten_segment(segments, &next);
-            }
-        }
-        self.listener.send(RenderCommand::BinPaths { segments, path_tile_bounds });
 
         self.finish_building(&paint_metadata, built_draw_paths, built_clip_paths);
 
@@ -428,6 +395,7 @@ impl BuiltPath {
            path_bounds: RectF,
            view_box_bounds: RectF,
            fill_rule: FillRule,
+           segments: Vec<LineSegment2F>,
            tiling_path_info: &TilingPathInfo)
            -> BuiltPath {
         let occludes = match *tiling_path_info {
@@ -495,6 +463,7 @@ impl BuiltPath {
             */
             backdrops: vec![0; tiles.rect.width() as usize],
             occluders: if occludes { Some(vec![]) } else { None },
+            segments,
             tiles,
             clip_tiles,
             fill_rule,
@@ -522,12 +491,14 @@ impl ObjectBuilder {
                       path_bounds: RectF,
                       view_box_bounds: RectF,
                       fill_rule: FillRule,
+                      segments: Vec<LineSegment2F>,
                       tiling_path_info: &TilingPathInfo)
                       -> ObjectBuilder {
         let built_path = BuiltPath::new(path_id,
                                         path_bounds,
                                         view_box_bounds,
                                         fill_rule,
+                                        segments,
                                         tiling_path_info);
         ObjectBuilder { built_path, bounds: path_bounds, fills: vec![] }
     }
@@ -742,6 +713,11 @@ impl PrepareTilesBatch {
                 PrepareTilesModalInfo::GPU(PrepareTilesGPUInfo {
                     backdrops: vec![],
                     propagate_metadata: vec![],
+                    segments: if gpu_features.contains(RendererGPUFeatures::BIN_ON_GPU) {
+                        Some(vec![])
+                    } else {
+                        None
+                    },
                 })
             } else {
                 PrepareTilesModalInfo::CPU(PrepareTilesCPUInfo {
@@ -775,6 +751,7 @@ impl PrepareTilesBatch {
             }
             PrepareTilesModalInfo::CPU(_) => {}
             PrepareTilesModalInfo::GPU(ref mut gpu_info) => {
+                let path_index = PathIndex(gpu_info.propagate_metadata.len() as u32);
                 gpu_info.propagate_metadata.push(PropagateMetadata {
                     tile_rect: path.tiles.rect,
                     tile_offset: self.tiles.len() as u32,
@@ -783,6 +760,11 @@ impl PrepareTilesBatch {
                     clip_path: clip_path_id.unwrap_or(PathIndex(!0)),
                 });
                 gpu_info.backdrops.extend_from_slice(&path.backdrops);
+                if let Some(ref mut bin_segments) = gpu_info.segments {
+                    for &segment in &path.segments {
+                        bin_segments.push(BinSegment { segment, path_index, pad: 0 });
+                    }
+                }
             }
         }
 
