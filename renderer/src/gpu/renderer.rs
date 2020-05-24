@@ -30,7 +30,7 @@ use pathfinder_content::effects::{BlendMode, BlurDirection, DefringingKernel};
 use pathfinder_content::effects::{Filter, PatternFilter};
 use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_geometry::line_segment::LineSegment2F;
-use pathfinder_geometry::rect::RectI;
+use pathfinder_geometry::rect::{RectF, RectI};
 use pathfinder_geometry::transform3d::Transform4F;
 use pathfinder_geometry::util;
 use pathfinder_geometry::vector::{Vector2F, Vector2I, Vector4F, vec2f, vec2i};
@@ -473,10 +473,48 @@ impl<D> Renderer<D> where D: Device {
         let new_size = vec2i(MASK_FRAMEBUFFER_WIDTH,
                              MASK_FRAMEBUFFER_HEIGHT * alpha_tile_pages_needed as i32);
         let mask_texture = self.device.create_texture(TextureFormat::RGBA16F, new_size);
-        self.back_frame.mask_framebuffer = Some(self.device.create_framebuffer(mask_texture));
+        let old_mask_framebuffer =
+            mem::replace(&mut self.back_frame.mask_framebuffer,
+                         Some(self.device.create_framebuffer(mask_texture)));
         self.back_frame.allocated_alpha_tile_page_count = alpha_tile_pages_needed;
 
-        // TODO(pcwalton): Copy over existing content if needed!
+        // Copy over existing content if needed.
+        let old_mask_framebuffer = match old_mask_framebuffer {
+            Some(old_mask_framebuffer) if copy_existing => old_mask_framebuffer,
+            Some(_) | None => return,
+        };
+        let old_mask_texture = self.device.framebuffer_texture(&old_mask_framebuffer);
+        let old_size = self.device.texture_size(old_mask_texture);
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        self.device.draw_elements(6, &RenderState {
+            target: &RenderTarget::Framebuffer(self.back_frame.mask_framebuffer.as_ref().unwrap()),
+            program: &self.blit_program.program,
+            vertex_array: &self.back_frame.blit_vertex_array.vertex_array,
+            primitive: Primitive::Triangles,
+            textures: &[(&self.blit_program.src_texture, old_mask_texture)],
+            images: &[],
+            storage_buffers: &[],
+            uniforms: &[
+                (&self.blit_program.framebuffer_size_uniform,
+                 UniformData::Vec2(new_size.to_f32().0)),
+                (&self.blit_program.dest_rect_uniform,
+                 UniformData::Vec4(RectF::new(Vector2F::zero(), old_size.to_f32()).0)),
+            ],
+            viewport: RectI::new(Vector2I::default(), new_size),
+            options: RenderOptions {
+                clear_ops: ClearOps {
+                    color: Some(ColorF::new(0.0, 0.0, 0.0, 1.0)),
+                    ..ClearOps::default()
+                },
+                ..RenderOptions::default()
+            },
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
     }
 
     fn allocate_texture_page(&mut self,
@@ -936,77 +974,16 @@ impl<D> Renderer<D> where D: Device {
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().tile_times.push(TimerFuture::new(timer_query));
-
-        /*
-
-        self.device.allocate_buffer(&self.back_frame.tile_clip_vertex_array.vertex_buffer,
-                                    BufferData::Memory(&batch.clips),
-                                    BufferTarget::Vertex);
-
-        if !self.back_frame.alpha_tile_pages.contains_key(&dest_page) {
-            let alpha_tile_page = AlphaTilePage::new(&mut self.device);
-            self.back_frame.alpha_tile_pages.insert(dest_page, alpha_tile_page);
-        }
-
-        let mut clear_color = None;
-        if !self.back_frame.alpha_tile_pages[&dest_page].framebuffer_is_dirty {
-            clear_color = Some(ColorF::default());
-        };
-
-        let blend = match kind {
-            ClipBatchKind::Draw => None,
-            ClipBatchKind::Clip => {
-                Some(BlendState {
-                    src_rgb_factor: BlendFactor::One,
-                    src_alpha_factor: BlendFactor::One,
-                    dest_rgb_factor: BlendFactor::One,
-                    dest_alpha_factor: BlendFactor::One,
-                    op: BlendOp::Min,
-                })
-            }
-        };
-
-        let mask_viewport = self.mask_viewport();
-
-        let timer_query = self.timer_query_cache.alloc(&self.device);
-        self.device.begin_timer_query(&timer_query);
-
-        {
-            let dest_framebuffer = &self.back_frame.alpha_tile_pages[&dest_page].framebuffer;
-            let src_framebuffer = &self.back_frame.alpha_tile_pages[&src_page].framebuffer;
-            let src_texture = self.device.framebuffer_texture(&src_framebuffer);
-
-            debug_assert!(batch.clips.len() <= u32::MAX as usize);
-            self.device.draw_elements_instanced(6, batch.clips.len() as u32, &RenderState {
-                target: &RenderTarget::Framebuffer(dest_framebuffer),
-                program: &self.tile_clip_program.program,
-                vertex_array: &self.back_frame.tile_clip_vertex_array.vertex_array,
-                primitive: Primitive::Triangles,
-                textures: &[(&self.tile_clip_program.src_texture, src_texture)],
-                images: &[],
-                uniforms: &[],
-                viewport: mask_viewport,
-                options: RenderOptions {
-                    blend,
-                    clear_ops: ClearOps { color: clear_color, ..ClearOps::default() },
-                    ..RenderOptions::default()
-                },
-            });
-
-            self.device.end_timer_query(&timer_query);
-            self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
-        }
-
-        self.back_frame.framebuffer_flags.insert(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY);
-        */
     }
 
     // Computes backdrops, performs clipping, and populates Z buffers.
     fn prepare_tiles(&mut self, batch: &PrepareTilesBatch) {
+        // Upload tiles to GPU.
         let count = batch.tiles.len();
         self.stats.alpha_tile_count += count;
         let tile_vertex_storage_id = self.upload_tiles(&batch.tiles);
 
+        // Fetch and/or allocate clip storage as needed.
         let clip_storage_ids = match batch.clipped_path_info {
             Some(ref clipped_path_info) => {
                 let clip_batch_id = clipped_path_info.clip_batch_id;
@@ -1051,27 +1028,6 @@ impl<D> Renderer<D> where D: Device {
         // Perform clipping if necessary.
         if let (Some(clip_storage_ids), Some(clipped_path_info)) =
                 (clip_storage_ids.as_ref(), batch.clipped_path_info.as_ref()) {
-            /*
-            let clip_storage_id =
-                self.allocate_clip_storage(clipped_path_info.max_clipped_tile_count);
-            match propagate_metadata_storage_id {
-                Some(propagate_metadata_storage_id) => {
-                    // GPU path.
-                    self.prepare_clip_tiles(tile_vertex_storage_id,
-                                            clip_storage_id,
-                                            propagate_metadata_storage_id,
-                                            clipped_path_info.clip_batch_id,
-                                            &clipped_path_info.clipped_paths,
-                                            clipped_path_info.max_clipped_tile_count)
-                }
-                None => {
-                    // CPU path.
-                    let clips = clipped_path_info.clips.as_ref().expect("Where are the clips?");
-                    self.upload_clip_tiles(clip_storage_id, clips);
-                }
-            }
-            */
-
             // Upload clip tiles to GPU if they were computed on CPU.
             if clip_storage_ids.metadata.is_none() {
                 let clips = clipped_path_info.clips.as_ref().expect("Where are the clips?");
@@ -1213,94 +1169,6 @@ impl<D> Renderer<D> where D: Device {
                                    quad_vertex_indices_buffer)
         })
     }
-
-    /*
-    fn prepare_clip_tiles(&mut self,
-                          tile_storage_id: StorageID,
-                          clip_storage_id: StorageID,
-                          tile_propagate_metadata_storage_id: StorageID,
-                          clip_batch_id: TileBatchId,
-                          clipped_paths: &[PathIndex],
-                          max_clipped_tile_count: u32) {
-        let generate_clip_program = &self.tile_post_programs
-                                         .as_ref()
-                                         .expect("GPU tile postprocessing is disabled!")
-                                         .generate_clip_program;
-
-        let clip_tile_batch_info = self.back_frame.tile_batch_info[clip_batch_id.0 as usize];
-        let clip_propagate_metadata_storage_id =
-            clip_tile_batch_info.propagate_metadata_storage_id
-                                .expect("Where's the propagate metadata?");
-        let clip_tile_vertex_storage_id = clip_tile_batch_info.tile_vertex_storage_id;
-
-        let tile_propagate_metadata_buffer = self.back_frame
-                                                 .tile_propagate_metadata_storage_allocator
-                                                 .get(tile_propagate_metadata_storage_id);
-        let clip_propagate_metadata_buffer = self.back_frame
-                                                 .tile_propagate_metadata_storage_allocator
-                                                 .get(clip_propagate_metadata_storage_id);
-
-        // Allocate paths.
-        // FIXME(pcwalton): Reuse buffers.
-        let clipped_path_indices_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
-        self.device.allocate_buffer::<PathIndex>(&clipped_path_indices_buffer,
-                                                 BufferData::Memory(clipped_paths),
-                                                 BufferTarget::Storage);
-        //println!("clipped path indices={:?}", clipped_paths);
-
-        let alpha_tile_buffer = &self.back_frame
-                                     .tile_vertex_storage_allocator
-                                     .get(tile_storage_id)
-                                     .vertex_buffer;
-        let clip_tile_buffer = &self.back_frame
-                                    .tile_vertex_storage_allocator
-                                    .get(clip_tile_vertex_storage_id)
-                                    .vertex_buffer;
-
-        let clip_vertex_storage = self.back_frame
-                                      .clip_vertex_storage_allocator
-                                      .get(clip_storage_id);
-
-        let initial_clip_vertex_buffer = vec![Clip::default(); max_clipped_tile_count as usize];
-        self.device.upload_to_buffer(&clip_vertex_storage.vertex_buffer,
-                                     0,
-                                     &initial_clip_vertex_buffer,
-                                     BufferTarget::Vertex);
-
-        let timer_query = self.timer_query_cache.alloc(&self.device);
-        self.device.begin_timer_query(&timer_query);
-
-        let viewport_size = self.main_viewport().size();
-        let dimensions = viewport_size + Vector2I::splat(255);
-        let dimensions = ComputeDimensions {
-            x: dimensions.x() as u32 / 256,
-            y: dimensions.y() as u32 / 256,
-            z: clipped_paths.len() as u32,
-        };
-
-        self.device.dispatch_compute(dimensions, &ComputeState {
-            program: &generate_clip_program.program,
-            textures: &[],
-            images: &[],
-            uniforms: &[],
-            storage_buffers: &[
-                (&generate_clip_program.clipped_path_indices_storage_buffer,
-                 &clipped_path_indices_buffer),
-                (&generate_clip_program.draw_propagate_metadata_storage_buffer,
-                 tile_propagate_metadata_buffer),
-                (&generate_clip_program.clip_propagate_metadata_storage_buffer,
-                 clip_propagate_metadata_buffer),
-                (&generate_clip_program.draw_tiles_storage_buffer, alpha_tile_buffer),
-                (&generate_clip_program.clip_tiles_storage_buffer, clip_tile_buffer),
-                (&generate_clip_program.clip_vertex_storage_buffer,
-                 &clip_vertex_storage.vertex_buffer),
-            ],
-        });
-
-        self.device.end_timer_query(&timer_query);
-        self.current_timer.as_mut().unwrap().propagate_times.push(TimerFuture::new(timer_query));
-    }
-    */
 
     // Uploads clip tiles from CPU to GPU.
     fn upload_clip_tiles(&mut self, clip_vertex_storage_id: StorageID, clips: &[Clip]) {
@@ -1732,7 +1600,12 @@ impl<D> Renderer<D> where D: Device {
             textures: &textures[..],
             images: &[],
             storage_buffers: &[],
-            uniforms: &[],
+            uniforms: &[
+                (&self.blit_program.framebuffer_size_uniform,
+                 UniformData::Vec2(main_viewport.size().to_f32().0)),
+                (&self.blit_program.dest_rect_uniform,
+                 UniformData::Vec4(RectF::new(Vector2F::zero(), main_viewport.size().to_f32()).0)),
+            ],
             viewport: main_viewport,
             options: RenderOptions {
                 clear_ops: ClearOps {

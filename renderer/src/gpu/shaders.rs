@@ -409,14 +409,18 @@ impl<D> ClipTileCombineVertexArray<D> where D: Device {
 
 pub struct BlitProgram<D> where D: Device {
     pub program: D::Program,
+    pub dest_rect_uniform: D::Uniform,
+    pub framebuffer_size_uniform: D::Uniform,
     pub src_texture: D::TextureParameter,
 }
 
 impl<D> BlitProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> BlitProgram<D> {
         let program = device.create_raster_program(resources, "blit");
+        let dest_rect_uniform = device.get_uniform(&program, "DestRect");
+        let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
         let src_texture = device.get_texture_parameter(&program, "Src");
-        BlitProgram { program, src_texture }
+        BlitProgram { program, dest_rect_uniform, framebuffer_size_uniform, src_texture }
     }
 }
 
