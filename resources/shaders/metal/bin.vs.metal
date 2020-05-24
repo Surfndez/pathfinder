@@ -23,12 +23,14 @@ struct main0_in
 vertex main0_out main0(main0_in in [[stage_in]], constant int2& uFramebufferSize [[buffer(0)]])
 {
     main0_out out = {};
-    float2 vector = normalize(in.aTo - in.aFrom);
+    float2 from = in.aFrom / float2(16.0);
+    float2 to = in.aTo / float2(16.0);
+    float2 vector = normalize(to - from);
     float2 normal = float2(-vector.y, vector.x);
     float2 tessCoord = float2(in.aTessCoord);
-    float2 tilePosition = mix((in.aFrom / float2(16.0)) - vector, (in.aTo / float2(16.0)) + vector, float2(tessCoord.y)) + mix(-normal, normal, float2(tessCoord.x));
-    out.vFrom = in.aFrom / float2(16.0);
-    out.vTo = in.aTo / float2(16.0);
+    float2 tilePosition = mix(from - vector, to + vector, float2(tessCoord.y)) + mix(-normal, normal, float2(tessCoord.x));
+    out.vFrom = from;
+    out.vTo = to;
     out.vPathIndex = uint(in.aPathIndex);
     out.gl_Position = float4(mix(float2(-1.0), float2(1.0), tilePosition / float2(uFramebufferSize)), 0.0, 1.0);
     return out;

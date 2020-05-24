@@ -24,6 +24,8 @@ precision highp float;
 
 
 
+uniform ivec2 uFramebufferSize;
+
 layout(std430, binding = 0)buffer bMetadata {
     restrict readonly ivec4 iMetadata[];
 };
@@ -57,11 +59,11 @@ uint computeOutcode(vec2 p, vec4 rect){
     uint code = 0x0u;
     if(p . x < rect . x)
         code |= 0x1u;
-    if(p . x > rect . z)
+    else if(p . x > rect . z)
         code |= 0x2u;
     if(p . y < rect . y)
         code |= 0x8u;
-    if(p . y > rect . w)
+    else if(p . y > rect . w)
         code |= 0x4u;
     return code;
 }
@@ -87,7 +89,7 @@ bool clipLine(vec4 line, vec4 rect, out vec4 outLine){
         else if((outcode & 0x1u)!= 0u)
             p = vec2(rect . x, mix(line . y, line . w,(rect . x - line . x)/(line . z - line . x)));
         else if((outcode & 0x2u)!= 0u)
-            p = vec2(rect . x, mix(line . y, line . w,(rect . z - line . x)/(line . z - line . x)));
+            p = vec2(rect . z, mix(line . y, line . w,(rect . z - line . x)/(line . z - line . x)));
 
         if(outcode == outcodes . x){
             line . xy = p;
@@ -100,8 +102,13 @@ bool clipLine(vec4 line, vec4 rect, out vec4 outLine){
 }
 
 void main(){
-    ivec2 tileCoord = ivec2(gl_FragCoord . xy);
-    vec4 tileRect = gl_FragCoord . xyxy + vec4(vec2(- 0.5), vec2(0.5));
+    vec2 fragCoord = gl_FragCoord . xy;
+
+
+
+
+    ivec2 tileCoord = ivec2(fragCoord);
+    vec4 tileRect = fragCoord . xyxy + vec4(vec2(- 0.5), vec2(0.5));
     vec4 line;
     bool inBounds = clipLine(vec4(vFrom, vTo), tileRect, line);
 
@@ -135,7 +142,7 @@ void main(){
 
         iFills[fillIndex * 3 + 0]= scaledLocalLine . x |(scaledLocalLine . y << 16);
         iFills[fillIndex * 3 + 1]= scaledLocalLine . z |(scaledLocalLine . w << 16);
-        iFills[fillIndex * 3 + 2]= vPathIndex;
+        iFills[fillIndex * 3 + 2]= alphaTileIndex;
     }
 
 

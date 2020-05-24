@@ -22,6 +22,8 @@ precision highp sampler2D;
 #define OUTCODE_BOTTOM  0x4u
 #define OUTCODE_TOP     0x8u
 
+uniform ivec2 uFramebufferSize;
+
 layout(std430, binding = 0) buffer bMetadata {
     restrict readonly ivec4 iMetadata[];
 };
@@ -55,11 +57,11 @@ uint computeOutcode(vec2 p, vec4 rect) {
     uint code = OUTCODE_NONE;
     if (p.x < rect.x)
         code |= OUTCODE_LEFT;
-    if (p.x > rect.z)
+    else if (p.x > rect.z)
         code |= OUTCODE_RIGHT;
     if (p.y < rect.y)
         code |= OUTCODE_TOP;
-    if (p.y > rect.w)
+    else if (p.y > rect.w)
         code |= OUTCODE_BOTTOM;
     return code;
 }
@@ -85,7 +87,7 @@ bool clipLine(vec4 line, vec4 rect, out vec4 outLine) {
         else if ((outcode & OUTCODE_LEFT) != 0u)
             p = vec2(rect.x, mix(line.y, line.w, (rect.x - line.x) / (line.z - line.x)));
         else if ((outcode & OUTCODE_RIGHT) != 0u)
-            p = vec2(rect.x, mix(line.y, line.w, (rect.z - line.x) / (line.z - line.x)));
+            p = vec2(rect.z, mix(line.y, line.w, (rect.z - line.x) / (line.z - line.x)));
 
         if (outcode == outcodes.x) {
             line.xy = p;
@@ -98,8 +100,13 @@ bool clipLine(vec4 line, vec4 rect, out vec4 outLine) {
 }
 
 void main() {
-    ivec2 tileCoord = ivec2(gl_FragCoord.xy);
-    vec4 tileRect = gl_FragCoord.xyxy + vec4(vec2(-0.5), vec2(0.5));
+    vec2 fragCoord = gl_FragCoord.xy;
+#ifdef PF_ORIGIN_UPPER_LEFT
+    fragCoord.y = float(uFramebufferSize.y) - fragCoord.y;
+#endif
+
+    ivec2 tileCoord = ivec2(fragCoord);
+    vec4 tileRect = fragCoord.xyxy + vec4(vec2(-0.5), vec2(0.5));
     vec4 line;
     bool inBounds = clipLine(vec4(vFrom, vTo), tileRect, line);
 
@@ -133,7 +140,7 @@ void main() {
         // Write fill.
         iFills[fillIndex * 3 + 0] = scaledLocalLine.x | (scaledLocalLine.y << 16);
         iFills[fillIndex * 3 + 1] = scaledLocalLine.z | (scaledLocalLine.w << 16);
-        iFills[fillIndex * 3 + 2] = vPathIndex;
+        iFills[fillIndex * 3 + 2] = alphaTileIndex;
     }
 
     // FIXME(pcwalton): Don't bind a color attachment if not necessary!

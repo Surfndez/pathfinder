@@ -55,6 +55,7 @@ use pathfinder_gpu::{VertexAttrDescriptor, VertexAttrType};
 use pathfinder_resources::ResourceLoader;
 use pathfinder_simd::default::{F32x2, F32x4, I32x2};
 use std::cell::{Cell, RefCell};
+use std::convert::TryInto;
 use std::mem;
 use std::ops::Range;
 use std::ptr;
@@ -189,15 +190,24 @@ pub struct MetalTexture {
 pub struct MetalTextureDataReceiver(Arc<MetalTextureDataReceiverInfo>);
 
 struct MetalTextureDataReceiverInfo {
-    mutex: Mutex<MetalTextureDataReceiverState>,
+    mutex: Mutex<MetalDataReceiverState<TextureData>>,
     cond: Condvar,
     texture: Texture,
     viewport: RectI,
 }
 
-enum MetalTextureDataReceiverState {
+#[derive(Clone)]
+pub struct MetalBufferDataReceiver(Arc<MetalBufferDataReceiverInfo>);
+
+struct MetalBufferDataReceiverInfo {
+    mutex: Mutex<MetalDataReceiverState<Vec<u32>>>,
+    cond: Condvar,
+    buffer: Buffer,
+}
+
+enum MetalDataReceiverState<T> {
     Pending,
-    Downloaded(TextureData),
+    Downloaded(T),
     Finished,
 }
 
@@ -640,7 +650,7 @@ impl Device for MetalDevice {
         let texture = self.render_target_color_texture(target);
         let texture_data_receiver =
             MetalTextureDataReceiver(Arc::new(MetalTextureDataReceiverInfo {
-                mutex: Mutex::new(MetalTextureDataReceiverState::Pending),
+                mutex: Mutex::new(MetalDataReceiverState::Pending),
                 cond: Condvar::new(),
                 texture,
                 viewport,
@@ -657,8 +667,33 @@ impl Device for MetalDevice {
 
     fn read_buffer(&self, buffer: &MetalBuffer, _: BufferTarget, range: Range<usize>)
                    -> Vec<u32> {
-        // TODO(pcwalton)
-        vec![]
+        let buffer_data_receiver;
+        {
+            let buffer = buffer.buffer.borrow();
+            let buffer = buffer.as_ref().unwrap();
+
+            buffer_data_receiver = MetalBufferDataReceiver(Arc::new(MetalBufferDataReceiverInfo {
+                mutex: Mutex::new(MetalDataReceiverState::Pending),
+                cond: Condvar::new(),
+                buffer: (*buffer).clone(),
+            }));
+
+            let buffer_data_receiver_for_block = buffer_data_receiver.clone();
+            let block = ConcreteBlock::new(move |_| buffer_data_receiver_for_block.download());
+
+            self.synchronize_buffer(buffer, block.copy());
+        }
+
+        // TODO(pcwalton): Expose this async interface!
+        let mut guard = buffer_data_receiver.0.mutex.lock().unwrap();
+
+        loop {
+            let buffer_data = try_recv_data_with_guard(&mut guard);
+            if let Some(buffer_data) = buffer_data {
+                return buffer_data
+            }
+            guard = buffer_data_receiver.0.cond.wait(guard).unwrap();
+        }
     }
 
     fn begin_commands(&self) {
@@ -832,13 +867,13 @@ impl Device for MetalDevice {
     }
 
     fn try_recv_texture_data(&self, receiver: &MetalTextureDataReceiver) -> Option<TextureData> {
-        try_recv_texture_data_with_guard(&mut receiver.0.mutex.lock().unwrap())
+        try_recv_data_with_guard(&mut receiver.0.mutex.lock().unwrap())
     }
 
     fn recv_texture_data(&self, receiver: &MetalTextureDataReceiver) -> TextureData {
         let mut guard = receiver.0.mutex.lock().unwrap();
         loop {
-            let texture_data = try_recv_texture_data_with_guard(&mut guard);
+            let texture_data = try_recv_data_with_guard(&mut guard);
             if let Some(texture_data) = texture_data {
                 return texture_data
             }
@@ -1640,12 +1675,28 @@ impl MetalDevice {
     }
 
     fn synchronize_texture(&self, texture: &Texture, block: RcBlock<(*mut Object,), ()>) {
-        let command_buffers = self.command_buffers.borrow();
-        let command_buffer = command_buffers.last().unwrap();
-        let encoder = command_buffer.new_blit_command_encoder();
-        encoder.synchronize_resource(&texture);
-        command_buffer.add_completed_handler(block);
-        encoder.end_encoding();
+        {
+            let command_buffers = self.command_buffers.borrow();
+            let command_buffer = command_buffers.last().unwrap();
+            let encoder = command_buffer.new_blit_command_encoder();
+            encoder.synchronize_resource(&texture);
+            command_buffer.add_completed_handler(block);
+            encoder.end_encoding();
+        }
+
+        self.end_commands();
+        self.begin_commands();
+    }
+
+    fn synchronize_buffer(&self, buffer: &Buffer, block: RcBlock<(*mut Object,), ()>) {
+        {
+            let command_buffers = self.command_buffers.borrow();
+            let command_buffer = command_buffers.last().unwrap();
+            let encoder = command_buffer.new_blit_command_encoder();
+            encoder.synchronize_resource(buffer);
+            command_buffer.add_completed_handler(block);
+            encoder.end_encoding();
+        }
 
         self.end_commands();
         self.begin_commands();
@@ -1977,21 +2028,34 @@ impl MetalTextureDataReceiver {
         };
 
         let mut guard = self.0.mutex.lock().unwrap();
-        *guard = MetalTextureDataReceiverState::Downloaded(texture_data);
+        *guard = MetalDataReceiverState::Downloaded(texture_data);
         self.0.cond.notify_all();
     }
 }
 
-fn try_recv_texture_data_with_guard(guard: &mut MutexGuard<MetalTextureDataReceiverState>)
-                                    -> Option<TextureData> {
+impl MetalBufferDataReceiver {
+    fn download(&self) {
+        // FIXME(pcwalton): Unconditionally casting to `u32` is pretty suspect.
+        let contents = self.0.buffer.contents() as *const u32;
+        let length = self.0.buffer.length() / 4;
+        unsafe {
+            let contents = slice::from_raw_parts(contents, length.try_into().unwrap()).to_vec();
+            let mut guard = self.0.mutex.lock().unwrap();
+            *guard = MetalDataReceiverState::Downloaded(contents);
+            self.0.cond.notify_all();
+        }
+    }
+}
+
+fn try_recv_data_with_guard<T>(guard: &mut MutexGuard<MetalDataReceiverState<T>>) -> Option<T> {
     match **guard {
-        MetalTextureDataReceiverState::Pending | MetalTextureDataReceiverState::Finished => {
+        MetalDataReceiverState::Pending | MetalDataReceiverState::Finished => {
             return None
         }
-        MetalTextureDataReceiverState::Downloaded(_) => {}
+        MetalDataReceiverState::Downloaded(_) => {}
     }
-    match mem::replace(&mut **guard, MetalTextureDataReceiverState::Finished) {
-        MetalTextureDataReceiverState::Downloaded(texture_data) => Some(texture_data),
+    match mem::replace(&mut **guard, MetalDataReceiverState::Finished) {
+        MetalDataReceiverState::Downloaded(texture_data) => Some(texture_data),
         _ => unreachable!(),
     }
 }

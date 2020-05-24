@@ -301,7 +301,9 @@ impl Default for Clip {
 pub struct BinSegment {
     pub segment: LineSegment2F,
     pub path_index: PathIndex,
-    pub pad: u32,
+    pub pad0: u32,
+    pub pad1: u32,
+    pub pad2: u32,
 }
 
 /*

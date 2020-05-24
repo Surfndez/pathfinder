@@ -28,7 +28,7 @@ struct bFills
     uint iFills[1];
 };
 
-constant bool _248 = {};
+constant bool _250 = {};
 
 struct main0_out
 {
@@ -50,17 +50,23 @@ uint computeOutcode(thread const float2& p, thread const float4& rect)
     {
         code |= 1u;
     }
-    if (p.x > rect.z)
+    else
     {
-        code |= 2u;
+        if (p.x > rect.z)
+        {
+            code |= 2u;
+        }
     }
     if (p.y < rect.y)
     {
         code |= 8u;
     }
-    if (p.y > rect.w)
+    else
     {
-        code |= 4u;
+        if (p.y > rect.w)
+        {
+            code |= 4u;
+        }
     }
     return code;
 }
@@ -107,7 +113,7 @@ bool clipLine(thread float4& line, thread const float4& rect, thread float4& out
                 {
                     if ((outcode & 2u) != 0u)
                     {
-                        p = float2(rect.x, mix(line.y, line.w, (rect.z - line.x) / (line.z - line.x)));
+                        p = float2(rect.z, mix(line.y, line.w, (rect.z - line.x) / (line.z - line.x)));
                     }
                 }
             }
@@ -129,47 +135,49 @@ bool clipLine(thread float4& line, thread const float4& rect, thread float4& out
     }
 }
 
-fragment main0_out main0(main0_in in [[stage_in]], const device bMetadata& _293 [[buffer(0)]], device bTiles& _336 [[buffer(1)]], device bIndirectDrawParams& _351 [[buffer(2)]], device bFills& _391 [[buffer(3)]], float4 gl_FragCoord [[position]])
+fragment main0_out main0(main0_in in [[stage_in]], constant int2& uFramebufferSize [[buffer(0)]], const device bMetadata& _307 [[buffer(1)]], device bTiles& _350 [[buffer(2)]], device bIndirectDrawParams& _365 [[buffer(3)]], device bFills& _405 [[buffer(4)]], float4 gl_FragCoord [[position]])
 {
     main0_out out = {};
-    int2 tileCoord = int2(gl_FragCoord.xy);
-    float4 tileRect = gl_FragCoord.xyxy + float4(-0.5, -0.5, 0.5, 0.5);
+    float2 fragCoord = gl_FragCoord.xy;
+    fragCoord.y = float(uFramebufferSize.y) - fragCoord.y;
+    int2 tileCoord = int2(fragCoord);
+    float4 tileRect = fragCoord.xyxy + float4(-0.5, -0.5, 0.5, 0.5);
     float4 param = float4(in.vFrom, in.vTo);
     float4 param_1 = tileRect;
     float4 param_2;
-    bool _282 = clipLine(param, param_1, param_2);
+    bool _296 = clipLine(param, param_1, param_2);
     float4 line = param_2;
-    bool inBounds = _282;
+    bool inBounds = _296;
     if (inBounds)
     {
-        int4 pathTileRect = _293.iMetadata[(in.vPathIndex * 2u) + 0u];
-        uint pathTileOffset = uint(_293.iMetadata[(in.vPathIndex * 2u) + 1u].x);
+        int4 pathTileRect = _307.iMetadata[(in.vPathIndex * 2u) + 0u];
+        uint pathTileOffset = uint(_307.iMetadata[(in.vPathIndex * 2u) + 1u].x);
         int2 tileOffset = tileCoord - pathTileRect.xy;
         uint tileIndex = pathTileOffset + uint((tileOffset.y * (pathTileRect.z - pathTileRect.x)) + tileOffset.x);
-        uint alphaTileIndex = _336.iTiles[(tileIndex * 4u) + 1u];
+        uint alphaTileIndex = _350.iTiles[(tileIndex * 4u) + 1u];
         if (alphaTileIndex == 0u)
         {
-            uint _354 = atomic_fetch_add_explicit((device atomic_uint*)&_351.iIndirectDrawParams[4], 1u, memory_order_relaxed);
-            uint trialAlphaTileIndex = _354;
-            uint _360;
+            uint _368 = atomic_fetch_add_explicit((device atomic_uint*)&_365.iIndirectDrawParams[4], 1u, memory_order_relaxed);
+            uint trialAlphaTileIndex = _368;
+            uint _374;
             do
             {
-                _360 = 0u;
-            } while (!atomic_compare_exchange_weak_explicit((device atomic_uint*)&_336.iTiles[(tileIndex * 4u) + 1u], &_360, trialAlphaTileIndex, memory_order_relaxed, memory_order_relaxed) && _360 == 0u);
-            alphaTileIndex = _360;
+                _374 = 0u;
+            } while (!atomic_compare_exchange_weak_explicit((device atomic_uint*)&_350.iTiles[(tileIndex * 4u) + 1u], &_374, trialAlphaTileIndex, memory_order_relaxed, memory_order_relaxed) && _374 == 0u);
+            alphaTileIndex = _374;
             if (alphaTileIndex == 0u)
             {
                 alphaTileIndex = trialAlphaTileIndex;
-                _336.iTiles[(tileIndex * 4u) + 1u] = alphaTileIndex;
+                _350.iTiles[(tileIndex * 4u) + 1u] = alphaTileIndex;
             }
         }
         float4 localLine = line - tileRect.xyxy;
         uint4 scaledLocalLine = uint4(localLine * float4(256.0));
-        uint _387 = atomic_fetch_add_explicit((device atomic_uint*)&_351.iIndirectDrawParams[1], 1u, memory_order_relaxed);
-        uint fillIndex = _387;
-        _391.iFills[(fillIndex * 3u) + 0u] = scaledLocalLine.x | (scaledLocalLine.y << uint(16));
-        _391.iFills[(fillIndex * 3u) + 1u] = scaledLocalLine.z | (scaledLocalLine.w << uint(16));
-        _391.iFills[(fillIndex * 3u) + 2u] = in.vPathIndex;
+        uint _401 = atomic_fetch_add_explicit((device atomic_uint*)&_365.iIndirectDrawParams[1], 1u, memory_order_relaxed);
+        uint fillIndex = _401;
+        _405.iFills[(fillIndex * 3u) + 0u] = scaledLocalLine.x | (scaledLocalLine.y << uint(16));
+        _405.iFills[(fillIndex * 3u) + 1u] = scaledLocalLine.z | (scaledLocalLine.w << uint(16));
+        _405.iFills[(fillIndex * 3u) + 2u] = alphaTileIndex;
     }
     out.oFragColor = float4(1.0, 0.0, 0.0, 1.0);
     return out;

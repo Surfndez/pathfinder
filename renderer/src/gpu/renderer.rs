@@ -704,6 +704,7 @@ impl<D> Renderer<D> where D: Device {
                     propagate_metadata_storage_id: StorageID,
                     tile_storage_id: StorageID) {
         // FIXME(pcwalton): Buffer reuse
+        println!("{}", ::std::mem::size_of::<BinSegment>());
         self.device.allocate_buffer(&self.back_frame.bin_vertex_array.vertex_buffer,
                                     BufferData::Memory(segments),
                                     BufferTarget::Vertex);
@@ -770,6 +771,18 @@ impl<D> Renderer<D> where D: Device {
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
+
+        self.device.end_commands();
+        self.device.begin_commands();
+
+        let indirect_draw_params =
+            self.device.read_buffer(&self.back_frame.fill_indirect_draw_params_buffer,
+                                    BufferTarget::Storage,
+                                    0..8);
+        println!("GPU binning: segments={} vertex_count={} instance_count={}",
+                 segments.len(),
+                 indirect_draw_params[0],
+                 indirect_draw_params[1]);
 
                                                       /*
         let metadata_buffer = self.device.read_buffer(&self.back_frame.bin_metadata_buffer,

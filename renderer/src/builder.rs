@@ -762,7 +762,13 @@ impl PrepareTilesBatch {
                 gpu_info.backdrops.extend_from_slice(&path.backdrops);
                 if let Some(ref mut bin_segments) = gpu_info.segments {
                     for &segment in &path.segments {
-                        bin_segments.push(BinSegment { segment, path_index, pad: 0 });
+                        bin_segments.push(BinSegment {
+                            segment,
+                            path_index,
+                            pad0: 0,
+                            pad1: 0,
+                            pad2: 0,
+                        });
                     }
                 }
             }
