@@ -11,7 +11,7 @@
 //! Implements the fast lattice-clipping algorithm from Nehab and Hoppe, "Random-Access Rendering
 //! of General Vector Graphics" 2006.
 
-use crate::builder::{ObjectBuilder, Occluder, SceneBuilder};
+use crate::builder::{BuiltPathData, ObjectBuilder, Occluder, SceneBuilder};
 use crate::gpu::options::RendererGPUFeatures;
 use crate::gpu_data::AlphaTileId;
 use crate::tile_map::DenseTileMap;
@@ -42,8 +42,15 @@ impl<'a, 'b> Tiler<'a, 'b> {
                       path_info: TilingPathInfo<'a>)
                       -> Tiler<'a, 'b> {
         let bounds = outline.bounds().intersection(view_box).unwrap_or(RectF::default());
-        // FIXME(pcwalton): Only if GPU binning is enabled.
-        let segments = create_segments(outline);
+
+        let segments = if scene_builder.listener
+                                       .gpu_features
+                                       .contains(RendererGPUFeatures::BIN_ON_GPU) {
+            Some(create_segments(outline))
+        } else {
+            None
+        };
+
         let object_builder = ObjectBuilder::new(path_id,
                                                 bounds,
                                                 view_box,
@@ -54,13 +61,21 @@ impl<'a, 'b> Tiler<'a, 'b> {
     }
 
     pub(crate) fn generate_tiles(&mut self) {
+        self.generate_fills_if_necessary();
+        self.prepare_tiles_if_necessary();
+    }
+
+    fn generate_fills_if_necessary(&mut self) {
+        // Don't do this here if the GPU will do it.
+        if self.scene_builder.listener.gpu_features.contains(RendererGPUFeatures::BIN_ON_GPU) {
+            return;
+        }
+
         for contour in self.outline.contours() {
             for segment in contour.iter(ContourIterFlags::empty()) {
                 process_segment(&segment, self.scene_builder, &mut self.object_builder);
             }
         }
-
-        self.prepare_tiles_if_necessary();
     }
 
     fn prepare_tiles_if_necessary(&mut self) {
@@ -79,6 +94,12 @@ impl<'a, 'b> Tiler<'a, 'b> {
         let clips = &mut self.object_builder.built_path.clip_tiles;
 
         // Propagate backdrops.
+        let backdrops = match self.object_builder.built_path.data {
+            BuiltPathData::Tiled(ref mut tiled_data) => &mut tiled_data.backdrops,
+            BuiltPathData::Untiled(_) => {
+                panic!("Can't prepare tiles on CPU if binning wasn't also done on CPU!")
+            }
+        };
         let tiles_across = self.object_builder.built_path.tiles.rect.width() as usize;
         for (draw_tile_index, draw_tile) in self.object_builder
                                                 .built_path
@@ -91,7 +112,7 @@ impl<'a, 'b> Tiler<'a, 'b> {
             let delta = draw_tile.backdrop as i32;
 
             let mut draw_alpha_tile_id = draw_tile.alpha_tile_id;
-            let mut draw_tile_backdrop = self.object_builder.built_path.backdrops[column] as i8;
+            let mut draw_tile_backdrop = backdrops[column] as i8;
 
             if let Some(built_clip_path) = built_clip_path {
                 match built_clip_path.tiles.get(tile_coords) {
@@ -136,7 +157,7 @@ impl<'a, 'b> Tiler<'a, 'b> {
             draw_tile.alpha_tile_id = draw_alpha_tile_id;
             draw_tile.backdrop = draw_tile_backdrop;
 
-            self.object_builder.built_path.backdrops[column] += delta;
+            backdrops[column] += delta;
         }
 
         /*

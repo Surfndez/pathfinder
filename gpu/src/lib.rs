@@ -111,6 +111,8 @@ pub trait Device: Sized {
     fn create_timer_query(&self) -> Self::TimerQuery;
     fn begin_timer_query(&self, query: &Self::TimerQuery);
     fn end_timer_query(&self, query: &Self::TimerQuery);
+    fn push_debug_group(&self, name: &str);
+    fn pop_debug_group(&self);
     fn try_recv_timer_query(&self, query: &Self::TimerQuery) -> Option<Duration>;
     fn recv_timer_query(&self, query: &Self::TimerQuery) -> Duration;
     fn try_recv_texture_data(&self, receiver: &Self::TextureDataReceiver) -> Option<TextureData>;

@@ -32,7 +32,7 @@ flat out uint vPathIndex;
 void main(){
     vec2 from = aFrom / vec2(16.0), to = aTo / vec2(16.0);
 
-    vec2 vector = normalize(to - from);
+    vec2 vector = normalize(to - from)* vec2(0.5);
     vec2 normal = vec2(- vector . y, vector . x);
     vec2 tessCoord = vec2(aTessCoord);
     vec2 tilePosition = mix(from - vector, to + vector, tessCoord . y)+

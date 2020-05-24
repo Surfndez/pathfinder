@@ -119,20 +119,14 @@ void main() {
             uint(tileOffset.y * (pathTileRect.z - pathTileRect.x) + tileOffset.x);
 
         // Allocate an alpha tile if necessary.
-        // FIXME(pcwalton): Should I use `atomicAdd(..., 0)` instead?
-        uint alphaTileIndex = iTiles[tileIndex * 4 + 1];
-        if (alphaTileIndex == 0) {
-            uint trialAlphaTileIndex = atomicAdd(iIndirectDrawParams[4], 1);
-            alphaTileIndex = atomicCompSwap(iTiles[tileIndex * 4 + 1], 0, trialAlphaTileIndex);
-            if (alphaTileIndex == 0) {
-                // We won the race.
-                alphaTileIndex = trialAlphaTileIndex;
-                iTiles[tileIndex * 4 + 1] = alphaTileIndex;
-            }
+        int fillCountOnTile = int(atomicCompSwap(iTiles[tileIndex * 4 + 1], uint(-1), 0u));
+        if (fillCountOnTile < 0) {
+            uint alphaTileIndex = atomicAdd(iIndirectDrawParams[4], 1);
+            atomicExchange(iTiles[tileIndex * 4 + 1], alphaTileIndex);
         }
 
         vec4 localLine = line - tileRect.xyxy;
-        uvec4 scaledLocalLine = uvec4(localLine * vec4(256.0));
+        uvec4 scaledLocalLine = uvec4(localLine * vec4(4096.0));
 
         // Bump instance count.
         uint fillIndex = atomicAdd(iIndirectDrawParams[1], 1);
@@ -140,9 +134,6 @@ void main() {
         // Write fill.
         iFills[fillIndex * 3 + 0] = scaledLocalLine.x | (scaledLocalLine.y << 16);
         iFills[fillIndex * 3 + 1] = scaledLocalLine.z | (scaledLocalLine.w << 16);
-        iFills[fillIndex * 3 + 2] = alphaTileIndex;
+        iFills[fillIndex * 3 + 2] = tileIndex;
     }
-
-    // FIXME(pcwalton): Don't bind a color attachment if not necessary!
-    oFragColor = vec4(1.0, 0.0, 0.0, 1.0);
 }

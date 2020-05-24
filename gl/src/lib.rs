@@ -962,6 +962,14 @@ impl Device for GLDevice {
             gl::ClientWaitSync(fence.gl_sync, gl::SYNC_FLUSH_COMMANDS_BIT, 0); ck();
         }
     }
+
+    fn push_debug_group(&self, _: &str) {
+        // TODO(pcwalton)
+    }
+
+    fn pop_debug_group(&self) {
+        // TODO(pcwalton)
+    }
 }
 
 impl GLDevice {

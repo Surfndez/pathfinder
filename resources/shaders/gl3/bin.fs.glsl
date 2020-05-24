@@ -121,20 +121,14 @@ void main(){
             uint(tileOffset . y *(pathTileRect . z - pathTileRect . x)+ tileOffset . x);
 
 
-
-        uint alphaTileIndex = atomicAdd(iTiles[tileIndex * 4 + 1], 0);
-        if(alphaTileIndex == 0){
-            uint trialAlphaTileIndex = atomicAdd(iIndirectDrawParams[4], 1);
-            alphaTileIndex = atomicCompSwap(iTiles[tileIndex * 4 + 1], 0, trialAlphaTileIndex);
-            if(alphaTileIndex == 0){
-
-                alphaTileIndex = trialAlphaTileIndex;
-                iTiles[tileIndex * 4 + 1]= alphaTileIndex;
-            }
+        int fillCountOnTile = int(atomicCompSwap(iTiles[tileIndex * 4 + 1], uint(- 1), 0u));
+        if(fillCountOnTile < 0){
+            uint alphaTileIndex = atomicAdd(iIndirectDrawParams[4], 1);
+            atomicExchange(iTiles[tileIndex * 4 + 1], alphaTileIndex);
         }
 
         vec4 localLine = line - tileRect . xyxy;
-        uvec4 scaledLocalLine = uvec4(localLine * vec4(256.0));
+        uvec4 scaledLocalLine = uvec4(localLine * vec4(4096.0));
 
 
         uint fillIndex = atomicAdd(iIndirectDrawParams[1], 1);
@@ -142,10 +136,7 @@ void main(){
 
         iFills[fillIndex * 3 + 0]= scaledLocalLine . x |(scaledLocalLine . y << 16);
         iFills[fillIndex * 3 + 1]= scaledLocalLine . z |(scaledLocalLine . w << 16);
-        iFills[fillIndex * 3 + 2]= alphaTileIndex;
+        iFills[fillIndex * 3 + 2]= tileIndex;
     }
-
-
-    oFragColor = vec4(1.0, 0.0, 0.0, 1.0);
 }
 

@@ -25,7 +25,7 @@ vertex main0_out main0(main0_in in [[stage_in]], constant int2& uFramebufferSize
     main0_out out = {};
     float2 from = in.aFrom / float2(16.0);
     float2 to = in.aTo / float2(16.0);
-    float2 vector = normalize(to - from);
+    float2 vector = normalize(to - from) * float2(0.5);
     float2 normal = float2(-vector.y, vector.x);
     float2 tessCoord = float2(in.aTessCoord);
     float2 tilePosition = mix(from - vector, to + vector, float2(tessCoord.y)) + mix(-normal, normal, float2(tessCoord.x));

@@ -71,21 +71,29 @@ struct BuiltDrawPath {
 
 #[derive(Debug)]
 pub(crate) struct BuiltPath {
-    pub occluders: Option<Vec<Occluder>>,
-    /*
-    pub solid_tiles: SolidTiles,
-    pub empty_tiles: Vec<BuiltTile>,
-    pub single_mask_tiles: Vec<BuiltTile>,
-    pub clip_tiles: Vec<BuiltClip>,
-    */
+    pub data: BuiltPathData,
     pub tiles: DenseTileMap<TileObjectPrimitive>,
     pub clip_tiles: Option<DenseTileMap<Clip>>,
-    /// FIXME(pcwalton): Only if GPU filling is enabled?
+    pub occluders: Option<Vec<Occluder>>,
+    pub fill_rule: FillRule,
+}
+
+#[derive(Debug)]
+pub(crate) enum BuiltPathData {
+    Untiled(BuiltPathUntiledData),
+    Tiled(BuiltPathTiledData),
+}
+
+#[derive(Debug)]
+pub(crate) struct BuiltPathUntiledData {
     pub segments: Vec<LineSegment2F>,
+}
+
+#[derive(Debug)]
+pub(crate) struct BuiltPathTiledData {
     /// During tiling, or if backdrop computation is done on GPU, this stores the sum of backdrops
     /// for tile columns above the viewport.
     pub backdrops: Vec<i32>,
-    pub fill_rule: FillRule,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -350,7 +358,10 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                        paint_metadata: &[PaintMetadata],
                        built_draw_paths: Vec<BuiltDrawPath>,
                        built_clip_paths: Vec<BuiltPath>) {
-        self.listener.send(RenderCommand::FlushFills);
+        if !self.listener.gpu_features.contains(RendererGPUFeatures::BIN_ON_GPU) {
+            self.listener.send(RenderCommand::FlushFills);
+        }
+
         self.build_tile_batches(paint_metadata, built_draw_paths, built_clip_paths);
     }
 
@@ -391,11 +402,12 @@ struct DrawPathBuildParams<'a> {
 }
 
 impl BuiltPath {
+    // If `segments` is `None`, then tiling is being done on CPU. Otherwise, it's done on GPU.
     fn new(path_id: u32,
            path_bounds: RectF,
            view_box_bounds: RectF,
            fill_rule: FillRule,
-           segments: Vec<LineSegment2F>,
+           segments: Option<Vec<LineSegment2F>>,
            tiling_path_info: &TilingPathInfo)
            -> BuiltPath {
         let occludes = match *tiling_path_info {
@@ -455,18 +467,25 @@ impl BuiltPath {
             _ => None,
         };
 
+        let data = match segments {
+            Some(segments) => {
+                BuiltPathData::Untiled(BuiltPathUntiledData {
+                    segments,
+                })
+            }
+            None => {
+                BuiltPathData::Tiled(BuiltPathTiledData {
+                    backdrops: vec![0; tiles.rect.width() as usize],
+                })
+            }
+        };
+
         BuiltPath {
-            /*
-            empty_tiles: vec![],
-            single_mask_tiles: vec![],
-            clip_tiles: vec![],
-            */
-            backdrops: vec![0; tiles.rect.width() as usize],
-            occluders: if occludes { Some(vec![]) } else { None },
-            segments,
+            data,
             tiles,
             clip_tiles,
             fill_rule,
+            occluders: if occludes { Some(vec![]) } else { None },
         }
     }
 }
@@ -487,11 +506,12 @@ pub struct TileStats {
 // Utilities for built objects
 
 impl ObjectBuilder {
+    // If `segments` is `None`, then tiling is being done on CPU. Otherwise, it's done on GPU.
     pub(crate) fn new(path_id: u32,
                       path_bounds: RectF,
                       view_box_bounds: RectF,
                       fill_rule: FillRule,
-                      segments: Vec<LineSegment2F>,
+                      segments: Option<Vec<LineSegment2F>>,
                       tiling_path_info: &TilingPathInfo)
                       -> ObjectBuilder {
         let built_path = BuiltPath::new(path_id,
@@ -548,11 +568,10 @@ impl ObjectBuilder {
         });
     }
 
-    fn get_or_allocate_alpha_tile_index(
-        &mut self,
-        scene_builder: &SceneBuilder,
-        tile_coords: Vector2I,
-    ) -> AlphaTileId {
+    fn get_or_allocate_alpha_tile_index(&mut self,
+                                        scene_builder: &SceneBuilder,
+                                        tile_coords: Vector2I)
+                                        -> AlphaTileId {
         let local_tile_index = self.built_path.tiles.coords_to_index_unchecked(tile_coords);
         let alpha_tile_id = self.built_path.tiles.data[local_tile_index].alpha_tile_id;
         if alpha_tile_id.is_valid() {
@@ -576,6 +595,11 @@ impl ObjectBuilder {
 
     #[inline]
     pub(crate) fn adjust_alpha_tile_backdrop(&mut self, tile_coords: Vector2I, delta: i8) {
+        let backdrops = match self.built_path.data {
+            BuiltPathData::Tiled(ref mut tiled_data) => &mut tiled_data.backdrops,
+            BuiltPathData::Untiled(_) => unreachable!(),
+        };
+
         let tile_offset = tile_coords - self.built_path.tiles.rect.origin();
         if tile_offset.x() < 0 || tile_offset.x() >= self.built_path.tiles.rect.width() ||
                 tile_offset.y() >= self.built_path.tiles.rect.height() {
@@ -583,7 +607,7 @@ impl ObjectBuilder {
         }
 
         if tile_offset.y() < 0 {
-            self.built_path.backdrops[tile_offset.x() as usize] += delta as i32;
+            backdrops[tile_offset.x() as usize] += delta as i32;
             return;
         }
 
@@ -759,16 +783,26 @@ impl PrepareTilesBatch {
                     z_write: z_write as u32,
                     clip_path: clip_path_id.unwrap_or(PathIndex(!0)),
                 });
-                gpu_info.backdrops.extend_from_slice(&path.backdrops);
-                if let Some(ref mut bin_segments) = gpu_info.segments {
-                    for &segment in &path.segments {
-                        bin_segments.push(BinSegment {
-                            segment,
-                            path_index,
-                            pad0: 0,
-                            pad1: 0,
-                            pad2: 0,
-                        });
+
+                match path.data {
+                    BuiltPathData::Tiled(ref tiled_data) => {
+                        gpu_info.backdrops.extend_from_slice(&tiled_data.backdrops);
+                    }
+                    BuiltPathData::Untiled(ref untiled_data) => {
+                        for _ in 0..path.tiles.rect.width() {
+                            gpu_info.backdrops.push(0);
+                        }
+
+                        let bin_segments = gpu_info.segments.as_mut().unwrap();
+                        for &segment in &untiled_data.segments {
+                            bin_segments.push(BinSegment {
+                                segment,
+                                path_index,
+                                pad0: 0,
+                                pad1: 0,
+                                pad2: 0,
+                            });
+                        }
                     }
                 }
             }

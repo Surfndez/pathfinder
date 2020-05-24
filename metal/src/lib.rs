@@ -61,6 +61,7 @@ use std::ops::Range;
 use std::ptr;
 use std::rc::Rc;
 use std::slice;
+use std::str::FromStr;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -945,6 +946,23 @@ impl Device for MetalDevice {
         let mut guard = fence.0.mutex.lock().unwrap();
         while let MetalFenceStatus::Pending = *guard {
             guard = fence.0.cond.wait(guard).unwrap();
+        }
+    }
+
+    fn push_debug_group(&self, name: &str) {
+        let command_buffers = self.command_buffers.borrow();
+        let command_buffer = command_buffers.last().unwrap();
+        let string = CFString::from_str(name).unwrap();
+        unsafe {
+            msg_send![command_buffer.as_ptr(), pushDebugGroup:string.as_concrete_TypeRef()]
+        }
+    }
+
+    fn pop_debug_group(&self) {
+        let command_buffers = self.command_buffers.borrow();
+        let command_buffer = command_buffers.last().unwrap();
+        unsafe {
+            msg_send![command_buffer.as_ptr(), popDebugGroup]
         }
     }
 }

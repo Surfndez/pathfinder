@@ -325,7 +325,7 @@ impl<D> Renderer<D> where D: Device {
     }
 
     pub fn render_command(&mut self, command: &RenderCommand) {
-        //println!("render command: {:?}", command);
+        println!("render command: {:?}", command);
         match *command {
             RenderCommand::Start { bounding_quad, path_count, needs_readable_framebuffer } => {
                 self.start_rendering(bounding_quad, path_count, needs_readable_framebuffer);
@@ -474,8 +474,10 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn reallocate_alpha_tile_pages_if_necessary(&mut self, copy_existing: bool) {
-        let alpha_tile_pages_needed =
-            ((self.back_frame.max_alpha_tile_index + 0xffff) >> 16) as u32;
+        // FIXME(pcwalton): Do this properly!
+        /*let alpha_tile_pages_needed =
+            ((self.back_frame.max_alpha_tile_index + 0xffff) >> 16) as u32;*/
+        let alpha_tile_pages_needed = 3;
         if alpha_tile_pages_needed <= self.back_frame.allocated_alpha_tile_page_count {
             return;
         }
@@ -767,7 +769,10 @@ impl<D> Renderer<D> where D: Device {
                 (&self.bin_program.tiles_storage_buffer, alpha_tile_buffer),
             ],
             viewport: main_viewport,
-            options: RenderOptions::default(),
+            options: RenderOptions {
+                color_mask: false,
+                ..RenderOptions::default()
+            },
         });
 
         self.device.end_timer_query(&timer_query);
@@ -875,6 +880,7 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn draw_fills_via_raster(&mut self, storage_id: StorageID, fill_count: FillCount) {
+        println!("draw_fills_via_raster()");
         let fill_raster_program = match self.fill_program {
             FillProgram::Raster(ref fill_raster_program) => fill_raster_program,
             _ => unreachable!(),
@@ -895,7 +901,10 @@ impl<D> Renderer<D> where D: Device {
         self.device.begin_timer_query(&timer_query);
 
         let render_state = RenderState {
-            target: &RenderTarget::Framebuffer(self.back_frame.mask_framebuffer.as_ref().unwrap()),
+            target: &RenderTarget::Framebuffer(self.back_frame
+                                                   .mask_framebuffer
+                                                   .as_ref()
+                                                   .expect("Where's the mask framebuffer?")),
             program: &fill_raster_program.program,
             vertex_array: &fill_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
@@ -1144,6 +1153,8 @@ impl<D> Renderer<D> where D: Device {
                     let fill_storage_id = self.bin_segments(segments,
                                                             propagate_metadata_storage_id,
                                                             tile_vertex_storage_id);
+                    // FIXME(pcwalton): Don't unconditionally pass true for copying here.
+                    self.reallocate_alpha_tile_pages_if_necessary(true);
                     // TODO(pcwalton): Fills via compute.
                     self.draw_fills_via_raster(fill_storage_id, FillCount::Indirect);
                 }
