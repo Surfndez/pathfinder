@@ -154,7 +154,8 @@ fragment main0_out main0(main0_in in [[stage_in]], constant int2& uFramebufferSi
         uint pathTileOffset = uint(_307.iMetadata[(in.vPathIndex * 2u) + 1u].x);
         int2 tileOffset = tileCoord - pathTileRect.xy;
         uint tileIndex = pathTileOffset + uint((tileOffset.y * (pathTileRect.z - pathTileRect.x)) + tileOffset.x);
-        uint alphaTileIndex = _350.iTiles[(tileIndex * 4u) + 1u];
+        uint _356 = atomic_fetch_add_explicit((device atomic_uint*)&_350.iTiles[(tileIndex * 4u) + 1u], 0u, memory_order_relaxed);
+        uint alphaTileIndex = _356;
         if (alphaTileIndex == 0u)
         {
             uint _368 = atomic_fetch_add_explicit((device atomic_uint*)&_365.iIndirectDrawParams[4], 1u, memory_order_relaxed);

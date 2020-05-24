@@ -702,7 +702,8 @@ impl<D> Renderer<D> where D: Device {
     fn bin_segments(&mut self,
                     segments: &[BinSegment],
                     propagate_metadata_storage_id: StorageID,
-                    tile_storage_id: StorageID) {
+                    tile_storage_id: StorageID)
+                    -> StorageID {
         // FIXME(pcwalton): Buffer reuse
         println!("{}", ::std::mem::size_of::<BinSegment>());
         self.device.allocate_buffer(&self.back_frame.bin_vertex_array.vertex_buffer,
@@ -779,10 +780,11 @@ impl<D> Renderer<D> where D: Device {
             self.device.read_buffer(&self.back_frame.fill_indirect_draw_params_buffer,
                                     BufferTarget::Storage,
                                     0..8);
-        println!("GPU binning: segments={} vertex_count={} instance_count={}",
+        println!("GPU binning: segments={} vertex_count={} instance_count={} alpha_tile_count={}",
                  segments.len(),
                  indirect_draw_params[0],
-                 indirect_draw_params[1]);
+                 indirect_draw_params[1],
+                 indirect_draw_params[4]);
 
                                                       /*
         let metadata_buffer = self.device.read_buffer(&self.back_frame.bin_metadata_buffer,
@@ -796,6 +798,8 @@ impl<D> Renderer<D> where D: Device {
                  segments.len(),
                  duration.as_secs_f64() * 1000.0);
                  */
+
+        fill_storage_id
     }
 
     fn add_fills(&mut self, fill_batch: &[Fill]) {
@@ -825,24 +829,23 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn draw_buffered_fills(&mut self) {
+        if self.back_frame.buffered_fills.is_empty() {
+            return;
+        }
+
         match self.fill_program {
-            FillProgram::Raster(_) => self.draw_buffered_fills_via_raster(),
+            FillProgram::Raster(_) => {
+                let fill_storage_info = self.upload_buffered_fills_for_raster();
+                self.draw_fills_via_raster(fill_storage_info.storage_id,
+                                           FillCount::Direct(fill_storage_info.fill_count));
+            }
             FillProgram::Compute(_) => self.draw_buffered_fills_via_compute(),
         }
     }
 
-    fn draw_buffered_fills_via_raster(&mut self) {
-        let fill_raster_program = match self.fill_program {
-            FillProgram::Raster(ref fill_raster_program) => fill_raster_program,
-            _ => unreachable!(),
-        };
-
-        let mask_viewport = self.mask_viewport();
-
+    fn upload_buffered_fills_for_raster(&mut self) -> FillStorageInfo {
         let buffered_fills = &mut self.back_frame.buffered_fills;
-        if buffered_fills.is_empty() {
-            return;
-        }
+        debug_assert!(!buffered_fills.is_empty());
 
         let storage_id = {
             let fill_program = &self.fill_program;
@@ -860,13 +863,26 @@ impl<D> Renderer<D> where D: Device {
         };
         let fill_vertex_storage = self.back_frame.fill_vertex_storage_allocator.get(storage_id);
 
-        let fill_vertex_array =
-            fill_vertex_storage.vertex_array.as_ref().expect("Where's the vertex array?");
-
+        debug_assert!(buffered_fills.len() <= u32::MAX as usize);
         self.device.upload_to_buffer(&fill_vertex_storage.vertex_buffer,
                                      0,
                                      &buffered_fills,
                                      BufferTarget::Vertex);
+
+        let fill_count = buffered_fills.len() as u32;
+        buffered_fills.clear();
+        FillStorageInfo { storage_id, fill_count }
+    }
+
+    fn draw_fills_via_raster(&mut self, storage_id: StorageID, fill_count: FillCount) {
+        let fill_raster_program = match self.fill_program {
+            FillProgram::Raster(ref fill_raster_program) => fill_raster_program,
+            _ => unreachable!(),
+        };
+        let mask_viewport = self.mask_viewport();
+        let fill_vertex_storage = self.back_frame.fill_vertex_storage_allocator.get(storage_id);
+        let fill_vertex_array =
+            fill_vertex_storage.vertex_array.as_ref().expect("Where's the vertex array?");
 
         let mut clear_color = None;
         if !self.back_frame
@@ -878,8 +894,7 @@ impl<D> Renderer<D> where D: Device {
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
-        debug_assert!(buffered_fills.len() <= u32::MAX as usize);
-        self.device.draw_elements_instanced(6, buffered_fills.len() as u32, &RenderState {
+        let render_state = RenderState {
             target: &RenderTarget::Framebuffer(self.back_frame.mask_framebuffer.as_ref().unwrap()),
             program: &fill_raster_program.program,
             vertex_array: &fill_vertex_array.vertex_array,
@@ -905,13 +920,22 @@ impl<D> Renderer<D> where D: Device {
                 clear_ops: ClearOps { color: clear_color, ..ClearOps::default() },
                 ..RenderOptions::default()
             },
-        });
+        };
+
+        match fill_count {
+            FillCount::Direct(fill_count) => {
+                self.device.draw_elements_instanced(6, fill_count, &render_state)
+            }
+            FillCount::Indirect => {
+                let indirect_buffer = &self.back_frame.fill_indirect_draw_params_buffer;
+                self.device.draw_elements_indirect(indirect_buffer, &render_state)
+            }
+        }
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
 
         self.back_frame.framebuffer_flags.insert(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY);
-        buffered_fills.clear();
     }
 
     fn draw_buffered_fills_via_compute(&mut self) {
@@ -1107,18 +1131,21 @@ impl<D> Renderer<D> where D: Device {
             None => None,
         };
 
-        // Propagate backdrops and perform clipping on GPU if necessary.
+        // Propagate backdrops, bin fills, render fills, and/or perform clipping on GPU if
+        // necessary.
         let propagate_metadata_storage_id = match batch.modal {
             PrepareTilesModalInfo::CPU(_) => None,
             PrepareTilesModalInfo::GPU(ref gpu_info) => {
                 let propagate_metadata_storage_id =
                     self.upload_propagate_data(&gpu_info.propagate_metadata, &gpu_info.backdrops);
 
-                // Bin if requested.
+                // Bin and render fills if requested.
                 if let Some(ref segments) = gpu_info.segments {
-                    self.bin_segments(segments,
-                                      propagate_metadata_storage_id,
-                                      tile_vertex_storage_id)
+                    let fill_storage_id = self.bin_segments(segments,
+                                                            propagate_metadata_storage_id,
+                                                            tile_vertex_storage_id);
+                    // TODO(pcwalton): Fills via compute.
+                    self.draw_fills_via_raster(fill_storage_id, FillCount::Indirect);
                 }
 
                 self.propagate_tiles(gpu_info.propagate_metadata.len() as u32,
@@ -2574,4 +2601,16 @@ struct ClipStorageIDs {
     metadata: Option<StorageID>,
     tiles: StorageID,
     vertices: StorageID,
+}
+
+#[derive(Clone, Copy)]
+struct FillStorageInfo {
+    storage_id: StorageID,
+    fill_count: u32,
+}
+
+#[derive(Clone, Copy)]
+enum FillCount {
+    Direct(u32),
+    Indirect,
 }

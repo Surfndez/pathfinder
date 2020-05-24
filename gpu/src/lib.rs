@@ -102,6 +102,9 @@ pub trait Device: Sized {
                                index_count: u32,
                                instance_count: u32,
                                render_state: &RenderState<Self>);
+    fn draw_elements_indirect(&self,
+                              indirect_buffer: &Self::Buffer,
+                              render_state: &RenderState<Self>);
     fn dispatch_compute(&self, dimensions: ComputeDimensions, state: &ComputeState<Self>);
     fn add_fence(&self) -> Self::Fence;
     fn wait_for_fence(&self, fence: &Self::Fence);

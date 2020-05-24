@@ -122,7 +122,7 @@ void main(){
 
 
 
-        uint alphaTileIndex = iTiles[tileIndex * 4 + 1];
+        uint alphaTileIndex = atomicAdd(iTiles[tileIndex * 4 + 1], 0);
         if(alphaTileIndex == 0){
             uint trialAlphaTileIndex = atomicAdd(iIndirectDrawParams[4], 1);
             alphaTileIndex = atomicCompSwap(iTiles[tileIndex * 4 + 1], 0, trialAlphaTileIndex);

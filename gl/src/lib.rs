@@ -827,6 +827,20 @@ impl Device for GLDevice {
         self.reset_render_state(render_state);
     }
 
+    fn draw_elements_indirect(&self,
+                              indirect_buffer: &Self::Buffer,
+                              render_state: &RenderState<Self>) {
+        self.set_render_state(render_state);
+        unsafe {
+            gl::BindBuffer(gl::DRAW_INDIRECT_BUFFER, indirect_buffer.gl_buffer);
+            gl::DrawElementsIndirect(render_state.primitive.to_gl_primitive(),
+                                     gl::UNSIGNED_INT,
+                                     ptr::null()); ck();
+            gl::BindBuffer(gl::DRAW_INDIRECT_BUFFER, 0);
+        }
+        self.reset_render_state(render_state);
+    }
+
     fn dispatch_compute(&self, dimensions: ComputeDimensions, compute_state: &ComputeState<Self>) {
         self.set_compute_state(compute_state);
         unsafe {

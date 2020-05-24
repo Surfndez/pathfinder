@@ -733,6 +733,7 @@ impl Device for MetalDevice {
                                render_state: &RenderState<MetalDevice>) {
         let encoder = self.prepare_to_draw(render_state);
         let primitive = render_state.primitive.to_metal_primitive();
+
         let index_type = MTLIndexType::UInt32;
         let index_buffer = render_state.vertex_array
                                        .index_buffer
@@ -740,12 +741,39 @@ impl Device for MetalDevice {
         let index_buffer = index_buffer.as_ref().expect("No index buffer bound to VAO!");
         let index_buffer = index_buffer.buffer.borrow();
         let index_buffer = index_buffer.as_ref().expect("Index buffer not allocated!");
+
         encoder.draw_indexed_primitives_instanced(primitive,
                                                   index_count as u64,
                                                   index_type,
                                                   index_buffer,
                                                   0,
                                                   instance_count as u64);
+        encoder.end_encoding();
+    }
+
+    fn draw_elements_indirect(&self,
+                              indirect_buffer: &MetalBuffer,
+                              render_state: &RenderState<MetalDevice>) {
+        let encoder = self.prepare_to_draw(render_state);
+        let primitive = render_state.primitive.to_metal_primitive();
+
+        let index_type = MTLIndexType::UInt32;
+        let index_buffer = render_state.vertex_array
+                                       .index_buffer
+                                       .borrow();
+        let index_buffer = index_buffer.as_ref().expect("No index buffer bound to VAO!");
+        let index_buffer = index_buffer.buffer.borrow();
+        let index_buffer = index_buffer.as_ref().expect("Index buffer not allocated!");
+
+        let indirect_buffer = indirect_buffer.buffer.borrow();
+        let indirect_buffer = indirect_buffer.as_ref().expect("Indirect buffer not allocated!");
+
+        encoder.draw_indexed_primitives_indirect(primitive,
+                                                 index_type,
+                                                 index_buffer,
+                                                 0,
+                                                 indirect_buffer,
+                                                 0);
         encoder.end_encoding();
     }
 
