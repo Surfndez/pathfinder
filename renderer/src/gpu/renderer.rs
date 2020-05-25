@@ -10,7 +10,7 @@
 
 use crate::gpu::debug::DebugUIPresenter;
 use crate::gpu::options::{DestFramebuffer, RendererGPUFeatures, RendererOptions};
-use crate::gpu::shaders::{BinProgram, BinVertexArray, BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
+use crate::gpu::shaders::{BinComputeProgram, BinRasterProgram, BinVertexArray, BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
 use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram, ClipTileCopyVertexArray};
 use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
@@ -120,7 +120,8 @@ pub struct Renderer<D> where D: Device {
     tile_post_programs: Option<TilePostPrograms<D>>,
     stencil_program: StencilProgram<D>,
     reprojection_program: ReprojectionProgram<D>,
-    bin_program: BinProgram<D>,
+    bin_raster_program: BinRasterProgram<D>,
+    bin_compute_program: BinComputeProgram<D>,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
     fill_tile_map: Vec<i32>,
@@ -210,7 +211,8 @@ impl<D> Renderer<D> where D: Device {
             (true, FeatureLevel::D3D11) => Some(TilePostPrograms::new(&device, resources)),
             _ => None,
         };
-        let bin_program = BinProgram::new(&device, resources);
+        let bin_raster_program = BinRasterProgram::new(&device, resources);
+        let bin_compute_program = BinComputeProgram::new(&device, resources);
 
         let area_lut_texture =
             device.create_texture_from_png(resources, "area-lut", TextureFormat::RGBA8);
@@ -239,7 +241,7 @@ impl<D> Renderer<D> where D: Device {
                                      &tile_clip_copy_program,
                                      &reprojection_program,
                                      &stencil_program,
-                                     &bin_program,
+                                     &bin_raster_program,
                                      &quad_vertex_positions_buffer,
                                      &quad_vertex_indices_buffer,
                                      window_size);
@@ -251,7 +253,7 @@ impl<D> Renderer<D> where D: Device {
                                     &tile_clip_copy_program,
                                     &reprojection_program,
                                     &stencil_program,
-                                    &bin_program,
+                                    &bin_raster_program,
                                     &quad_vertex_positions_buffer,
                                     &quad_vertex_indices_buffer,
                                     window_size);
@@ -269,7 +271,8 @@ impl<D> Renderer<D> where D: Device {
             tile_clip_combine_program,
             tile_clip_copy_program,
             tile_post_programs,
-            bin_program,
+            bin_raster_program,
+            bin_compute_program,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             fill_tile_map: vec![],
@@ -701,16 +704,16 @@ impl<D> Renderer<D> where D: Device {
         self.back_frame.quads_vertex_indices_length = length;
     }
 
-    fn bin_segments(&mut self,
-                    segments: &[BinSegment],
-                    propagate_metadata_storage_id: StorageID,
-                    tile_storage_id: StorageID)
-                    -> StorageID {
+    fn bin_segments_via_raster(&mut self,
+                               segments: &[BinSegment],
+                               propagate_metadata_storage_id: StorageID,
+                               tile_storage_id: StorageID)
+                               -> StorageID {
         // FIXME(pcwalton): Buffer reuse
-        println!("{}", ::std::mem::size_of::<BinSegment>());
-        self.device.allocate_buffer(&self.back_frame.bin_vertex_array.vertex_buffer,
+        let segments_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        self.device.allocate_buffer(&segments_buffer,
                                     BufferData::Memory(segments),
-                                    BufferTarget::Vertex);
+                                    BufferTarget::Storage);
 
         // FIXME(pcwalton): Don't hardcode 3M fills!!
         let fill_storage_id = {
@@ -750,29 +753,131 @@ impl<D> Renderer<D> where D: Device {
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
-        self.device.draw_elements_instanced(6, segments.len() as u32, &RenderState {
+        self.device.draw_arrays(segments.len() as u32 * 6, &RenderState {
             target: &RenderTarget::Default,
-            program: &self.bin_program.program,
+            program: &self.bin_raster_program.program,
             vertex_array: &self.back_frame.bin_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
             textures: &[],
             uniforms: &[
-                (&self.bin_program.framebuffer_size_uniform,
+                (&self.bin_raster_program.framebuffer_size_uniform,
                  UniformData::IVec2(main_viewport.size().0)),
             ],
             images: &[],
             storage_buffers: &[
-                (&self.bin_program.metadata_storage_buffer, propagate_metadata_storage_buffer),
-                (&self.bin_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
-                (&self.bin_program.indirect_draw_params_storage_buffer,
+                (&self.bin_raster_program.metadata_storage_buffer,
+                 propagate_metadata_storage_buffer),
+                (&self.bin_raster_program.fills_storage_buffer,
+                 &fill_vertex_storage.vertex_buffer),
+                (&self.bin_raster_program.indirect_draw_params_storage_buffer,
                  &self.back_frame.fill_indirect_draw_params_buffer),
-                (&self.bin_program.tiles_storage_buffer, alpha_tile_buffer),
+                (&self.bin_raster_program.tiles_storage_buffer, alpha_tile_buffer),
+                (&self.bin_raster_program.segments_storage_buffer, &segments_buffer),
             ],
             viewport: main_viewport,
             options: RenderOptions {
                 color_mask: false,
                 ..RenderOptions::default()
             },
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
+
+        self.device.end_commands();
+        self.device.begin_commands();
+
+        let indirect_draw_params =
+            self.device.read_buffer(&self.back_frame.fill_indirect_draw_params_buffer,
+                                    BufferTarget::Storage,
+                                    0..8);
+        println!("GPU binning: segments={} vertex_count={} instance_count={} alpha_tile_count={}",
+                 segments.len(),
+                 indirect_draw_params[0],
+                 indirect_draw_params[1],
+                 indirect_draw_params[4]);
+
+                                                      /*
+        let metadata_buffer = self.device.read_buffer(&self.back_frame.bin_metadata_buffer,
+                                                      BufferTarget::Storage,
+                                                      0..4);
+        println!("GPU binning: fill count={} alpha tile count={}",
+                 metadata_buffer[0],
+                 metadata_buffer[1]);
+
+        println!("binning {} segments took {} ms",
+                 segments.len(),
+                 duration.as_secs_f64() * 1000.0);
+                 */
+
+        fill_storage_id
+    }
+
+    fn bin_segments_via_compute(&mut self,
+                                segments: &[BinSegment],
+                                propagate_metadata_storage_id: StorageID,
+                                tile_storage_id: StorageID)
+                                -> StorageID {
+        // FIXME(pcwalton): Buffer reuse
+        let segments_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        self.device.allocate_buffer(&segments_buffer,
+                                    BufferData::Memory(segments),
+                                    BufferTarget::Storage);
+
+        // FIXME(pcwalton): Don't hardcode 3M fills!!
+        let fill_storage_id = {
+            let fill_program = &self.fill_program;
+            let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
+            let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
+            self.back_frame
+                .fill_vertex_storage_allocator
+                .allocate(&self.device, 3 * 1024 * 1024, |device, size| {
+                FillVertexStorage::new(size,
+                                       device,
+                                       fill_program,
+                                       quad_vertex_positions_buffer,
+                                       quad_vertex_indices_buffer)
+            })
+        };
+        let fill_vertex_storage =
+            self.back_frame.fill_vertex_storage_allocator.get(fill_storage_id);
+
+        let main_viewport = self.main_viewport();
+
+        let alpha_tile_buffer = &self.back_frame
+                                     .tile_vertex_storage_allocator
+                                     .get(tile_storage_id)
+                                     .vertex_buffer;
+        let propagate_metadata_storage_buffer = self.back_frame
+                                                    .tile_propagate_metadata_storage_allocator
+                                                    .get(propagate_metadata_storage_id);
+
+        // FIXME(pcwalton): Buffer reuse
+        self.device.allocate_buffer::<u32>(&self.back_frame.fill_indirect_draw_params_buffer,
+                                           BufferData::Memory(&[6, 0, 0, 0, 0, 0, 0, 0]),
+                                           BufferTarget::Storage);
+
+        //println!("main_viewport={:?}", main_viewport);
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        let compute_dimensions = ComputeDimensions { x: segments.len() as u32 / 64, y: 1, z: 1 };
+        self.device.dispatch_compute(compute_dimensions, &ComputeState {
+            program: &self.bin_compute_program.program,
+            textures: &[],
+            uniforms: &[],
+            images: &[],
+            storage_buffers: &[
+                (&self.bin_compute_program.metadata_storage_buffer,
+                 propagate_metadata_storage_buffer),
+                (&self.bin_compute_program.fills_storage_buffer,
+                 &fill_vertex_storage.vertex_buffer),
+                (&self.bin_compute_program.indirect_draw_params_storage_buffer,
+                 &self.back_frame.fill_indirect_draw_params_buffer),
+                (&self.bin_compute_program.tiles_storage_buffer, alpha_tile_buffer),
+                (&self.bin_compute_program.segments_storage_buffer, &segments_buffer),
+            ],
         });
 
         self.device.end_timer_query(&timer_query);
@@ -1150,9 +1255,10 @@ impl<D> Renderer<D> where D: Device {
 
                 // Bin and render fills if requested.
                 if let Some(ref segments) = gpu_info.segments {
-                    let fill_storage_id = self.bin_segments(segments,
-                                                            propagate_metadata_storage_id,
-                                                            tile_vertex_storage_id);
+                    let fill_storage_id =
+                        self.bin_segments_via_compute(segments,
+                                                      propagate_metadata_storage_id,
+                                                      tile_vertex_storage_id);
                     // FIXME(pcwalton): Don't unconditionally pass true for copying here.
                     self.reallocate_alpha_tile_pages_if_necessary(true);
                     // TODO(pcwalton): Fills via compute.
@@ -1882,7 +1988,7 @@ impl<D> Frame<D> where D: Device {
            tile_clip_copy_program: &ClipTileCopyProgram<D>,
            reprojection_program: &ReprojectionProgram<D>,
            stencil_program: &StencilProgram<D>,
-           bin_program: &BinProgram<D>,
+           bin_raster_program: &BinRasterProgram<D>,
            quad_vertex_positions_buffer: &D::Buffer,
            quad_vertex_indices_buffer: &D::Buffer,
            window_size: Vector2I)
@@ -1907,7 +2013,7 @@ impl<D> Frame<D> where D: Device {
                                                                      &quad_vertex_indices_buffer);
         let stencil_vertex_array = StencilVertexArray::new(device, &stencil_program);
         let bin_vertex_array = BinVertexArray::new(device,
-                                                   &bin_program,
+                                                   &bin_raster_program,
                                                    &quad_vertex_positions_buffer,
                                                    &quad_vertex_indices_buffer);
 

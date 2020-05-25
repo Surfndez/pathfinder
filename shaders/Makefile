@@ -34,6 +34,7 @@ SHADERS=\
 	$(EMPTY)
 
 COMPUTE_SHADERS=\
+	bin.cs.glsl \
 	fill.cs.glsl \
 	propagate.cs.glsl \
 	$(EMPTY)

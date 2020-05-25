@@ -855,17 +855,18 @@ where
     }
 }
 
-pub struct BinProgram<D> where D: Device {
+pub struct BinRasterProgram<D> where D: Device {
     pub program: D::Program,
     pub framebuffer_size_uniform: D::Uniform,
     pub metadata_storage_buffer: D::StorageBuffer,
     pub indirect_draw_params_storage_buffer: D::StorageBuffer,
     pub fills_storage_buffer: D::StorageBuffer,
     pub tiles_storage_buffer: D::StorageBuffer,
+    pub segments_storage_buffer: D::StorageBuffer,
 }
 
-impl<D> BinProgram<D> where D: Device {
-    pub fn new(device: &D, resources: &dyn ResourceLoader) -> BinProgram<D> {
+impl<D> BinRasterProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> BinRasterProgram<D> {
         let program = device.create_raster_program(resources, "bin");
         let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
         let metadata_storage_buffer = device.get_storage_buffer(&program, "Metadata", 0);
@@ -873,76 +874,62 @@ impl<D> BinProgram<D> where D: Device {
             device.get_storage_buffer(&program, "IndirectDrawParams", 1);
         let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 2);
         let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 3);
-        BinProgram {
+        let segments_storage_buffer = device.get_storage_buffer(&program, "Segments", 4);
+        BinRasterProgram {
             program,
             framebuffer_size_uniform,
             metadata_storage_buffer,
             indirect_draw_params_storage_buffer,
             fills_storage_buffer,
             tiles_storage_buffer,
+            segments_storage_buffer,
+        }
+    }
+}
+
+pub struct BinComputeProgram<D> where D: Device {
+    pub program: D::Program,
+    pub metadata_storage_buffer: D::StorageBuffer,
+    pub indirect_draw_params_storage_buffer: D::StorageBuffer,
+    pub fills_storage_buffer: D::StorageBuffer,
+    pub tiles_storage_buffer: D::StorageBuffer,
+    pub segments_storage_buffer: D::StorageBuffer,
+}
+
+impl<D> BinComputeProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> BinComputeProgram<D> {
+        let mut program = device.create_compute_program(resources, "bin");
+        let dimensions = ComputeDimensions { x: 64, y: 1, z: 1 };
+        device.set_compute_program_local_size(&mut program, dimensions);
+
+        let segments_storage_buffer = device.get_storage_buffer(&program, "Segments", 0);
+        let metadata_storage_buffer = device.get_storage_buffer(&program, "Metadata", 1);
+        let indirect_draw_params_storage_buffer =
+            device.get_storage_buffer(&program, "IndirectDrawParams", 2);
+        let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 3);
+        let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 4);
+        BinComputeProgram {
+            program,
+            metadata_storage_buffer,
+            indirect_draw_params_storage_buffer,
+            fills_storage_buffer,
+            tiles_storage_buffer,
+            segments_storage_buffer,
         }
     }
 }
 
 pub struct BinVertexArray<D> where D: Device {
     pub vertex_array: D::VertexArray,
-    pub vertex_buffer: D::Buffer,
 }
 
 impl<D> BinVertexArray<D> where D: Device {
     pub fn new(device: &D,
-               bin_program: &BinProgram<D>,
+               bin_raster_program: &BinRasterProgram<D>,
                quad_vertex_positions_buffer: &D::Buffer,
                quad_vertex_indices_buffer: &D::Buffer)
                -> BinVertexArray<D> {
         let vertex_array = device.create_vertex_array();
-        let vertex_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-
-        let tess_coord_attr = device.get_vertex_attr(&bin_program.program, "TessCoord").unwrap();
-        let from_attr = device.get_vertex_attr(&bin_program.program, "From").unwrap();
-        let to_attr = device.get_vertex_attr(&bin_program.program, "To").unwrap();
-        let path_index_attr = device.get_vertex_attr(&bin_program.program, "PathIndex").unwrap();
-
-        device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, BufferTarget::Vertex);
-        device.configure_vertex_attr(&vertex_array, &tess_coord_attr, &VertexAttrDescriptor {
-            size: 2,
-            class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::I16,
-            stride: 4,
-            offset: 0,
-            divisor: 0,
-            buffer_index: 0,
-        });
-        device.bind_buffer(&vertex_array, &vertex_buffer, BufferTarget::Vertex);
-        device.configure_vertex_attr(&vertex_array, &from_attr, &VertexAttrDescriptor {
-            size: 2,
-            class: VertexAttrClass::Float,
-            attr_type: VertexAttrType::F32,
-            stride: 4 * 8,
-            offset: 0,
-            divisor: 1,
-            buffer_index: 1,
-        });
-        device.configure_vertex_attr(&vertex_array, &to_attr, &VertexAttrDescriptor {
-            size: 2,
-            class: VertexAttrClass::Float,
-            attr_type: VertexAttrType::F32,
-            stride: 4 * 8,
-            offset: 4 * 2,
-            divisor: 1,
-            buffer_index: 1,
-        });
-        device.configure_vertex_attr(&vertex_array, &path_index_attr, &VertexAttrDescriptor {
-            size: 1,
-            class: VertexAttrClass::Int,
-            attr_type: VertexAttrType::I32,
-            stride: 4 * 8,
-            offset: 4 * 4,
-            divisor: 1,
-            buffer_index: 1,
-        });
-        device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, BufferTarget::Index);
-
-        BinVertexArray { vertex_array, vertex_buffer }
+        BinVertexArray { vertex_array }
     }
 }

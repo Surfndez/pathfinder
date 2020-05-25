@@ -295,8 +295,8 @@ fn process_line_segment(line_segment: LineSegment2F,
     // Compute `step = vec2f(vector.x < 0 ? -1 : 1, vector.y < 0 ? -1 : 1)`.
     let step = Vector2I((vector_is_negative | U32x2::splat(1)).to_i32x2());
 
-    // Compute `first_tile_crossing = (from_tile_coords + vec2i(vector.x > 0 ? 1 : 0,
-    // vector.y > 0 ? 1 : 0)) * tile_size`.
+    // Compute `first_tile_crossing = (from_tile_coords + vec2i(vector.x >= 0 ? 1 : 0,
+    // vector.y >= 0 ? 1 : 0)) * tile_size`.
     let first_tile_crossing = (from_tile_coords +
         Vector2I((!vector_is_negative & U32x2::splat(1)).to_i32x2())).to_f32() * tile_size;
 
