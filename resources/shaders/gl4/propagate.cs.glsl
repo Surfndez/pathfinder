@@ -23,36 +23,6 @@ precision highp float;
 
 
 
-
-
-
-
-
-
-
-
-
-
-vec4 computeCoverage(vec2 from, vec2 to, sampler2D areaLUT){
-
-    vec2 left = from . x < to . x ? from : to, right = from . x < to . x ? to : from;
-
-
-    vec2 window = clamp(vec2(from . x, to . x), - 0.5, 0.5);
-    float offset = mix(window . x, window . y, 0.5)- left . x;
-    float t = offset /(right . x - left . x);
-
-
-    float y = mix(left . y, right . y, t);
-    float d =(right . y - left . y)/(right . x - left . x);
-
-
-    float dX = window . x - window . y;
-    return texture(areaLUT, vec2(y + 8.0, abs(d * dX))/ 16.0)* dX;
-}
-
-
-
 layout(local_size_x = 256)in;
 
 uniform ivec2 uFramebufferTileSize;
@@ -118,7 +88,7 @@ void main(){
         int drawAlphaTileIndex = int(iDrawTiles[drawTileIndex * 4 + 1]);
         uint drawTileWord = iDrawTiles[drawTileIndex * 4 + 3];
 
-        int delta =(int(drawTileWord)<< 8)>> 24;
+        int delta = int(drawTileWord)>> 24;
         int drawTileBackdrop = currentBackdrop;
 
 
@@ -168,8 +138,8 @@ void main(){
         }
 
         iDrawTiles[drawTileIndex * 4 + 1]= drawAlphaTileIndex;
-        iDrawTiles[drawTileIndex * 4 + 3]=(drawTileWord & 0xff00ffff)|
-            ((uint(drawTileBackdrop)& 0xff)<< 16);
+        iDrawTiles[drawTileIndex * 4 + 3]=(drawTileWord & 0x00ffffff)|
+            ((uint(drawTileBackdrop)& 0xff)<< 24);
 
 
         if(zWrite && drawTileBackdrop != 0 && drawAlphaTileIndex < 0){

@@ -28,7 +28,7 @@ uniform ivec2 uZBufferSize;
 in ivec2 aTileOffset;
 in ivec2 aTileOrigin;
 in uvec4 aMaskTexCoord0;
-in ivec2 aBackdropCtrl;
+in ivec2 aCtrlBackdrop;
 in int aPathIndex;
 in int aColor;
 
@@ -47,7 +47,7 @@ void main(){
 
     uvec2 maskTileCoord = uvec2(aMaskTexCoord0 . x, aMaskTexCoord0 . y + 256u * aMaskTexCoord0 . z);
     vec2 maskTexCoord0 =(vec2(maskTileCoord)+ tileOffset)* uTileSize;
-    if(aBackdropCtrl . x == 0 && aMaskTexCoord0 . w != 0u)
+    if(aCtrlBackdrop . y == 0 && aMaskTexCoord0 . w != 0u)
         cull = true;
 
     if(cull)
@@ -63,9 +63,9 @@ void main(){
     vec4 baseColor = texture(uTextureMetadata, baseColorCoord);
 
     vColorTexCoord0 = mat2(colorTexMatrix0)* position + colorTexOffsets . xy;
-    vMaskTexCoord0 = vec3(maskTexCoord0, float(aBackdropCtrl . x));
+    vMaskTexCoord0 = vec3(maskTexCoord0, float(aCtrlBackdrop . y));
     vBaseColor = baseColor;
-    vTileCtrl = float(aBackdropCtrl . y);
+    vTileCtrl = float(aCtrlBackdrop . x);
     gl_Position = uTransform * vec4(position, 0.0, 1.0);
 }
 

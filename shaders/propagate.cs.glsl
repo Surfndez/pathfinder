@@ -20,8 +20,6 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
-#include "fill.inc.glsl"
-
 // TODO(pcwalton): Improve occupancy!
 layout(local_size_x = 256) in;
 
@@ -88,7 +86,7 @@ void main() {
         int drawAlphaTileIndex = int(iDrawTiles[drawTileIndex * 4 + 1]);
         uint drawTileWord = iDrawTiles[drawTileIndex * 4 + 3];
 
-        int delta = (int(drawTileWord) << 8) >> 24;
+        int delta = int(drawTileWord) >> 24;
         int drawTileBackdrop = currentBackdrop;
 
         // Handle clip if necessary.
@@ -138,8 +136,8 @@ void main() {
         }
 
         iDrawTiles[drawTileIndex * 4 + 1] = drawAlphaTileIndex;
-        iDrawTiles[drawTileIndex * 4 + 3] = (drawTileWord & 0xff00ffff) |
-            ((uint(drawTileBackdrop) & 0xff) << 16);
+        iDrawTiles[drawTileIndex * 4 + 3] = (drawTileWord & 0x00ffffff) |
+            ((uint(drawTileBackdrop) & 0xff) << 24);
 
         // Write to Z-buffer if necessary.
         if (zWrite && drawTileBackdrop != 0 && drawAlphaTileIndex < 0) {

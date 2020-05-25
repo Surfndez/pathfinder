@@ -18,7 +18,7 @@ struct main0_in
     int2 aTileOffset [[attribute(0)]];
     int2 aTileOrigin [[attribute(1)]];
     uint4 aMaskTexCoord0 [[attribute(2)]];
-    int2 aBackdropCtrl [[attribute(3)]];
+    int2 aCtrlBackdrop [[attribute(3)]];
     int aPathIndex [[attribute(4)]];
     int aColor [[attribute(5)]];
 };
@@ -36,7 +36,7 @@ vertex main0_out main0(main0_in in [[stage_in]], constant int2& uZBufferSize [[b
     }
     uint2 maskTileCoord = uint2(in.aMaskTexCoord0.x, in.aMaskTexCoord0.y + (256u * in.aMaskTexCoord0.z));
     float2 maskTexCoord0 = (float2(maskTileCoord) + tileOffset) * uTileSize;
-    bool _89 = in.aBackdropCtrl.x == 0;
+    bool _89 = in.aCtrlBackdrop.y == 0;
     bool _96;
     if (_89)
     {
@@ -63,9 +63,9 @@ vertex main0_out main0(main0_in in [[stage_in]], constant int2& uZBufferSize [[b
     float4 colorTexOffsets = uTextureMetadata.sample(uTextureMetadataSmplr, colorTexOffsetsCoord, level(0.0));
     float4 baseColor = uTextureMetadata.sample(uTextureMetadataSmplr, baseColorCoord, level(0.0));
     out.vColorTexCoord0 = (float2x2(float2(colorTexMatrix0.xy), float2(colorTexMatrix0.zw)) * position) + colorTexOffsets.xy;
-    out.vMaskTexCoord0 = float3(maskTexCoord0, float(in.aBackdropCtrl.x));
+    out.vMaskTexCoord0 = float3(maskTexCoord0, float(in.aCtrlBackdrop.y));
     out.vBaseColor = baseColor;
-    out.vTileCtrl = float(in.aBackdropCtrl.y);
+    out.vTileCtrl = float(in.aCtrlBackdrop.x);
     out.gl_Position = uTransform * float4(position, 0.0, 1.0);
     return out;
 }

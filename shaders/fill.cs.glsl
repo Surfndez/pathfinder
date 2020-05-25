@@ -18,7 +18,7 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
-#include "fill.inc.glsl"
+#include "fill_area.inc.glsl"
 
 layout(local_size_x = 16, local_size_y = 4) in;
 

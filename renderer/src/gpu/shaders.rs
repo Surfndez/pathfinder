@@ -12,7 +12,7 @@ use crate::gpu::options::{RendererGPUFeatures, RendererOptions};
 use crate::gpu::renderer::{MASK_TILES_ACROSS, MASK_TILES_DOWN};
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
 use pathfinder_gpu::{BufferTarget, BufferUploadMode, ComputeDimensions, Device, FeatureLevel};
-use pathfinder_gpu::{VertexAttrClass, VertexAttrDescriptor, VertexAttrType};
+use pathfinder_gpu::{ProgramKind, VertexAttrClass, VertexAttrDescriptor, VertexAttrType};
 use pathfinder_resources::ResourceLoader;
 
 // TODO(pcwalton): Replace with `mem::size_of` calls?
@@ -187,8 +187,8 @@ impl<D> TileVertexArray<D> where D: Device {
             device.get_vertex_attr(&tile_program.program, "TileOrigin").unwrap();
         let mask_0_tex_coord_attr =
             device.get_vertex_attr(&tile_program.program, "MaskTexCoord0").unwrap();
-        let backdrop_ctrl_attr =
-            device.get_vertex_attr(&tile_program.program, "BackdropCtrl").unwrap();
+        let ctrl_backdrop_attr =
+            device.get_vertex_attr(&tile_program.program, "CtrlBackdrop").unwrap();
         let color_attr = device.get_vertex_attr(&tile_program.program, "Color").unwrap();
         let path_index_attr = device.get_vertex_attr(&tile_program.program, "PathIndex").unwrap();
 
@@ -239,7 +239,7 @@ impl<D> TileVertexArray<D> where D: Device {
             divisor: 1,
             buffer_index: 1,
         });
-        device.configure_vertex_attr(&vertex_array, &backdrop_ctrl_attr, &VertexAttrDescriptor {
+        device.configure_vertex_attr(&vertex_array, &ctrl_backdrop_attr, &VertexAttrDescriptor {
             size: 2,
             class: VertexAttrClass::Int,
             attr_type: VertexAttrType::I8,
@@ -465,12 +465,20 @@ impl<D> FillProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader, options: &RendererOptions)
                -> FillProgram<D> {
         match (options.gpu_features.contains(RendererGPUFeatures::FILL_IN_COMPUTE),
+               options.gpu_features.contains(RendererGPUFeatures::BIN_ON_GPU),
                device.feature_level()) {
-            (true, FeatureLevel::D3D11) => {
+            (true, _, FeatureLevel::D3D11) => {
                 FillProgram::Compute(FillComputeProgram::new(device, resources))
             }
-            (_, FeatureLevel::D3D10) | (false, _) => {
-                FillProgram::Raster(FillRasterProgram::new(device, resources))
+            (false, true, FeatureLevel::D3D11) => {
+                FillProgram::Raster(FillRasterProgram::new(device,
+                                                           resources,
+                                                           FillRasterProgramKind::GPUBinning))
+            }
+            (_, _, FeatureLevel::D3D10) | (false, false, _) => {
+                FillProgram::Raster(FillRasterProgram::new(device,
+                                                           resources,
+                                                           FillRasterProgramKind::CPUBinning))
             }
         }
     }
@@ -481,19 +489,46 @@ pub struct FillRasterProgram<D> where D: Device {
     pub framebuffer_size_uniform: D::Uniform,
     pub tile_size_uniform: D::Uniform,
     pub area_lut_texture: D::TextureParameter,
+    pub tiles_storage_buffer: Option<D::StorageBuffer>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FillRasterProgramKind {
+    CPUBinning,
+    GPUBinning,
 }
 
 impl<D> FillRasterProgram<D> where D: Device {
-    pub fn new(device: &D, resources: &dyn ResourceLoader) -> FillRasterProgram<D> {
-        let program = device.create_raster_program(resources, "fill");
+    fn new(device: &D, resources: &dyn ResourceLoader, kind: FillRasterProgramKind)
+           -> FillRasterProgram<D> {
+        let vertex_shader_name = match kind {
+            FillRasterProgramKind::CPUBinning => "fill_cpu_binned",
+            FillRasterProgramKind::GPUBinning => "fill_gpu_binned",
+        };
+
+        let program =
+            device.create_program_from_shader_names(resources, "fill", ProgramKind::Raster {
+                vertex: vertex_shader_name,
+                fragment: "fill",
+            });
+
         let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
         let tile_size_uniform = device.get_uniform(&program, "TileSize");
         let area_lut_texture = device.get_texture_parameter(&program, "AreaLUT");
+
+        let tiles_storage_buffer = match kind {
+            FillRasterProgramKind::GPUBinning => {
+                Some(device.get_storage_buffer(&program, "Tiles", 0))
+            }
+            FillRasterProgramKind::CPUBinning => None,
+        };
+
         FillRasterProgram {
             program,
             framebuffer_size_uniform,
             tile_size_uniform,
             area_lut_texture,
+            tiles_storage_buffer,
         }
     }
 }

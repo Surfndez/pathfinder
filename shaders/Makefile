@@ -18,7 +18,8 @@ SHADERS=\
 	demo_ground.fs.glsl \
 	demo_ground.vs.glsl \
 	fill.fs.glsl \
-	fill.vs.glsl \
+	fill_cpu_binned.vs.glsl \
+	fill_gpu_binned.vs.glsl \
 	reproject.fs.glsl \
 	reproject.vs.glsl \
 	stencil.fs.glsl \
@@ -40,7 +41,8 @@ COMPUTE_SHADERS=\
 	$(EMPTY)
 
 INCLUDES=\
-	fill.inc.glsl \
+	fill_area.inc.glsl \
+	fill_vertex.inc.glsl \
 	$(EMPTY)
 
 OUT=\

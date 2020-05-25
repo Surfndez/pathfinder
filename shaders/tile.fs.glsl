@@ -570,7 +570,7 @@ void calculateColor(int tileCtrl, int ctrl) {
     int maskCtrl0 = (tileCtrl >> TILE_CTRL_MASK_0_SHIFT) & TILE_CTRL_MASK_MASK;
     float maskAlpha = 1.0;
     maskAlpha = sampleMask(maskAlpha, uMaskTexture0, uMaskTextureSize0, vMaskTexCoord0, maskCtrl0);
-    maskAlpha = mix(0.1, 1.0, maskAlpha);
+    //maskAlpha = mix(0.1, 1.0, maskAlpha);
 
     // Sample color.
     vec4 color = vBaseColor;

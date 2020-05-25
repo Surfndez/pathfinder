@@ -91,6 +91,12 @@ void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTi
     iFills[fillIndex * 3 + 2]= tileIndex;
 }
 
+void adjustBackdrop(int backdropDelta, ivec2 tileCoords, ivec4 pathTileRect, uint pathTileOffset){
+    uint tileIndex;
+    if(computeTileIndex(tileCoords, pathTileRect, pathTileOffset, tileIndex))
+        atomicAdd(iTiles[tileIndex * 4 + 3], backdropDelta << 24);
+}
+
 void main(){
     uint segmentIndex = gl_GlobalInvocationID . x;
     vec4 lineSegment = iSegments[segmentIndex]. line;
@@ -162,6 +168,7 @@ void main(){
         else if(tileStep . x > 0 && nextStepDirection == 1)
             backdropAdjustment = - 1;
 
+        adjustBackdrop(backdropAdjustment, tileCoords, pathTileRect, pathTileOffset);
 
 
         if(nextStepDirection == 1){

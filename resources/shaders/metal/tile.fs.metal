@@ -564,7 +564,6 @@ void calculateColor(thread const int& tileCtrl, thread const int& ctrl, thread t
     float3 param_2 = vMaskTexCoord0;
     int param_3 = maskCtrl0;
     maskAlpha = sampleMask(param, uMaskTexture0, uMaskTexture0Smplr, param_1, param_2, param_3);
-    maskAlpha = mix(0.100000001490116119384765625, 1.0, maskAlpha);
     float4 color = vBaseColor;
     int color0Combine = (ctrl >> 6) & 3;
     if (color0Combine != 0)
@@ -591,8 +590,8 @@ void calculateColor(thread const int& tileCtrl, thread const int& ctrl, thread t
     float2 param_17 = gl_FragCoord.xy;
     int param_18 = compositeOp;
     color = composite(param_15, uDestTexture, uDestTextureSmplr, param_16, param_17, param_18);
-    float3 _1350 = color.xyz * color.w;
-    color = float4(_1350.x, _1350.y, _1350.z, color.w);
+    float3 _1347 = color.xyz * color.w;
+    color = float4(_1347.x, _1347.y, _1347.z, color.w);
     oFragColor = color;
 }
 

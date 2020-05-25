@@ -221,8 +221,8 @@ pub struct TileObjectPrimitive {
     pub path_id: u32,
     // TODO(pcwalton): Maybe look the color up based on path ID?
     pub color: u16,
-    pub backdrop: i8,
     pub ctrl: u8,
+    pub backdrop: i8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

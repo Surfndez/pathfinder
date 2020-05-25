@@ -947,6 +947,7 @@ impl<D> Renderer<D> where D: Device {
             FillProgram::Raster(_) => {
                 let fill_storage_info = self.upload_buffered_fills_for_raster();
                 self.draw_fills_via_raster(fill_storage_info.storage_id,
+                                           None,
                                            FillCount::Direct(fill_storage_info.fill_count));
             }
             FillProgram::Compute(_) => self.draw_buffered_fills_via_compute(),
@@ -984,14 +985,19 @@ impl<D> Renderer<D> where D: Device {
         FillStorageInfo { storage_id, fill_count }
     }
 
-    fn draw_fills_via_raster(&mut self, storage_id: StorageID, fill_count: FillCount) {
+    fn draw_fills_via_raster(&mut self,
+                             fill_storage_id: StorageID,
+                             tile_storage_id: Option<StorageID>,
+                             fill_count: FillCount) {
         println!("draw_fills_via_raster()");
         let fill_raster_program = match self.fill_program {
             FillProgram::Raster(ref fill_raster_program) => fill_raster_program,
             _ => unreachable!(),
         };
         let mask_viewport = self.mask_viewport();
-        let fill_vertex_storage = self.back_frame.fill_vertex_storage_allocator.get(storage_id);
+        let fill_vertex_storage = self.back_frame   
+                                      .fill_vertex_storage_allocator
+                                      .get(fill_storage_id);
         let fill_vertex_array =
             fill_vertex_storage.vertex_array.as_ref().expect("Where's the vertex array?");
 
@@ -1001,6 +1007,18 @@ impl<D> Renderer<D> where D: Device {
                 .contains(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY) {
             clear_color = Some(ColorF::default());
         };
+
+        let mut storage_buffers = vec![];
+        if let Some(tile_storage_id) = tile_storage_id {
+            let alpha_tile_buffer = &self.back_frame
+                                        .tile_vertex_storage_allocator
+                                        .get(tile_storage_id)
+                                        .vertex_buffer;
+            storage_buffers.push((fill_raster_program.tiles_storage_buffer
+                                                     .as_ref()
+                                                     .expect("Where's the tile storage buffer?"),
+                                  alpha_tile_buffer));
+        }
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
@@ -1021,7 +1039,7 @@ impl<D> Renderer<D> where D: Device {
                  UniformData::Vec2(F32x2::new(TILE_WIDTH as f32, TILE_HEIGHT as f32))),
             ],
             images: &[],
-            storage_buffers: &[],
+            storage_buffers: &storage_buffers,
             viewport: mask_viewport,
             options: RenderOptions {
                 blend: Some(BlendState {
@@ -1262,7 +1280,9 @@ impl<D> Renderer<D> where D: Device {
                     // FIXME(pcwalton): Don't unconditionally pass true for copying here.
                     self.reallocate_alpha_tile_pages_if_necessary(true);
                     // TODO(pcwalton): Fills via compute.
-                    self.draw_fills_via_raster(fill_storage_id, FillCount::Indirect);
+                    self.draw_fills_via_raster(fill_storage_id,
+                                               Some(tile_vertex_storage_id),
+                                               FillCount::Indirect);
                 }
 
                 self.propagate_tiles(gpu_info.propagate_metadata.len() as u32,
