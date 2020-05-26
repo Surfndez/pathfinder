@@ -46,6 +46,7 @@ layout(std430, binding = 1)buffer bMetadata {
 
 
 
+
 layout(std430, binding = 2)buffer bIndirectDrawParams {
     restrict uint iIndirectDrawParams[];
 };
@@ -93,12 +94,27 @@ void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTi
 
 void adjustBackdrop(int backdropDelta, ivec2 tileCoords, ivec4 pathTileRect, uint pathTileOffset){
     uint tileIndex;
-    if(computeTileIndex(tileCoords, pathTileRect, pathTileOffset, tileIndex))
-        atomicAdd(iTiles[tileIndex * 4 + 3], backdropDelta << 24);
+    if(computeTileIndex(tileCoords, pathTileRect, pathTileOffset, tileIndex)){
+
+
+        uint lastValue = iTiles[tileIndex * 4 + 3];
+        uint newValue, prevValue;
+        while(true){
+            int newBackdrop =(int(lastValue)>> 24)+ backdropDelta;
+            newValue =(lastValue & 0x00ffffffu)| uint(newBackdrop << 24);
+            prevValue = atomicCompSwap(iTiles[tileIndex * 4 + 3], lastValue, newValue);
+            if(prevValue == lastValue)
+                break;
+            lastValue = prevValue;
+        }
+    }
 }
 
 void main(){
     uint segmentIndex = gl_GlobalInvocationID . x;
+    if(segmentIndex >= iIndirectDrawParams[5])
+        return;
+
     vec4 lineSegment = iSegments[segmentIndex]. line;
     uint pathIndex = iSegments[segmentIndex]. pathIndex . x;
 

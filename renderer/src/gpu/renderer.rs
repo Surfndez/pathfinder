@@ -817,7 +817,7 @@ impl<D> Renderer<D> where D: Device {
                                 segments: &[BinSegment],
                                 propagate_metadata_storage_id: StorageID,
                                 tile_storage_id: StorageID)
-                                -> StorageID {
+                                -> (StorageID, u32) {
         // FIXME(pcwalton): Buffer reuse
         let segments_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
         self.device.allocate_buffer(&segments_buffer,
@@ -853,16 +853,21 @@ impl<D> Renderer<D> where D: Device {
                                                     .get(propagate_metadata_storage_id);
 
         // FIXME(pcwalton): Buffer reuse
-        self.device.allocate_buffer::<u32>(&self.back_frame.fill_indirect_draw_params_buffer,
-                                           BufferData::Memory(&[6, 0, 0, 0, 0, 0, 0, 0]),
-                                           BufferTarget::Storage);
+        self.device.allocate_buffer::<u32>(
+            &self.back_frame.fill_indirect_draw_params_buffer,
+            BufferData::Memory(&[6, 0, 0, 0, 0, segments.len() as u32, 0, 0]),
+            BufferTarget::Storage);
 
         //println!("main_viewport={:?}", main_viewport);
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
-        let compute_dimensions = ComputeDimensions { x: segments.len() as u32 / 64, y: 1, z: 1 };
+        let compute_dimensions = ComputeDimensions {
+            x: (segments.len() as u32 + 63) / 64,
+            y: 1,
+            z: 1,
+        };
         self.device.dispatch_compute(compute_dimensions, &ComputeState {
             program: &self.bin_compute_program.program,
             textures: &[],
@@ -909,7 +914,7 @@ impl<D> Renderer<D> where D: Device {
                  duration.as_secs_f64() * 1000.0);
                  */
 
-        fill_storage_id
+        (fill_storage_id, indirect_draw_params[1])
     }
 
     fn add_fills(&mut self, fill_batch: &[Fill]) {
@@ -1273,7 +1278,7 @@ impl<D> Renderer<D> where D: Device {
 
                 // Bin and render fills if requested.
                 if let Some(ref segments) = gpu_info.segments {
-                    let fill_storage_id =
+                    let (fill_storage_id, instance_count) =
                         self.bin_segments_via_compute(segments,
                                                       propagate_metadata_storage_id,
                                                       tile_vertex_storage_id);
@@ -1282,7 +1287,7 @@ impl<D> Renderer<D> where D: Device {
                     // TODO(pcwalton): Fills via compute.
                     self.draw_fills_via_raster(fill_storage_id,
                                                Some(tile_vertex_storage_id),
-                                               FillCount::Indirect);
+                                               FillCount::Direct(instance_count));
                 }
 
                 self.propagate_tiles(gpu_info.propagate_metadata.len() as u32,
