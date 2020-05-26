@@ -12,12 +12,12 @@ use crate::gpu::debug::DebugUIPresenter;
 use crate::gpu::options::{DestFramebuffer, RendererGPUFeatures, RendererOptions};
 use crate::gpu::shaders::{BinComputeProgram, BinRasterProgram, BinVertexArray, BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
 use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram, ClipTileCopyVertexArray};
-use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, FillProgram, FillVertexArray};
+use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, DiceComputeProgram, FillProgram, FillVertexArray};
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
 use crate::gpu_data::{BinSegment, Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
-use crate::gpu_data::{TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
+use crate::gpu_data::{SegmentIndices, TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive};
 use crate::options::BoundingQuad;
 use crate::paint::PaintCompositeOp;
@@ -122,6 +122,7 @@ pub struct Renderer<D> where D: Device {
     reprojection_program: ReprojectionProgram<D>,
     bin_raster_program: BinRasterProgram<D>,
     bin_compute_program: BinComputeProgram<D>,
+    dice_compute_program: DiceComputeProgram<D>,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
     fill_tile_map: Vec<i32>,
@@ -213,6 +214,7 @@ impl<D> Renderer<D> where D: Device {
         };
         let bin_raster_program = BinRasterProgram::new(&device, resources);
         let bin_compute_program = BinComputeProgram::new(&device, resources);
+        let dice_compute_program = DiceComputeProgram::new(&device, resources);
 
         let area_lut_texture =
             device.create_texture_from_png(resources, "area-lut", TextureFormat::RGBA8);
@@ -273,6 +275,7 @@ impl<D> Renderer<D> where D: Device {
             tile_post_programs,
             bin_raster_program,
             bin_compute_program,
+            dice_compute_program,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             fill_tile_map: vec![],
@@ -813,17 +816,71 @@ impl<D> Renderer<D> where D: Device {
         fill_storage_id
     }
 
+    fn dice_segments(&mut self, points: &[Vector2F], indices: &[SegmentIndices])
+                     -> (D::Buffer, u32) {
+        // FIXME(pcwalton): Buffer reuse
+        let indirect_compute_params_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        let points_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        let input_indices_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        let output_segments_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        self.device
+            .allocate_buffer(&indirect_compute_params_buffer,
+                             BufferData::Memory(&[0, 0, 0, 0, indices.len() as u32, 0, 0, 0]),
+                             BufferTarget::Storage);
+        self.device.allocate_buffer(&points_buffer,
+                                    BufferData::Memory(points),
+                                    BufferTarget::Storage);
+        self.device.allocate_buffer(&input_indices_buffer,
+                                    BufferData::Memory(indices),
+                                    BufferTarget::Storage);
+        // FIXME(pcwalton): Better memory management!!
+        self.device.allocate_buffer::<[u32; 8]>(&output_segments_buffer,
+                                                BufferData::Uninitialized(3 * 1024 * 1024),
+                                                BufferTarget::Storage);
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        let compute_dimensions =
+            ComputeDimensions { x: (indices.len() as u32 + 63) / 64, y: 1, z: 1 };
+        self.device.dispatch_compute(compute_dimensions, &ComputeState {
+            program: &self.dice_compute_program.program,
+            textures: &[],
+            uniforms: &[],
+            images: &[],
+            storage_buffers: &[
+                (&self.dice_compute_program.compute_indirect_params_storage_buffer,
+                 &indirect_compute_params_buffer),
+                (&self.dice_compute_program.points_storage_buffer, &points_buffer),
+                (&self.dice_compute_program.input_indices_storage_buffer, &input_indices_buffer),
+                (&self.dice_compute_program.output_segments_storage_buffer,
+                 &output_segments_buffer),
+            ],
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
+
+        self.device.end_commands();
+        self.device.begin_commands();
+
+        let indirect_compute_params = self.device.read_buffer(&indirect_compute_params_buffer,
+                                                              BufferTarget::Storage,
+                                                              0..8);
+        println!("GPU dicing: points={} indices={} output_segments={}",
+                 points.len(),
+                 indices.len(),
+                 indirect_compute_params[5]);
+
+        (output_segments_buffer, indirect_compute_params[5])
+    }
+
     fn bin_segments_via_compute(&mut self,
-                                segments: &[BinSegment],
+                                segments_buffer: D::Buffer,
+                                segment_count: u32,
                                 propagate_metadata_storage_id: StorageID,
                                 tile_storage_id: StorageID)
                                 -> (StorageID, u32) {
-        // FIXME(pcwalton): Buffer reuse
-        let segments_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
-        self.device.allocate_buffer(&segments_buffer,
-                                    BufferData::Memory(segments),
-                                    BufferTarget::Storage);
-
         // FIXME(pcwalton): Don't hardcode 3M fills!!
         let fill_storage_id = {
             let fill_program = &self.fill_program;
@@ -855,7 +912,7 @@ impl<D> Renderer<D> where D: Device {
         // FIXME(pcwalton): Buffer reuse
         self.device.allocate_buffer::<u32>(
             &self.back_frame.fill_indirect_draw_params_buffer,
-            BufferData::Memory(&[6, 0, 0, 0, 0, segments.len() as u32, 0, 0]),
+            BufferData::Memory(&[6, 0, 0, 0, 0, segment_count, 0, 0]),
             BufferTarget::Storage);
 
         //println!("main_viewport={:?}", main_viewport);
@@ -864,10 +921,11 @@ impl<D> Renderer<D> where D: Device {
         self.device.begin_timer_query(&timer_query);
 
         let compute_dimensions = ComputeDimensions {
-            x: (segments.len() as u32 + 63) / 64,
+            x: (segment_count as u32 + 63) / 64,
             y: 1,
             z: 1,
         };
+
         self.device.dispatch_compute(compute_dimensions, &ComputeState {
             program: &self.bin_compute_program.program,
             textures: &[],
@@ -896,7 +954,7 @@ impl<D> Renderer<D> where D: Device {
                                     BufferTarget::Storage,
                                     0..8);
         println!("GPU binning: segments={} vertex_count={} instance_count={} alpha_tile_count={}",
-                 segments.len(),
+                 segment_count,
                  indirect_draw_params[0],
                  indirect_draw_params[1],
                  indirect_draw_params[4]);
@@ -1278,8 +1336,11 @@ impl<D> Renderer<D> where D: Device {
 
                 // Bin and render fills if requested.
                 if let Some(ref segments) = gpu_info.segments {
+                    let (segments_buffer, segment_count) =
+                        self.dice_segments(&segments.points, &segments.indices);
                     let (fill_storage_id, instance_count) =
-                        self.bin_segments_via_compute(segments,
+                        self.bin_segments_via_compute(segments_buffer,
+                                                      segment_count,
                                                       propagate_metadata_storage_id,
                                                       tile_vertex_storage_id);
                     // FIXME(pcwalton): Don't unconditionally pass true for copying here.

@@ -943,6 +943,7 @@ impl<D> BinComputeProgram<D> where D: Device {
             device.get_storage_buffer(&program, "IndirectDrawParams", 2);
         let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 3);
         let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 4);
+
         BinComputeProgram {
             program,
             metadata_storage_buffer,
@@ -950,6 +951,37 @@ impl<D> BinComputeProgram<D> where D: Device {
             fills_storage_buffer,
             tiles_storage_buffer,
             segments_storage_buffer,
+        }
+    }
+}
+
+pub struct DiceComputeProgram<D> where D: Device {
+    pub program: D::Program,
+    pub compute_indirect_params_storage_buffer: D::StorageBuffer,
+    pub points_storage_buffer: D::StorageBuffer,
+    pub input_indices_storage_buffer: D::StorageBuffer,
+    pub output_segments_storage_buffer: D::StorageBuffer,
+}
+
+impl<D> DiceComputeProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> DiceComputeProgram<D> {
+        let mut program = device.create_compute_program(resources, "dice");
+        let dimensions = ComputeDimensions { x: 64, y: 1, z: 1 };
+        device.set_compute_program_local_size(&mut program, dimensions);
+
+        let compute_indirect_params_storage_buffer =
+            device.get_storage_buffer(&program, "ComputeIndirectParams", 0);
+        let points_storage_buffer = device.get_storage_buffer(&program, "Points", 1);
+        let input_indices_storage_buffer = device.get_storage_buffer(&program, "InputIndices", 2);
+        let output_segments_storage_buffer =
+            device.get_storage_buffer(&program, "OutputSegments", 3);
+
+        DiceComputeProgram {
+            program,
+            compute_indirect_params_storage_buffer,
+            points_storage_buffer,
+            input_indices_storage_buffer,
+            output_segments_storage_buffer,
         }
     }
 }

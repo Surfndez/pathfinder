@@ -183,7 +183,6 @@ void main(){
             backdropAdjustment = 1;
         else if(tileStep . x > 0 && nextStepDirection == 1)
             backdropAdjustment = - 1;
-
         adjustBackdrop(backdropAdjustment, tileCoords, pathTileRect, pathTileOffset);
 
 

@@ -20,7 +20,7 @@ use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_geometry::line_segment::{LineSegment2F, LineSegmentU16};
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::transform2d::Transform2F;
-use pathfinder_geometry::vector::Vector2I;
+use pathfinder_geometry::vector::{Vector2F, Vector2I};
 use pathfinder_gpu::TextureSamplingFlags;
 use std::fmt::{Debug, Formatter, Result as DebugResult};
 use std::sync::Arc;
@@ -154,7 +154,20 @@ pub struct PrepareTilesGPUInfo {
     pub propagate_metadata: Vec<PropagateMetadata>,
 
     /// All line segments, if binning is being done on GPU.
-    pub segments: Option<Vec<BinSegment>>,
+    pub segments: Option<Segments>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Segments {
+    pub points: Vec<Vector2F>,
+    pub indices: Vec<SegmentIndices>,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct SegmentIndices {
+    pub first_point_index: u32,
+    pub flags_path_index: u32,
 }
 
 /// Information about clips applied to paths in a batch.

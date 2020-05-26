@@ -14,7 +14,7 @@ use crate::concurrent::executor::Executor;
 use crate::gpu::options::{RendererGPUFeatures, RendererOptions};
 use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
 use crate::gpu_data::{AlphaTileId, BinSegment, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, ClippedPathInfo, DrawTileBatch, Fill};
-use crate::gpu_data::{PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand, TILE_CTRL_MASK_0_SHIFT};
+use crate::gpu_data::{PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand, SegmentIndices, Segments, TILE_CTRL_MASK_0_SHIFT};
 use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatchId};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::{PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
@@ -28,7 +28,7 @@ use fxhash::FxHashMap;
 use instant::Instant;
 use pathfinder_content::effects::{BlendMode, Filter};
 use pathfinder_content::fill::FillRule;
-use pathfinder_content::outline::{ContourIterFlags, Outline};
+use pathfinder_content::outline::{ContourIterFlags, Outline, PointFlags};
 use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_content::segment::Segment;
 use pathfinder_geometry::line_segment::{LineSegment2F, LineSegmentU16};
@@ -43,6 +43,9 @@ use std::u32;
 
 pub(crate) const ALPHA_TILE_LEVEL_COUNT: usize = 2;
 pub(crate) const ALPHA_TILES_PER_LEVEL: usize = 1 << (32 - ALPHA_TILE_LEVEL_COUNT + 1);
+
+const CURVE_IS_QUADRATIC: u32 = 0x80000000;
+const CURVE_IS_CUBIC:     u32 = 0x40000000;
 
 pub(crate) struct SceneBuilder<'a, 'b> {
     scene: &'a mut Scene,
@@ -85,15 +88,16 @@ pub(crate) enum BuiltPathData {
 }
 
 #[derive(Debug)]
-pub(crate) struct BuiltPathUntiledData {
-    pub segments: Vec<LineSegment2F>,
-}
-
-#[derive(Debug)]
 pub(crate) struct BuiltPathTiledData {
     /// During tiling, or if backdrop computation is done on GPU, this stores the sum of backdrops
     /// for tile columns above the viewport.
     pub backdrops: Vec<i32>,
+}
+
+#[derive(Debug)]
+pub(crate) struct BuiltPathUntiledData {
+    /// The transformed outline.
+    pub outline: Outline,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -275,6 +279,8 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                     start_index: start_draw_path_index,
                     end_index: end_draw_path_index,
                 } => {
+                    let start_time = ::std::time::Instant::now();
+
                     let mut batches = None;
                     for draw_path_index in start_draw_path_index..end_draw_path_index {
                         let draw_path = &built_draw_paths[draw_path_index as usize];
@@ -321,9 +327,13 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                             match clip_id_to_path_index.get(&clip_path_id) {
                                 Some(&clip_path_index) => clip_path_index,
                                 None => {
-                                    let clip_path = &built_clip_paths[clip_path_id.0 as usize];
-                                    let clip_path_index =
-                                        clip_prepare_batch.push(clip_path, None, gpu_features);
+                                    let clip_path_index = clip_path_id.0 as usize;
+                                    let clip_path = &built_clip_paths[clip_path_index];
+                                    let outline = self.scene.clip_paths[clip_path_index].outline();
+                                    let clip_path_index = clip_prepare_batch.push(clip_path,
+                                                                                  None,
+                                                                                  outline,
+                                                                                  gpu_features);
                                     clip_id_to_path_index.insert(clip_path_id, clip_path_index);
                                     clip_path_index
                                 }
@@ -331,8 +341,12 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                         });
 
                         let batches = batches.as_mut().unwrap();
-                        batches.prepare.push(&draw_path.path, clip_path, gpu_features);
+                        let outline = &self.scene.paths[draw_path_index as usize].outline();
+                        batches.prepare.push(&draw_path.path, clip_path, outline, gpu_features);
                     }
+
+                    let elapsed_time = ::std::time::Instant::now() - start_time;
+                    println!("copying: {}ms", elapsed_time.as_secs_f32() * 1000.0);
 
                     if let Some(PathBatches { draw, prepare }) = batches {
                         prepare_commands.push(RenderCommand::PrepareTiles(prepare));
@@ -407,7 +421,7 @@ impl BuiltPath {
            path_bounds: RectF,
            view_box_bounds: RectF,
            fill_rule: FillRule,
-           segments: Option<Vec<LineSegment2F>>,
+           tiled_on_cpu: bool,
            tiling_path_info: &TilingPathInfo)
            -> BuiltPath {
         let occludes = match *tiling_path_info {
@@ -467,17 +481,12 @@ impl BuiltPath {
             _ => None,
         };
 
-        let data = match segments {
-            Some(segments) => {
-                BuiltPathData::Untiled(BuiltPathUntiledData {
-                    segments,
-                })
-            }
-            None => {
-                BuiltPathData::Tiled(BuiltPathTiledData {
-                    backdrops: vec![0; tiles.rect.width() as usize],
-                })
-            }
+        let data = if tiled_on_cpu {
+            BuiltPathData::Tiled(BuiltPathTiledData {
+                backdrops: vec![0; tiles.rect.width() as usize],
+            })
+        } else {
+            BuiltPathData::Untiled(BuiltPathUntiledData { outline: Outline::new() })
         };
 
         BuiltPath {
@@ -506,19 +515,19 @@ pub struct TileStats {
 // Utilities for built objects
 
 impl ObjectBuilder {
-    // If `segments` is `None`, then tiling is being done on CPU. Otherwise, it's done on GPU.
+    // If `outline` is `None`, then tiling is being done on CPU. Otherwise, it's done on GPU.
     pub(crate) fn new(path_id: u32,
                       path_bounds: RectF,
                       view_box_bounds: RectF,
                       fill_rule: FillRule,
-                      segments: Option<Vec<LineSegment2F>>,
+                      tiled_on_cpu: bool,
                       tiling_path_info: &TilingPathInfo)
                       -> ObjectBuilder {
         let built_path = BuiltPath::new(path_id,
                                         path_bounds,
                                         view_box_bounds,
                                         fill_rule,
-                                        segments,
+                                        tiled_on_cpu,
                                         tiling_path_info);
         ObjectBuilder { built_path, bounds: path_bounds, fills: vec![] }
     }
@@ -738,7 +747,7 @@ impl PrepareTilesBatch {
                     backdrops: vec![],
                     propagate_metadata: vec![],
                     segments: if gpu_features.contains(RendererGPUFeatures::BIN_ON_GPU) {
-                        Some(vec![])
+                        Some(Segments { points: vec![], indices: vec![] })
                     } else {
                         None
                     },
@@ -755,6 +764,7 @@ impl PrepareTilesBatch {
     fn push(&mut self,
             path: &BuiltPath,
             clip_path_id: Option<PathIndex>,
+            path_outline: &Outline,
             gpu_features: RendererGPUFeatures)
             -> PathIndex {
         let z_write = path.occluders.is_some();
@@ -789,20 +799,7 @@ impl PrepareTilesBatch {
                         gpu_info.backdrops.extend_from_slice(&tiled_data.backdrops);
                     }
                     BuiltPathData::Untiled(ref untiled_data) => {
-                        for _ in 0..path.tiles.rect.width() {
-                            gpu_info.backdrops.push(0);
-                        }
-
-                        let bin_segments = gpu_info.segments.as_mut().unwrap();
-                        for &segment in &untiled_data.segments {
-                            bin_segments.push(BinSegment {
-                                segment,
-                                path_index,
-                                pad0: 0,
-                                pad1: 0,
-                                pad2: 0,
-                            });
-                        }
+                        gpu_info.add_segments(path, path_index, &untiled_data.outline);
                     }
                 }
             }
@@ -838,5 +835,50 @@ impl PrepareTilesBatch {
         }
 
         path_index
+    }
+}
+
+impl PrepareTilesGPUInfo {
+    fn add_segments(&mut self, path: &BuiltPath, path_index: PathIndex, outline: &Outline) {
+        for _ in 0..path.tiles.rect.width() {
+            self.backdrops.push(0);
+        }
+
+        let bin_segments = self.segments.as_mut().unwrap();
+        for contour in outline.contours() {
+            let point_count = contour.len() as u32;
+            bin_segments.points.reserve(point_count as usize);
+
+            for point_index in 0..point_count {
+                if !contour.flags_of(point_index).contains(PointFlags::CONTROL_POINT_0 |
+                                                           PointFlags::CONTROL_POINT_1) {
+                    let mut flags = 0;
+                    if point_index + 1 < point_count &&
+                            contour.flags_of(point_index + 1)
+                                   .contains(PointFlags::CONTROL_POINT_0) {
+                        if point_index + 2 < point_count &&
+                                contour.flags_of(point_index + 2)
+                                       .contains(PointFlags::CONTROL_POINT_1) {
+                            flags = CURVE_IS_CUBIC
+                        } else {
+                            flags = CURVE_IS_QUADRATIC
+                        }
+                    }
+
+                    if point_index + 1 < point_count || contour.is_closed() {
+                        bin_segments.indices.push(SegmentIndices {
+                            first_point_index: bin_segments.points.len() as u32,
+                            flags_path_index: path_index.0 | flags,
+                        });
+                    }
+                }
+
+                bin_segments.points.push(contour.position_of(point_index));
+            }
+
+            if contour.is_closed() {
+                bin_segments.points.push(contour.position_of(0));
+            }
+        }
     }
 }

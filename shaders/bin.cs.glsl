@@ -181,7 +181,6 @@ void main() {
             backdropAdjustment = 1;
         else if (tileStep.x > 0 && nextStepDirection == STEP_DIRECTION_X)
             backdropAdjustment = -1;
-        // TODO(pcwalton): Adjust backdrop!
         adjustBackdrop(backdropAdjustment, tileCoords, pathTileRect, pathTileOffset);
 
         // Take a step.

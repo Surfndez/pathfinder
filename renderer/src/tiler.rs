@@ -43,33 +43,36 @@ impl<'a, 'b> Tiler<'a, 'b> {
                       -> Tiler<'a, 'b> {
         let bounds = outline.bounds().intersection(view_box).unwrap_or(RectF::default());
 
-        let segments = if scene_builder.listener
-                                       .gpu_features
-                                       .contains(RendererGPUFeatures::BIN_ON_GPU) {
-            Some(create_segments(outline))
-        } else {
-            None
-        };
+        let tiled_on_cpu = !scene_builder.listener
+                                         .gpu_features
+                                         .contains(RendererGPUFeatures::BIN_ON_GPU);
 
         let object_builder = ObjectBuilder::new(path_id,
                                                 bounds,
                                                 view_box,
                                                 fill_rule,
-                                                segments,
+                                                tiled_on_cpu,
                                                 &path_info);
         Tiler { scene_builder, object_builder, outline, path_info }
     }
 
     pub(crate) fn generate_tiles(&mut self) {
-        self.generate_fills_if_necessary();
-        self.prepare_tiles_if_necessary();
+        match self.object_builder.built_path.data {
+            BuiltPathData::Tiled(_) => {
+                self.generate_fills();
+                self.prepare_tiles();
+            }
+            BuiltPathData::Untiled(ref mut untiled_data) => {
+                untiled_data.outline = (*self.outline).clone();
+            }
+        }
     }
 
-    fn generate_fills_if_necessary(&mut self) {
-        // Don't do this here if the GPU will do it.
-        if self.scene_builder.listener.gpu_features.contains(RendererGPUFeatures::BIN_ON_GPU) {
-            return;
-        }
+    fn generate_fills(&mut self) {
+        debug_assert!(!self.scene_builder
+                           .listener
+                           .gpu_features
+                           .contains(RendererGPUFeatures::BIN_ON_GPU));
 
         for contour in self.outline.contours() {
             for segment in contour.iter(ContourIterFlags::empty()) {
@@ -78,14 +81,12 @@ impl<'a, 'b> Tiler<'a, 'b> {
         }
     }
 
-    fn prepare_tiles_if_necessary(&mut self) {
+    fn prepare_tiles(&mut self) {
         // Don't do this here if the GPU will do it.
-        if self.scene_builder
-               .listener
-               .gpu_features
-               .contains(RendererGPUFeatures::PREPARE_TILES_ON_GPU) {
-            return;
-        }
+        let backdrops = match self.object_builder.built_path.data {
+            BuiltPathData::Tiled(ref mut tiled_data) => &mut tiled_data.backdrops,
+            BuiltPathData::Untiled(_) => panic!("We shouldn't be preparing tiles on CPU!"),
+        };
 
         let built_clip_path = match self.path_info {
             TilingPathInfo::Draw(DrawTilingPathInfo { built_clip_path, .. }) => built_clip_path,
@@ -94,12 +95,6 @@ impl<'a, 'b> Tiler<'a, 'b> {
         let clips = &mut self.object_builder.built_path.clip_tiles;
 
         // Propagate backdrops.
-        let backdrops = match self.object_builder.built_path.data {
-            BuiltPathData::Tiled(ref mut tiled_data) => &mut tiled_data.backdrops,
-            BuiltPathData::Untiled(_) => {
-                panic!("Can't prepare tiles on CPU if binning wasn't also done on CPU!")
-            }
-        };
         let tiles_across = self.object_builder.built_path.tiles.rect.width() as usize;
         for (draw_tile_index, draw_tile) in self.object_builder
                                                 .built_path
