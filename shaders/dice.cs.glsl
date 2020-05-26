@@ -14,9 +14,13 @@
 
 #define BIN_WORKGROUP_SIZE  64
 
+#define MAX_CURVE_STACK_SIZE    32
+
 #define FLAGS_PATH_INDEX_CURVE_IS_QUADRATIC   0x80000000u
 #define FLAGS_PATH_INDEX_CURVE_IS_CUBIC       0x40000000u
 #define FLAGS_PATH_INDEX_PATH_INDEX_BITMASK   0xbfffffffu
+
+#define TOLERANCE   0.25
 
 precision highp float;
 
@@ -62,6 +66,31 @@ void emitLineSegment(vec4 lineSegment, uint pathIndex) {
     iOutputSegments[outputSegmentIndex].pathIndex.x = pathIndex;
 }
 
+// See Kaspar Fischer, "Piecewise Linear Approximation of Bézier Curves", 2000.
+bool curveIsFlat(vec4 baseline, vec4 ctrl) {
+    vec4 uv = vec4(3.0) * ctrl - vec4(2.0) * baseline - baseline.zwxy;
+    uv *= uv;
+    uv = max(uv, uv.zwxy);
+    return uv.x + uv.y <= 16.0 * TOLERANCE * TOLERANCE;
+}
+
+void subdivideCurve(vec4 baseline,
+                    vec4 ctrl,
+                    float t,
+                    out vec4 prevBaseline,
+                    out vec4 prevCtrl,
+                    out vec4 nextBaseline,
+                    out vec4 nextCtrl) {
+    vec2 p0 = baseline.xy, p1 = ctrl.xy, p2 = ctrl.zw, p3 = baseline.zw;
+    vec2 p0p1 = mix(p0, p1, t), p1p2 = mix(p1, p2, t), p2p3 = mix(p2, p3, t);
+    vec2 p0p1p2 = mix(p0p1, p1p2, t), p1p2p3 = mix(p1p2, p2p3, t);
+    vec2 p0p1p2p3 = mix(p0p1p2, p1p2p3, t);
+    prevBaseline = vec4(p0, p0p1p2p3);
+    prevCtrl = vec4(p0p1, p0p1p2);
+    nextBaseline = vec4(p0p1p2p3, p3);
+    nextCtrl = vec4(p1p2p3, p2p3);
+}
+
 void main() {
     uint inputIndex = gl_GlobalInvocationID.x;
     if (inputIndex >= iComputeIndirectParams[4])
@@ -96,8 +125,27 @@ void main() {
         ctrl = vec4(ctrl0, iPoints[fromPointIndex + 2]);
     }
 
-    // TODO(pcwalton)
-    emitLineSegment(vec4(baseline.xy, ctrl.xy), pathIndex);
-    emitLineSegment(ctrl, pathIndex);
-    emitLineSegment(vec4(ctrl.zw, baseline.zw), pathIndex);
+    vec4 baselines[MAX_CURVE_STACK_SIZE];
+    vec4 ctrls[MAX_CURVE_STACK_SIZE];
+    int curveStackSize = 1;
+    baselines[0] = baseline;
+    ctrls[0] = ctrl;
+
+    while (curveStackSize > 0) {
+        curveStackSize--;
+        baseline = baselines[curveStackSize];
+        ctrl = ctrls[curveStackSize];
+        if (curveIsFlat(baseline, ctrl) || curveStackSize + 2 >= MAX_CURVE_STACK_SIZE) {
+            emitLineSegment(baseline, pathIndex);
+        } else {
+            subdivideCurve(baseline,
+                           ctrl,
+                           0.5,
+                           baselines[curveStackSize + 1],
+                           ctrls[curveStackSize + 1],
+                           baselines[curveStackSize + 0],
+                           ctrls[curveStackSize + 0]);
+            curveStackSize += 2;
+        }
+    }
 }

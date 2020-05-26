@@ -850,8 +850,8 @@ impl PrepareTilesGPUInfo {
             bin_segments.points.reserve(point_count as usize);
 
             for point_index in 0..point_count {
-                if !contour.flags_of(point_index).contains(PointFlags::CONTROL_POINT_0 |
-                                                           PointFlags::CONTROL_POINT_1) {
+                if !contour.flags_of(point_index).intersects(PointFlags::CONTROL_POINT_0 |
+                                                             PointFlags::CONTROL_POINT_1) {
                     let mut flags = 0;
                     if point_index + 1 < point_count &&
                             contour.flags_of(point_index + 1)
