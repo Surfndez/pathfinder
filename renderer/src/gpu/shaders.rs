@@ -957,6 +957,8 @@ impl<D> BinComputeProgram<D> where D: Device {
 
 pub struct DiceComputeProgram<D> where D: Device {
     pub program: D::Program,
+    pub transform_uniform: D::Uniform,
+    pub translation_uniform: D::Uniform,
     pub compute_indirect_params_storage_buffer: D::StorageBuffer,
     pub points_storage_buffer: D::StorageBuffer,
     pub input_indices_storage_buffer: D::StorageBuffer,
@@ -969,6 +971,9 @@ impl<D> DiceComputeProgram<D> where D: Device {
         let dimensions = ComputeDimensions { x: 64, y: 1, z: 1 };
         device.set_compute_program_local_size(&mut program, dimensions);
 
+        let transform_uniform = device.get_uniform(&program, "Transform");
+        let translation_uniform = device.get_uniform(&program, "Translation");
+
         let compute_indirect_params_storage_buffer =
             device.get_storage_buffer(&program, "ComputeIndirectParams", 0);
         let points_storage_buffer = device.get_storage_buffer(&program, "Points", 1);
@@ -978,6 +983,8 @@ impl<D> DiceComputeProgram<D> where D: Device {
 
         DiceComputeProgram {
             program,
+            transform_uniform,
+            translation_uniform,
             compute_indirect_params_storage_buffer,
             points_storage_buffer,
             input_indices_storage_buffer,

@@ -16,7 +16,7 @@ use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, DiceComputeProgr
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
-use crate::gpu_data::{BinSegment, Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
+use crate::gpu_data::{BinSegment, Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
 use crate::gpu_data::{SegmentIndices, TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive};
 use crate::options::BoundingQuad;
@@ -31,6 +31,7 @@ use pathfinder_content::effects::{Filter, PatternFilter};
 use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_geometry::line_segment::LineSegment2F;
 use pathfinder_geometry::rect::{RectF, RectI};
+use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::transform3d::Transform4F;
 use pathfinder_geometry::util;
 use pathfinder_geometry::vector::{Vector2F, Vector2I, Vector4F, vec2f, vec2i};
@@ -816,8 +817,13 @@ impl<D> Renderer<D> where D: Device {
         fill_storage_id
     }
 
-    fn dice_segments(&mut self, points: &[Vector2F], indices: &[SegmentIndices])
+    fn dice_segments(&mut self,
+                     points: &[Vector2F],
+                     indices: &[SegmentIndices],
+                     transform: Transform2F)
                      -> (D::Buffer, u32) {
+        println!("dice_segments(): transform={:?}", transform);
+
         // FIXME(pcwalton): Buffer reuse
         let indirect_compute_params_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
         let points_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
@@ -846,7 +852,12 @@ impl<D> Renderer<D> where D: Device {
         self.device.dispatch_compute(compute_dimensions, &ComputeState {
             program: &self.dice_compute_program.program,
             textures: &[],
-            uniforms: &[],
+            uniforms: &[
+                (&self.dice_compute_program.transform_uniform,
+                 UniformData::Mat2(transform.matrix.0)),
+                (&self.dice_compute_program.translation_uniform,
+                 UniformData::Vec2(transform.vector.0)),
+            ],
             images: &[],
             storage_buffers: &[
                 (&self.dice_compute_program.compute_indirect_params_storage_buffer,
@@ -1335,9 +1346,12 @@ impl<D> Renderer<D> where D: Device {
                     self.upload_propagate_data(&gpu_info.propagate_metadata, &gpu_info.backdrops);
 
                 // Bin and render fills if requested.
-                if let Some(ref segments) = gpu_info.segments {
+                if let PrepareTilesGPUModalInfo::GPUBinning {
+                    ref segments,
+                    transform,
+                } = gpu_info.modal {
                     let (segments_buffer, segment_count) =
-                        self.dice_segments(&segments.points, &segments.indices);
+                        self.dice_segments(&segments.points, &segments.indices, transform);
                     let (fill_storage_id, instance_count) =
                         self.bin_segments_via_compute(segments_buffer,
                                                       segment_count,

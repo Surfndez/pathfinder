@@ -14,6 +14,7 @@
 use crate::builder::{BuiltPathData, ObjectBuilder, Occluder, SceneBuilder};
 use crate::gpu::options::RendererGPUFeatures;
 use crate::gpu_data::AlphaTileId;
+use crate::options::PrepareMode;
 use crate::tile_map::DenseTileMap;
 use crate::tiles::{DrawTilingPathInfo, PackedTile, TILE_HEIGHT, TILE_WIDTH, TileType, TilingPathInfo};
 use pathfinder_content::fill::FillRule;
@@ -39,6 +40,7 @@ impl<'a, 'b> Tiler<'a, 'b> {
                       outline: &'a Outline,
                       fill_rule: FillRule,
                       view_box: RectF,
+                      prepare_mode: &PrepareMode,
                       path_info: TilingPathInfo<'a>)
                       -> Tiler<'a, 'b> {
         let bounds = outline.bounds().intersection(view_box).unwrap_or(RectF::default());
@@ -51,19 +53,22 @@ impl<'a, 'b> Tiler<'a, 'b> {
                                                 bounds,
                                                 view_box,
                                                 fill_rule,
-                                                tiled_on_cpu,
+                                                prepare_mode,
                                                 &path_info);
         Tiler { scene_builder, object_builder, outline, path_info }
     }
 
     pub(crate) fn generate_tiles(&mut self) {
         match self.object_builder.built_path.data {
-            BuiltPathData::Tiled(_) => {
+            BuiltPathData::CPU(_) => {
                 self.generate_fills();
                 self.prepare_tiles();
             }
-            BuiltPathData::Untiled(ref mut untiled_data) => {
-                untiled_data.outline = (*self.outline).clone();
+            BuiltPathData::TransformCPUBinGPU(ref mut data) => {
+                data.outline = (*self.outline).clone();
+            }
+            BuiltPathData::GPU => {
+                panic!("Shouldn't have generated a tiler at all if we're transforming on GPU!")
             }
         }
     }
@@ -84,8 +89,10 @@ impl<'a, 'b> Tiler<'a, 'b> {
     fn prepare_tiles(&mut self) {
         // Don't do this here if the GPU will do it.
         let backdrops = match self.object_builder.built_path.data {
-            BuiltPathData::Tiled(ref mut tiled_data) => &mut tiled_data.backdrops,
-            BuiltPathData::Untiled(_) => panic!("We shouldn't be preparing tiles on CPU!"),
+            BuiltPathData::CPU(ref mut tiled_data) => &mut tiled_data.backdrops,
+            BuiltPathData::TransformCPUBinGPU(_) | BuiltPathData::GPU => {
+                panic!("We shouldn't be preparing tiles on CPU!")
+            }
         };
 
         let built_clip_path = match self.path_info {

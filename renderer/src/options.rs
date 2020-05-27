@@ -127,12 +127,33 @@ pub(crate) struct PreparedBuildOptions {
     pub(crate) subpixel_aa_enabled: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum PrepareMode {
+    CPU,
+    TransformCPUBinGPU,
+    GPU { transform: Transform2F },
+}
+
 impl PreparedBuildOptions {
     #[inline]
     pub(crate) fn bounding_quad(&self) -> BoundingQuad {
         match self.transform {
             PreparedRenderTransform::Perspective { quad, .. } => quad,
             _ => [Vector4F::default(); 4],
+        }
+    }
+
+    #[inline]
+    pub(crate) fn to_prepare_mode(&self, gpu_features: RendererGPUFeatures) -> PrepareMode {
+        if !gpu_features.contains(RendererGPUFeatures::BIN_ON_GPU) {
+            return PrepareMode::CPU
+        }
+        match self.transform {
+            PreparedRenderTransform::Perspective { .. } => return PrepareMode::TransformCPUBinGPU,
+            PreparedRenderTransform::None => {
+                PrepareMode::GPU { transform: Transform2F::default() }
+            }
+            PreparedRenderTransform::Transform2D(transform) => PrepareMode::GPU { transform },
         }
     }
 }

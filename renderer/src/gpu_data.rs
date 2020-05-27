@@ -153,8 +153,19 @@ pub struct PrepareTilesGPUInfo {
     /// This contains indices into the `tiles` and `backdrops` vectors.
     pub propagate_metadata: Vec<PropagateMetadata>,
 
-    /// All line segments, if binning is being done on GPU.
-    pub segments: Option<Segments>,
+    /// Info specific to the binning mode in use (CPU or GPU).
+    pub modal: PrepareTilesGPUModalInfo,
+}
+
+#[derive(Clone, Debug)]
+pub enum PrepareTilesGPUModalInfo {
+    CPUBinning,
+    GPUBinning {
+        /// All line segments.
+        segments: Segments,
+        /// A transform to apply to the segments.
+        transform: Transform2F,
+    }
 }
 
 #[derive(Clone, Debug)]

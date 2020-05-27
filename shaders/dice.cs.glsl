@@ -30,6 +30,9 @@ precision highp sampler2D;
 
 layout(local_size_x = 64) in;
 
+uniform mat2 uTransform;
+uniform vec2 uTranslation;
+
 struct Segment {
     vec4 line;
     uvec4 pathIndex;
@@ -91,6 +94,10 @@ void subdivideCurve(vec4 baseline,
     nextCtrl = vec4(p1p2p3, p2p3);
 }
 
+vec2 getPoint(uint pointIndex) {
+    return uTransform * iPoints[pointIndex] + uTranslation;
+}
+
 void main() {
     uint inputIndex = gl_GlobalInvocationID.x;
     if (inputIndex >= iComputeIndirectParams[4])
@@ -108,7 +115,7 @@ void main() {
     else
         toPointIndex += 1;
 
-    vec4 baseline = vec4(iPoints[fromPointIndex], iPoints[toPointIndex]);
+    vec4 baseline = vec4(getPoint(fromPointIndex), getPoint(toPointIndex));
     if ((flagsPathIndex & (FLAGS_PATH_INDEX_CURVE_IS_CUBIC |
                            FLAGS_PATH_INDEX_CURVE_IS_QUADRATIC)) == 0) {
         emitLineSegment(baseline, pathIndex);
@@ -116,13 +123,13 @@ void main() {
     }
 
     // Get control points. Degree elevate if quadratic.
-    vec2 ctrl0 = iPoints[fromPointIndex + 1];
+    vec2 ctrl0 = getPoint(fromPointIndex + 1);
     vec4 ctrl;
     if ((flagsPathIndex & FLAGS_PATH_INDEX_CURVE_IS_QUADRATIC) != 0) {
         vec2 ctrl0_2 = ctrl0 * vec2(2.0);
         ctrl = (baseline + (ctrl0 * vec2(2.0)).xyxy) * vec4(1.0 / 3.0);
     } else {
-        ctrl = vec4(ctrl0, iPoints[fromPointIndex + 2]);
+        ctrl = vec4(ctrl0, getPoint(fromPointIndex + 2));
     }
 
     vec4 baselines[MAX_CURVE_STACK_SIZE];

@@ -63,29 +63,35 @@ struct bOutputSegments
     Segment iOutputSegments[1];
 };
 
-struct bInputIndices
-{
-    uint2 iInputIndices[1];
-};
-
 struct bPoints
 {
     float2 iPoints[1];
 };
 
+struct bInputIndices
+{
+    uint2 iInputIndices[1];
+};
+
 constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(64u, 1u, 1u);
 
 static inline __attribute__((always_inline))
-void emitLineSegment(thread const float4& lineSegment, thread const uint& pathIndex, device bComputeIndirectParams& v_37, device bOutputSegments& v_59)
+float2 getPoint(thread const uint& pointIndex, thread float2x2 uTransform, const device bPoints& v_186, thread float2 uTranslation)
 {
-    uint _45 = atomic_fetch_add_explicit((device atomic_uint*)&v_37.iComputeIndirectParams[5], 1u, memory_order_relaxed);
-    uint outputSegmentIndex = _45;
+    return (uTransform * v_186.iPoints[pointIndex]) + uTranslation;
+}
+
+static inline __attribute__((always_inline))
+void emitLineSegment(thread const float4& lineSegment, thread const uint& pathIndex, device bComputeIndirectParams& v_42, device bOutputSegments& v_64)
+{
+    uint _50 = atomic_fetch_add_explicit((device atomic_uint*)&v_42.iComputeIndirectParams[5], 1u, memory_order_relaxed);
+    uint outputSegmentIndex = _50;
     if ((outputSegmentIndex % 64u) == 0u)
     {
-        uint _53 = atomic_fetch_add_explicit((device atomic_uint*)&v_37.iComputeIndirectParams[0], 1u, memory_order_relaxed);
+        uint _58 = atomic_fetch_add_explicit((device atomic_uint*)&v_42.iComputeIndirectParams[0], 1u, memory_order_relaxed);
     }
-    v_59.iOutputSegments[outputSegmentIndex].line = lineSegment;
-    v_59.iOutputSegments[outputSegmentIndex].pathIndex.x = pathIndex;
+    v_64.iOutputSegments[outputSegmentIndex].line = lineSegment;
+    v_64.iOutputSegments[outputSegmentIndex].pathIndex.x = pathIndex;
 }
 
 static inline __attribute__((always_inline))
@@ -116,14 +122,14 @@ void subdivideCurve(thread const float4& baseline, thread const float4& ctrl, th
     nextCtrl = float4(p1p2p3, p2p3);
 }
 
-kernel void main0(device bComputeIndirectParams& v_37 [[buffer(0)]], device bOutputSegments& v_59 [[buffer(1)]], const device bInputIndices& _196 [[buffer(2)]], const device bPoints& _239 [[buffer(3)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
+kernel void main0(constant float2x2& uTransform [[buffer(2)]], constant float2& uTranslation [[buffer(4)]], device bComputeIndirectParams& v_42 [[buffer(0)]], device bOutputSegments& v_64 [[buffer(1)]], const device bPoints& v_186 [[buffer(3)]], const device bInputIndices& _219 [[buffer(5)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
 {
     uint inputIndex = gl_GlobalInvocationID.x;
-    if (inputIndex >= v_37.iComputeIndirectParams[4])
+    if (inputIndex >= v_42.iComputeIndirectParams[4])
     {
         return;
     }
-    uint2 inputIndices = _196.iInputIndices[inputIndex];
+    uint2 inputIndices = _219.iInputIndices[inputIndex];
     uint fromPointIndex = inputIndices.x;
     uint flagsPathIndex = inputIndices.y;
     uint pathIndex = flagsPathIndex & 3221225471u;
@@ -143,15 +149,18 @@ kernel void main0(device bComputeIndirectParams& v_37 [[buffer(0)]], device bOut
             toPointIndex++;
         }
     }
-    float4 baseline = float4(_239.iPoints[fromPointIndex], _239.iPoints[toPointIndex]);
+    uint param = fromPointIndex;
+    uint param_1 = toPointIndex;
+    float4 baseline = float4(getPoint(param, uTransform, v_186, uTranslation), getPoint(param_1, uTransform, v_186, uTranslation));
     if ((flagsPathIndex & 3221225472u) == 0u)
     {
-        float4 param = baseline;
-        uint param_1 = pathIndex;
-        emitLineSegment(param, param_1, v_37, v_59);
+        float4 param_2 = baseline;
+        uint param_3 = pathIndex;
+        emitLineSegment(param_2, param_3, v_42, v_64);
         return;
     }
-    float2 ctrl0 = _239.iPoints[fromPointIndex + 1u];
+    uint param_4 = fromPointIndex + 1u;
+    float2 ctrl0 = getPoint(param_4, uTransform, v_186, uTranslation);
     float4 ctrl;
     if ((flagsPathIndex & 2147483648u) != 0u)
     {
@@ -160,50 +169,51 @@ kernel void main0(device bComputeIndirectParams& v_37 [[buffer(0)]], device bOut
     }
     else
     {
-        ctrl = float4(ctrl0, _239.iPoints[fromPointIndex + 2u]);
+        uint param_5 = fromPointIndex + 2u;
+        ctrl = float4(ctrl0, getPoint(param_5, uTransform, v_186, uTranslation));
     }
     int curveStackSize = 1;
     spvUnsafeArray<float4, 32> baselines;
     baselines[0] = baseline;
     spvUnsafeArray<float4, 32> ctrls;
     ctrls[0] = ctrl;
-    float4 param_9;
-    float4 param_10;
-    float4 param_11;
-    float4 param_12;
+    float4 param_13;
+    float4 param_14;
+    float4 param_15;
+    float4 param_16;
     while (curveStackSize > 0)
     {
         curveStackSize--;
         baseline = baselines[curveStackSize];
         ctrl = ctrls[curveStackSize];
-        float4 param_2 = baseline;
-        float4 param_3 = ctrl;
-        bool _328 = curveIsFlat(param_2, param_3);
-        bool _337;
-        if (!_328)
+        float4 param_6 = baseline;
+        float4 param_7 = ctrl;
+        bool _346 = curveIsFlat(param_6, param_7);
+        bool _355;
+        if (!_346)
         {
-            _337 = (curveStackSize + 2) >= 32;
+            _355 = (curveStackSize + 2) >= 32;
         }
         else
         {
-            _337 = _328;
+            _355 = _346;
         }
-        if (_337)
+        if (_355)
         {
-            float4 param_4 = baseline;
-            uint param_5 = pathIndex;
-            emitLineSegment(param_4, param_5, v_37, v_59);
+            float4 param_8 = baseline;
+            uint param_9 = pathIndex;
+            emitLineSegment(param_8, param_9, v_42, v_64);
         }
         else
         {
-            float4 param_6 = baseline;
-            float4 param_7 = ctrl;
-            float param_8 = 0.5;
-            subdivideCurve(param_6, param_7, param_8, param_9, param_10, param_11, param_12);
-            baselines[curveStackSize + 1] = param_9;
-            ctrls[curveStackSize + 1] = param_10;
-            baselines[curveStackSize + 0] = param_11;
-            ctrls[curveStackSize + 0] = param_12;
+            float4 param_10 = baseline;
+            float4 param_11 = ctrl;
+            float param_12 = 0.5;
+            subdivideCurve(param_10, param_11, param_12, param_13, param_14, param_15, param_16);
+            baselines[curveStackSize + 1] = param_13;
+            ctrls[curveStackSize + 1] = param_14;
+            baselines[curveStackSize + 0] = param_15;
+            ctrls[curveStackSize + 0] = param_16;
             curveStackSize += 2;
         }
     }
