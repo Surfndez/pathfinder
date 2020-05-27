@@ -13,12 +13,12 @@ use crate::gpu::options::{DestFramebuffer, RendererGPUFeatures, RendererOptions}
 use crate::gpu::shaders::{BinComputeProgram, BinRasterProgram, BinVertexArray, BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
 use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram, ClipTileCopyVertexArray};
 use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, DiceComputeProgram, FillProgram, FillVertexArray};
-use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
+use crate::gpu::shaders::{InitProgram, MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
 use crate::gpu_data::{BinSegment, Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
 use crate::gpu_data::{SegmentIndices, Segments, TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
-use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive};
+use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive, TilePathInfo};
 use crate::options::BoundingQuad;
 use crate::paint::PaintCompositeOp;
 use crate::tile_map::DenseTileMap;
@@ -124,6 +124,7 @@ pub struct Renderer<D> where D: Device {
     bin_raster_program: BinRasterProgram<D>,
     bin_compute_program: BinComputeProgram<D>,
     dice_compute_program: DiceComputeProgram<D>,
+    init_program: InitProgram<D>,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
     fill_tile_map: Vec<i32>,
@@ -221,6 +222,7 @@ impl<D> Renderer<D> where D: Device {
         let bin_raster_program = BinRasterProgram::new(&device, resources);
         let bin_compute_program = BinComputeProgram::new(&device, resources);
         let dice_compute_program = DiceComputeProgram::new(&device, resources);
+        let init_program = InitProgram::new(&device, resources);
 
         let area_lut_texture =
             device.create_texture_from_png(resources, "area-lut", TextureFormat::RGBA8);
@@ -285,6 +287,7 @@ impl<D> Renderer<D> where D: Device {
             bin_raster_program,
             bin_compute_program,
             dice_compute_program,
+            init_program,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             fill_tile_map: vec![],
@@ -647,23 +650,28 @@ impl<D> Renderer<D> where D: Device {
         self.point_index_count = segments.indices.len() as u32;
     }
 
-    fn upload_tiles(&mut self, tiles: &[TileObjectPrimitive]) -> StorageID {
-        //debug_assert!(tiles.len() <= MAX_TILES_PER_BATCH);
-
+    fn allocate_tiles(&mut self, tile_count: u32) -> StorageID {
         let tile_program = &self.tile_program;
         let tile_copy_program = &self.tile_copy_program;
         let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
         let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
-        let storage_id = self.back_frame.tile_vertex_storage_allocator.allocate(&self.device,
-                                                                                tiles.len() as u64,
-                                                                                |device, size| {
+        self.back_frame.tile_vertex_storage_allocator.allocate(&self.device,
+                                                               tile_count as u64,
+                                                               |device, size| {
             TileVertexStorage::new(size,
                                    device,
                                    tile_program,
                                    tile_copy_program,
                                    quad_vertex_positions_buffer,
                                    quad_vertex_indices_buffer)
-        });
+        })
+    }
+
+    fn upload_tiles(&mut self, storage_id: StorageID, tiles: &[TileObjectPrimitive]) {
+        let tile_program = &self.tile_program;
+        let tile_copy_program = &self.tile_copy_program;
+        let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
+        let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
 
         let vertex_buffer = &self.back_frame
                                  .tile_vertex_storage_allocator
@@ -672,8 +680,48 @@ impl<D> Renderer<D> where D: Device {
         self.device.upload_to_buffer(vertex_buffer, 0, tiles, BufferTarget::Vertex);
 
         self.ensure_index_buffer(tiles.len());
+    }
 
-        storage_id
+    fn initialize_tiles(&mut self,
+                        tile_storage_id: StorageID,
+                        tile_count: u32,
+                        tile_path_info: &[TilePathInfo]) {
+        // TODO(pcwalton): Buffer reuse
+        let tile_path_info_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        self.device.allocate_buffer(&tile_path_info_buffer,
+                                    BufferData::Memory(tile_path_info),
+                                    BufferTarget::Storage);
+        //println!("tile_path_info={:?}", tile_path_info);
+
+        let tiles_buffer = &self.back_frame
+                                .tile_vertex_storage_allocator
+                                .get(tile_storage_id)
+                                .vertex_buffer;
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        let compute_dimensions = ComputeDimensions { x: (tile_count + 63) / 64, y: 1, z: 1 };
+        self.device.dispatch_compute(compute_dimensions, &ComputeState {
+            program: &self.init_program.program,
+            textures: &[],
+            uniforms: &[
+                (&self.init_program.path_count_uniform,
+                 UniformData::Int(tile_path_info.len() as i32)),
+                (&self.init_program.tile_count_uniform, UniformData::Int(tile_count as i32)),
+            ],
+            images: &[],
+            storage_buffers: &[
+                (&self.init_program.tiles_storage_buffer, tiles_buffer),
+                (&self.init_program.tile_path_info_storage_buffer, &tile_path_info_buffer),
+            ],
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
+
+        // FIXME(pcwalton): Better synchronization!!!
+        self.device.read_buffer(&tiles_buffer, BufferTarget::Storage, 0..8);
     }
 
     fn upload_propagate_data(&mut self,
@@ -1328,10 +1376,26 @@ impl<D> Renderer<D> where D: Device {
 
     // Computes backdrops, performs clipping, and populates Z buffers.
     fn prepare_tiles(&mut self, batch: &PrepareTilesBatch) {
-        // Upload tiles to GPU.
-        let count = batch.tiles.len();
-        self.stats.alpha_tile_count += count;
-        let tile_vertex_storage_id = self.upload_tiles(&batch.tiles);
+        // Upload tiles to GPU or initialize them as appropriate.
+        self.stats.alpha_tile_count += batch.tile_count as usize;
+        let tile_vertex_storage_id = self.allocate_tiles(batch.tile_count);
+        match batch.modal {
+            PrepareTilesModalInfo::CPU(ref cpu_info) => {
+                self.upload_tiles(tile_vertex_storage_id, &cpu_info.tiles);
+            }
+            PrepareTilesModalInfo::GPU(ref gpu_info) => {
+                match gpu_info.modal {
+                    PrepareTilesGPUModalInfo::CPUBinning { ref tiles, .. } => {
+                        self.upload_tiles(tile_vertex_storage_id, tiles);
+                    }
+                    PrepareTilesGPUModalInfo::GPUBinning { ref tile_path_info, .. } => {
+                        self.initialize_tiles(tile_vertex_storage_id,
+                                              batch.tile_count,
+                                              tile_path_info)
+                    }
+                }
+            }
+        }
 
         // Fetch and/or allocate clip storage as needed.
         let clip_storage_ids = match batch.clipped_path_info {
@@ -1357,7 +1421,7 @@ impl<D> Renderer<D> where D: Device {
                     self.upload_propagate_data(&gpu_info.propagate_metadata, &gpu_info.backdrops);
 
                 // Bin and render fills if requested.
-                if let PrepareTilesGPUModalInfo::GPUBinning { transform } = gpu_info.modal {
+                if let PrepareTilesGPUModalInfo::GPUBinning { transform, .. } = gpu_info.modal {
                     let (segments_buffer, segment_count) = self.dice_segments(transform);
                     let (fill_storage_id, instance_count) =
                         self.bin_segments_via_compute(segments_buffer,
@@ -1382,7 +1446,7 @@ impl<D> Renderer<D> where D: Device {
 
         // Record tile batch info.
         self.back_frame.tile_batch_info.insert(batch.batch_id.0 as usize, TileBatchInfo {
-            tile_count: batch.tiles.len() as u32,
+            tile_count: batch.tile_count,
             tile_vertex_storage_id,
             propagate_metadata_storage_id,
         });

@@ -38,6 +38,7 @@ COMPUTE_SHADERS=\
 	bin.cs.glsl \
 	dice.cs.glsl \
 	fill.cs.glsl \
+	init.cs.glsl \
 	propagate.cs.glsl \
 	$(EMPTY)
 

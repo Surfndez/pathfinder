@@ -16,7 +16,7 @@ use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
 use crate::gpu_data::{AlphaTileId, BinSegment, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, ClippedPathInfo, DrawTileBatch, Fill};
 use crate::gpu_data::{PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand, SegmentIndices, Segments, TILE_CTRL_MASK_0_SHIFT};
 use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatchId};
-use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
+use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive, TilePathInfo};
 use crate::options::{PrepareMode, PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
 use crate::paint::{PaintId, PaintInfo, PaintMetadata};
 use crate::scene::{DisplayItem, DrawPath, Scene, SceneSink};
@@ -468,9 +468,7 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
         }
 
         // Send commands.
-        if !clip_prepare_batch.tiles.is_empty() {
-            self.sink.listener.send(RenderCommand::PrepareTiles(clip_prepare_batch));
-        }
+        self.sink.listener.send(RenderCommand::PrepareTiles(clip_prepare_batch));
         for command in prepare_commands {
             self.sink.listener.send(command);
         }
@@ -884,25 +882,29 @@ impl PrepareTilesBatch {
         PrepareTilesBatch {
             batch_id,
             path_count: 0,
-            tiles: vec![],
+            tile_count: 0,
             modal: match mode {
                 PrepareMode::CPU => {
                     PrepareTilesModalInfo::CPU(PrepareTilesCPUInfo {
                         z_buffer: DenseTileMap::from_builder(|_| 0, tile_rect),
+                        tiles: vec![],
                     })
                 }
                 PrepareMode::TransformCPUBinGPU => {
                     PrepareTilesModalInfo::GPU(PrepareTilesGPUInfo {
                         backdrops: vec![],
                         propagate_metadata: vec![],
-                        modal: PrepareTilesGPUModalInfo::CPUBinning,
+                        modal: PrepareTilesGPUModalInfo::CPUBinning { tiles: vec![] },
                     })
                 }
                 PrepareMode::GPU { ref transform } => {
                     PrepareTilesModalInfo::GPU(PrepareTilesGPUInfo {
                         backdrops: vec![],
                         propagate_metadata: vec![],
-                        modal: PrepareTilesGPUModalInfo::GPUBinning { transform: *transform },
+                        modal: PrepareTilesGPUModalInfo::GPUBinning {
+                            tile_path_info: vec![],
+                            transform: *transform,
+                        },
                     })
                 }
             },
@@ -935,12 +937,14 @@ impl PrepareTilesBatch {
                                           .expect("Z value out of bounds!");
                     *z_value = (*z_value).max(path_index.0 as i32);
                 }
-                self.tiles.extend_from_slice(&tiles.data);
+                cpu_info.tiles.extend_from_slice(&tiles.data);
+                self.tile_count = cpu_info.tiles.len() as u32;
             }
-            PrepareTilesModalInfo::CPU(_) => {
+            PrepareTilesModalInfo::CPU(ref mut cpu_info) => {
                 match path.data {
                     BuiltPathData::CPU(ref cpu_data) => {
-                        self.tiles.extend_from_slice(&cpu_data.tiles.data)
+                        cpu_info.tiles.extend_from_slice(&cpu_data.tiles.data);
+                        self.tile_count = cpu_info.tiles.len() as u32;
                     }
                     BuiltPathData::GPU | BuiltPathData::TransformCPUBinGPU(_) => unreachable!(),
                 }
@@ -949,7 +953,7 @@ impl PrepareTilesBatch {
                 let path_index = PathIndex(gpu_info.propagate_metadata.len() as u32);
                 gpu_info.propagate_metadata.push(PropagateMetadata {
                     tile_rect: path.tile_bounds,
-                    tile_offset: self.tiles.len() as u32,
+                    tile_offset: self.tile_count,
                     backdrops_offset: gpu_info.backdrops.len() as u32,
                     z_write: z_write as u32,
                     clip_path: clip_path_id.unwrap_or(PathIndex(!0)),
@@ -967,19 +971,29 @@ impl PrepareTilesBatch {
 
                 // Add tiles.
                 // TODO(pcwalton): Do this on GPU instead.
-                self.tiles.reserve(path.tile_bounds.area() as usize);
-                for y in path.tile_bounds.min_y()..path.tile_bounds.max_y() {
-                    for x in path.tile_bounds.min_x()..path.tile_bounds.max_x() {
-                        self.tiles.push(TileObjectPrimitive {
-                            alpha_tile_id: AlphaTileId(!0),
-                            backdrop: 0,
-                            path_id: path_index.0,
-                            tile_x: x as i16,
-                            tile_y: y as i16,
-                            ctrl: path.ctrl_byte,
-                            color: path.paint_id.0,
-                        });
+                match (&mut gpu_info.modal, &path.data) {
+                    (&mut PrepareTilesGPUModalInfo::CPUBinning { ref mut tiles },
+                     &BuiltPathData::CPU(ref cpu_data)) => {
+                        tiles.extend_from_slice(&cpu_data.tiles.data);
+                        self.tile_count = tiles.len() as u32;
                     }
+                    (&mut PrepareTilesGPUModalInfo::GPUBinning { ref mut tile_path_info, .. },
+                     &BuiltPathData::GPU) |
+                    (&mut PrepareTilesGPUModalInfo::GPUBinning { ref mut tile_path_info, .. },
+                     &BuiltPathData::TransformCPUBinGPU(_)) => {
+                         tile_path_info.push(TilePathInfo {
+                             tile_min_x: path.tile_bounds.min_x() as i16,
+                             tile_min_y: path.tile_bounds.min_y() as i16,
+                             tile_max_x: path.tile_bounds.max_x() as i16,
+                             tile_max_y: path.tile_bounds.max_y() as i16,
+                             first_tile_index: self.tile_count,
+                             color: path.paint_id.0,
+                             ctrl: path.ctrl_byte,
+                             backdrop: 0,
+                         });
+                         self.tile_count += path.tile_bounds.area() as u32;
+                    }
+                    _ => panic!("Wrong kind of `PrepareTiles` modal data!"),
                 }
             }
         }

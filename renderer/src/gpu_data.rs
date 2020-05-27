@@ -120,11 +120,8 @@ pub struct PrepareTilesBatch {
     /// The number of paths in this batch.
     pub path_count: u32,
 
-    /// Information about all the allocated tiles.
-    /// 
-    /// If backdrops are being computed on CPU, then the backdrop values will already be summed.
-    /// Otherwise, they will simply be raw delta values.
-    pub tiles: Vec<TileObjectPrimitive>,
+    /// The number of tiles in this batch.
+    pub tile_count: u32,
 
     /// Information about a batch of tiles specific to the rendering mode (CPU or GPU).
     pub modal: PrepareTilesModalInfo,
@@ -145,6 +142,11 @@ pub enum PrepareTilesModalInfo {
 pub struct PrepareTilesCPUInfo {
     /// The Z-buffer used for occlusion culling.
     pub z_buffer: DenseTileMap<i32>,
+
+    /// Information about all the allocated tiles.
+    /// 
+    /// The backdrop values will already be summed.
+    pub tiles: Vec<TileObjectPrimitive>,
 }
 
 /// Information about a batch of tiles to be prepared on GPU.
@@ -164,11 +166,18 @@ pub struct PrepareTilesGPUInfo {
 
 #[derive(Clone, Debug)]
 pub enum PrepareTilesGPUModalInfo {
-    CPUBinning,
+    CPUBinning {
+        /// Information about all the allocated tiles.
+        /// 
+        /// These backdrops are raw delta values.
+        tiles: Vec<TileObjectPrimitive>,
+    },
     GPUBinning {
+        /// Sparse information about all the allocated tiles.
+        tile_path_info: Vec<TilePathInfo>,
         /// A transform to apply to the segments.
         transform: Transform2F,
-    }
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -247,6 +256,20 @@ pub struct TileObjectPrimitive {
     pub alpha_tile_id: AlphaTileId,
     pub path_id: u32,
     // TODO(pcwalton): Maybe look the color up based on path ID?
+    pub color: u16,
+    pub ctrl: u8,
+    pub backdrop: i8,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct TilePathInfo {
+    pub tile_min_x: i16,
+    pub tile_min_y: i16,
+    pub tile_max_x: i16,
+    pub tile_max_y: i16,
+    pub first_tile_index: u32,
+    // Must match the order in `TileObjectPrimitive`.
     pub color: u16,
     pub ctrl: u8,
     pub backdrop: i8,
@@ -413,11 +436,7 @@ impl Debug for RenderCommand {
                     None => 0,
                     Some(ref clipped_path_info) => clipped_path_info.clipped_paths.len(),
                 };
-                write!(formatter,
-                       "PrepareTiles({:?}, T {}, C {})",
-                       batch.batch_id,
-                       batch.tiles.len(),
-                       clipped_path_count)
+                write!(formatter, "PrepareTiles({:?}, C {})", batch.batch_id, clipped_path_count)
             }
             RenderCommand::PushRenderTarget(render_target_id) => {
                 write!(formatter, "PushRenderTarget({:?})", render_target_id)
