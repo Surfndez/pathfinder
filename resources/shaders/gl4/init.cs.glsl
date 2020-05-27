@@ -32,7 +32,7 @@ layout(std430, binding = 0)buffer bTilePathInfo {
 
 
 
-    restrict uvec4 iTilePathInfo[];
+    restrict readonly uvec4 iTilePathInfo[];
 };
 
 layout(std430, binding = 1)buffer bTiles {
@@ -52,15 +52,17 @@ void main(){
     while(lowPathIndex + 1 < highPathIndex){
         uint midPathIndex = lowPathIndex +(highPathIndex - lowPathIndex)/ 2;
         uint midTileIndex = iTilePathInfo[midPathIndex]. z;
-        if(tileIndex < midTileIndex)
+        if(tileIndex < midTileIndex){
             highPathIndex = midPathIndex;
-        else if(tileIndex > midTileIndex)
+        } else {
             lowPathIndex = midPathIndex;
-        else
-            break;
+            if(tileIndex == midTileIndex)
+                break;
+        }
     }
 
     uint pathIndex = lowPathIndex;
+
     uvec4 pathInfo = iTilePathInfo[pathIndex];
 
     ivec2 packedTileRect = ivec2(pathInfo . xy);

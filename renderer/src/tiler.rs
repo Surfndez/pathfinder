@@ -11,12 +11,12 @@
 //! Implements the fast lattice-clipping algorithm from Nehab and Hoppe, "Random-Access Rendering
 //! of General Vector Graphics" 2006.
 
-use crate::builder::{BuiltPathBinCPUData, BuiltPathData, ObjectBuilder, Occluder, SceneBuilder};
+use crate::builder::{BuiltPath, BuiltPathBinCPUData, BuiltPathData, ObjectBuilder, Occluder, SceneBuilder};
 use crate::gpu::options::RendererGPUFeatures;
 use crate::gpu_data::AlphaTileId;
 use crate::options::PrepareMode;
 use crate::tile_map::DenseTileMap;
-use crate::tiles::{DrawTilingPathInfo, PackedTile, TILE_HEIGHT, TILE_WIDTH, TileType, TilingPathInfo};
+use crate::tiles::{DrawTilingPathInfo, TILE_HEIGHT, TILE_WIDTH, TilingPathInfo};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::outline::{ContourIterFlags, Outline};
 use pathfinder_content::segment::Segment;
@@ -31,6 +31,7 @@ pub(crate) struct Tiler<'a, 'b, 'c, 'd> {
     scene_builder: &'a SceneBuilder<'b, 'a, 'c, 'd>,
     pub(crate) object_builder: ObjectBuilder,
     outline: &'a Outline,
+    clip_path: Option<&'a BuiltPath>,
     path_info: TilingPathInfo<'a>,
 }
 
@@ -41,6 +42,7 @@ impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
                       fill_rule: FillRule,
                       view_box: RectF,
                       prepare_mode: &PrepareMode,
+                      built_clip_paths: &'a [BuiltPath],
                       path_info: TilingPathInfo<'a>)
                       -> Tiler<'a, 'b, 'c, 'd> {
         let bounds = outline.bounds().intersection(view_box).unwrap_or(RectF::default());
@@ -49,13 +51,21 @@ impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
                                          .gpu_features
                                          .contains(RendererGPUFeatures::BIN_ON_GPU);
 
+        let clip_path = match path_info {
+            TilingPathInfo::Draw(DrawTilingPathInfo { clip_path_id: Some(clip_path_id), .. }) => {
+                Some(&built_clip_paths[clip_path_id.0 as usize])
+            }
+            _ => None,
+        };
+
         let object_builder = ObjectBuilder::new(path_id,
                                                 bounds,
                                                 view_box,
                                                 fill_rule,
                                                 prepare_mode,
                                                 &path_info);
-        Tiler { scene_builder, object_builder, outline, path_info }
+
+        Tiler { scene_builder, object_builder, outline, clip_path, path_info }
     }
 
     pub(crate) fn generate_tiles(&mut self) {
@@ -97,11 +107,6 @@ impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
             }
         };
 
-        let built_clip_path = match self.path_info {
-            TilingPathInfo::Draw(DrawTilingPathInfo { built_clip_path, .. }) => built_clip_path,
-            _ => None,
-        };
-
         // Propagate backdrops.
         let tiles_across = tiles.rect.width() as usize;
         for (draw_tile_index, draw_tile) in tiles.data.iter_mut().enumerate() {
@@ -112,7 +117,7 @@ impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
             let mut draw_alpha_tile_id = draw_tile.alpha_tile_id;
             let mut draw_tile_backdrop = backdrops[column] as i8;
 
-            if let Some(built_clip_path) = built_clip_path {
+            if let Some(built_clip_path) = self.clip_path {
                 let clip_tiles = match built_clip_path.data {
                     BuiltPathData::CPU(BuiltPathBinCPUData { ref tiles, .. }) => tiles,
                     _ => unreachable!(),

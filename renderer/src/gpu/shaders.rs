@@ -890,38 +890,6 @@ where
     }
 }
 
-pub struct BinRasterProgram<D> where D: Device {
-    pub program: D::Program,
-    pub framebuffer_size_uniform: D::Uniform,
-    pub metadata_storage_buffer: D::StorageBuffer,
-    pub indirect_draw_params_storage_buffer: D::StorageBuffer,
-    pub fills_storage_buffer: D::StorageBuffer,
-    pub tiles_storage_buffer: D::StorageBuffer,
-    pub segments_storage_buffer: D::StorageBuffer,
-}
-
-impl<D> BinRasterProgram<D> where D: Device {
-    pub fn new(device: &D, resources: &dyn ResourceLoader) -> BinRasterProgram<D> {
-        let program = device.create_raster_program(resources, "bin");
-        let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
-        let metadata_storage_buffer = device.get_storage_buffer(&program, "Metadata", 0);
-        let indirect_draw_params_storage_buffer =
-            device.get_storage_buffer(&program, "IndirectDrawParams", 1);
-        let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 2);
-        let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 3);
-        let segments_storage_buffer = device.get_storage_buffer(&program, "Segments", 4);
-        BinRasterProgram {
-            program,
-            framebuffer_size_uniform,
-            metadata_storage_buffer,
-            indirect_draw_params_storage_buffer,
-            fills_storage_buffer,
-            tiles_storage_buffer,
-            segments_storage_buffer,
-        }
-    }
-}
-
 pub struct BinComputeProgram<D> where D: Device {
     pub program: D::Program,
     pub metadata_storage_buffer: D::StorageBuffer,
@@ -1020,20 +988,5 @@ impl<D> InitProgram<D> where D: Device {
             tile_path_info_storage_buffer,
             tiles_storage_buffer,
         }
-    }
-}
-
-pub struct BinVertexArray<D> where D: Device {
-    pub vertex_array: D::VertexArray,
-}
-
-impl<D> BinVertexArray<D> where D: Device {
-    pub fn new(device: &D,
-               bin_raster_program: &BinRasterProgram<D>,
-               quad_vertex_positions_buffer: &D::Buffer,
-               quad_vertex_indices_buffer: &D::Buffer)
-               -> BinVertexArray<D> {
-        let vertex_array = device.create_vertex_array();
-        BinVertexArray { vertex_array }
     }
 }

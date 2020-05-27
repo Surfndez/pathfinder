@@ -19,10 +19,10 @@ use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatch
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive, TilePathInfo};
 use crate::options::{PrepareMode, PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
 use crate::paint::{PaintId, PaintInfo, PaintMetadata};
-use crate::scene::{DisplayItem, DrawPath, Scene, SceneSink};
+use crate::scene::{ClipPathId, DisplayItem, DrawPath, Scene, SceneSink};
 use crate::tile_map::DenseTileMap;
 use crate::tiler::Tiler;
-use crate::tiles::{self, DrawTilingPathInfo, PackedTile, TILE_HEIGHT, TILE_WIDTH, TilingPathInfo};
+use crate::tiles::{self, DrawTilingPathInfo, TILE_HEIGHT, TILE_WIDTH, TilingPathInfo};
 use crate::z_buffer::{DepthMetadata, ZBuffer};
 use fxhash::FxHashMap;
 use instant::Instant;
@@ -93,7 +93,7 @@ pub(crate) struct BuiltPath {
     pub tile_bounds: RectI,
     pub occluders: Option<Vec<Occluder>>,
     pub fill_rule: FillRule,
-    pub has_clip: bool,
+    pub clip_path_id: Option<ClipPathId>,
     pub ctrl_byte: u8,
     pub paint_id: PaintId,
 }
@@ -181,10 +181,11 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
 
         let built_paths = match prepare_mode {
             PrepareMode::CPU | PrepareMode::TransformCPUBinGPU => {
-                self.build_paths_on_cpu(executor, &paint_metadata, &prepare_mode)
+                Some(self.build_paths_on_cpu(executor, &paint_metadata, &prepare_mode))
             }
             PrepareMode::GPU { transform } => {
-                self.prepare_paths_for_gpu_building(transform, &paint_metadata)
+                None
+                //self.prepare_paths_for_gpu_building(transform, &paint_metadata)
             }
         };
 
@@ -192,7 +193,7 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
         // TODO(pcwalton): Do this earlier?
         match prepare_mode {
             PrepareMode::GPU { .. } if self.sink.last_scene.is_none() => {
-                let segments = Segments::from_built_paths(&built_paths, &self.scene);
+                let segments = Segments::from_scene(&self.scene);
                 self.sink.listener.send(RenderCommand::UploadScene(segments));
                 self.sink.last_scene = Some((self.scene.id, self.scene.epoch));
             }
@@ -205,6 +206,7 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
         self.sink.listener.send(RenderCommand::Finish { cpu_build_time });
     }
 
+    /*
     fn prepare_paths_for_gpu_building(&mut self,
                                       transform: Transform2F,
                                       paint_metadata: &[PaintMetadata])
@@ -260,6 +262,61 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
 
         built_paths
     }
+    */
+
+    fn prepare_clip_path_for_gpu_binning(&self,
+                                         clip_path_index: PathIndex,
+                                         prepare_mode: PrepareMode)
+                                         -> BuiltPath {
+        let transform = match prepare_mode {
+            PrepareMode::GPU { transform } => transform,
+            PrepareMode::CPU | PrepareMode::TransformCPUBinGPU => {
+                panic!("`prepare_clip_path_for_gpu_binning()` requires a GPU prepare mode!")
+            }
+        };
+        let effective_view_box = self.scene.effective_view_box(self.built_options);
+        let clip_path = &self.scene.clip_paths[clip_path_index.0 as usize];
+        let path_bounds = transform * clip_path.outline().bounds();
+        BuiltPath::new(clip_path_index.0 as u32,
+                        path_bounds,
+                        effective_view_box,
+                        clip_path.fill_rule(),
+                        &prepare_mode,
+                        &TilingPathInfo::Clip)
+    }
+
+    fn prepare_draw_path_for_gpu_binning(&self,
+                                         draw_path_index: PathIndex,
+                                         prepare_mode: PrepareMode,
+                                         paint_metadata: &[PaintMetadata])
+                                         -> BuiltDrawPath {
+        let transform = match prepare_mode {
+            PrepareMode::GPU { transform } => transform,
+            PrepareMode::CPU | PrepareMode::TransformCPUBinGPU => {
+                panic!("`prepare_draw_path_for_gpu_binning()` requires a GPU prepare mode!")
+            }
+        };
+
+        let effective_view_box = self.scene.effective_view_box(self.built_options);
+        let draw_path = &self.scene.paths[draw_path_index.0 as usize];
+        let path_bounds = transform * draw_path.outline().bounds();
+
+        let paint_id = draw_path.paint();
+        let paint_metadata = &paint_metadata[paint_id.0 as usize];
+        let built_path = BuiltPath::new(draw_path_index.0 as u32,
+                                        path_bounds,
+                                        effective_view_box,
+                                        draw_path.fill_rule(),
+                                        &prepare_mode,
+                                        &TilingPathInfo::Draw(DrawTilingPathInfo {
+                                            paint_id,
+                                            paint_metadata,
+                                            blend_mode: draw_path.blend_mode(),
+                                            clip_path_id: draw_path.clip_path(),
+                                            fill_rule: draw_path.fill_rule(),
+                                        }));
+        BuiltDrawPath::new(built_path, draw_path, paint_metadata)
+    }
 
     fn build_paths_on_cpu<E>(&mut self,
                              executor: &E,
@@ -309,6 +366,7 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
                                    path_object.fill_rule(),
                                    view_box,
                                    &prepare_mode,
+                                   &[],
                                    TilingPathInfo::Clip);
 
         tiler.generate_tiles();
@@ -344,11 +402,12 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
                                    path_object.fill_rule(),
                                    view_box,
                                    &prepare_mode,
+                                   &built_clip_paths,
                                    TilingPathInfo::Draw(DrawTilingPathInfo {
             paint_id,
             paint_metadata,
             blend_mode: path_object.blend_mode(),
-            built_clip_path,
+            clip_path_id: path_object.clip_path(),
             fill_rule: path_object.fill_rule(),
         }));
 
@@ -367,7 +426,7 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
     fn build_tile_batches(&mut self,
                           paint_metadata: &[PaintMetadata],
                           prepare_mode: PrepareMode,
-                          built_paths: BuiltPaths) {
+                          built_paths: Option<BuiltPaths>) {
         let gpu_features = self.sink.gpu_features;
         let (mut prepare_commands, mut draw_commands) = (vec![], vec![]);
 
@@ -394,7 +453,10 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
 
                     let mut batches = None;
                     for draw_path_index in start_draw_path_index..end_draw_path_index {
-                        let draw_path = &built_paths.draw[draw_path_index as usize];
+                        let draw_path =
+                            self.prepare_draw_path_for_gpu_binning(PathIndex(draw_path_index),
+                                                                   prepare_mode,
+                                                                   paint_metadata);
 
                         // Try to reuse the current batch if we can. Otherwise, flush it.
                         match batches {
@@ -438,10 +500,12 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
                             match clip_id_to_path_index.get(&clip_path_id) {
                                 Some(&clip_path_index) => clip_path_index,
                                 None => {
+                                    let clip_path =
+                                        self.prepare_clip_path_for_gpu_binning(clip_path_id,
+                                                                               prepare_mode);
                                     let clip_path_index = clip_path_id.0 as usize;
-                                    let clip_path = &built_paths.clip[clip_path_index];
                                     let outline = self.scene.clip_paths[clip_path_index].outline();
-                                    let clip_path_index = clip_prepare_batch.push(clip_path,
+                                    let clip_path_index = clip_prepare_batch.push(&clip_path,
                                                                                   None,
                                                                                   outline,
                                                                                   gpu_features);
@@ -468,7 +532,9 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
         }
 
         // Send commands.
-        self.sink.listener.send(RenderCommand::PrepareTiles(clip_prepare_batch));
+        if clip_prepare_batch.path_count > 0 {
+            self.sink.listener.send(RenderCommand::PrepareTiles(clip_prepare_batch));
+        }
         for command in prepare_commands {
             self.sink.listener.send(command);
         }
@@ -479,7 +545,7 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
 
     fn finish_building(&mut self,
                        paint_metadata: &[PaintMetadata],
-                       built_paths: BuiltPaths,
+                       built_paths: Option<BuiltPaths>,
                        prepare_mode: PrepareMode) {
         if !self.sink.gpu_features.contains(RendererGPUFeatures::BIN_ON_GPU) {
             self.sink.listener.send(RenderCommand::FlushFills);
@@ -561,11 +627,11 @@ impl BuiltPath {
 
         let tile_bounds = tiles::round_rect_out_to_tile_bounds(tile_map_bounds);
 
-        let has_clip = match *tiling_path_info {
+        let clip_path_id = match *tiling_path_info {
             TilingPathInfo::Draw(ref draw_tiling_path_info) => {
-                draw_tiling_path_info.built_clip_path.is_some()
+                draw_tiling_path_info.clip_path_id
             }
-            _ => false,
+            _ => None,
         };
 
         let data = match *prepare_mode {
@@ -584,8 +650,8 @@ impl BuiltPath {
                             }
                         }, tile_bounds),
                     clip_tiles: match *tiling_path_info {
-                        TilingPathInfo::Draw(ref draw_tiling_path_info) if has_clip => {
-                            Some(DenseTileMap::from_builder(|tile_coord| {
+                        TilingPathInfo::Draw(_) if clip_path_id.is_some() => {
+                            Some(DenseTileMap::from_builder(|_| {
                                 Clip {
                                     dest_tile_id: AlphaTileId(!0),
                                     dest_backdrop: 0,
@@ -609,7 +675,7 @@ impl BuiltPath {
         BuiltPath {
             data,
             tile_bounds,
-            has_clip,
+            clip_path_id,
             fill_rule,
             occluders: if occludes { Some(vec![]) } else { None },
             ctrl_byte,
@@ -1042,24 +1108,20 @@ impl PrepareTilesGPUInfo {
 }
 
 impl Segments {
-    fn from_built_paths(built_paths: &BuiltPaths, scene: &Scene) -> Segments {
+    fn from_scene(scene: &Scene) -> Segments {
         let mut segments = Segments { points: vec![], indices: vec![] };
 
         for (clip_path_index, clip_path) in scene.clip_paths.iter().enumerate() {
-            segments.add_path(&built_paths.clip[clip_path_index],
-                              PathIndex(clip_path_index as u32),
-                              clip_path.outline());
+            segments.add_path(PathIndex(clip_path_index as u32), clip_path.outline());
         }
         for (draw_path_index, draw_path) in scene.paths.iter().enumerate() {
-            segments.add_path(&built_paths.draw[draw_path_index].path,
-                              PathIndex(draw_path_index as u32),
-                              draw_path.outline());
+            segments.add_path(PathIndex(draw_path_index as u32), draw_path.outline());
         }
 
         segments
     }
 
-    fn add_path(&mut self, path: &BuiltPath, path_index: PathIndex, outline: &Outline) {
+    fn add_path(&mut self, path_index: PathIndex, outline: &Outline) {
         for contour in outline.contours() {
             let point_count = contour.len() as u32;
             self.points.reserve(point_count as usize);

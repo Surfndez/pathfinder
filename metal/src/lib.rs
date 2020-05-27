@@ -76,6 +76,7 @@ pub struct MetalDevice {
     samplers: Vec<SamplerState>,
     shared_event: SharedEvent,
     shared_event_listener: SharedEventListener,
+    compute_fence: RefCell<Option<Fence>>,
     next_timer_query_event_value: Cell<u64>,
 }
 
@@ -152,6 +153,7 @@ impl MetalDevice {
             samplers,
             shared_event,
             shared_event_listener: SharedEventListener::new(),
+            compute_fence: RefCell::new(None),
             next_timer_query_event_value: Cell::new(1),
         }
     }
@@ -828,6 +830,11 @@ impl Device for MetalDevice {
         };
 
         encoder.dispatch_thread_groups(size.to_metal_size(), local_size);
+
+        let fence = self.device.new_fence();
+        encoder.update_fence(&fence);
+        *self.compute_fence.borrow_mut() = Some(fence);
+
         encoder.end_encoding();
     }
 
@@ -1201,6 +1208,13 @@ impl MetalDevice {
         let render_pass_descriptor = self.create_render_pass_descriptor(render_state);
 
         let encoder = command_buffer.new_render_command_encoder(&render_pass_descriptor).retain();
+
+        // Wait on the previous compute command, if any.
+        let compute_fence = self.compute_fence.borrow();
+        if let Some(ref compute_fence) = *compute_fence {
+            encoder.wait_for_fence_before_stages(compute_fence, MTLRenderStage::Vertex);
+        }
+
         self.set_viewport(&encoder, &render_state.viewport);
 
         let program = match render_state.program {
@@ -2198,6 +2212,14 @@ impl SharedEventListener {
     }
 }
 
+struct Fence(*mut Object);
+
+impl Drop for Fence {
+    fn drop(&mut self) {
+        unsafe { msg_send![self.0, release] }
+    }
+}
+
 struct VertexAttributeArray(*mut Object);
 
 impl Drop for VertexAttributeArray {
@@ -2263,6 +2285,7 @@ trait DeviceExt {
                                                       -> (RenderPipelineState,
                                                           RenderPipelineReflection);
     fn new_shared_event(&self) -> SharedEvent;
+    fn new_fence(&self) -> Fence;
 }
 
 impl DeviceExt for metal::Device {
@@ -2294,6 +2317,10 @@ impl DeviceExt for metal::Device {
 
     fn new_shared_event(&self) -> SharedEvent {
         unsafe { SharedEvent(msg_send![self.as_ptr(), newSharedEvent]) }
+    }
+
+    fn new_fence(&self) -> Fence {
+        unsafe { Fence(msg_send![self.as_ptr(), newFence]) }
     }
 }
 
@@ -2354,6 +2381,44 @@ impl StructMemberExt for StructMemberRef {
     fn pointer_type(&self) -> *mut Object {
         unsafe { msg_send![self.as_ptr(), pointerType] }
     }
+}
+
+trait ComputeCommandEncoderExt {
+    fn update_fence(&self, fence: &Fence);
+    fn wait_for_fence(&self, fence: &Fence);
+}
+
+impl ComputeCommandEncoderExt for ComputeCommandEncoderRef {
+    fn update_fence(&self, fence: &Fence) {
+        unsafe { msg_send![self.as_ptr(), updateFence:fence.0] }
+    }
+
+    fn wait_for_fence(&self, fence: &Fence) {
+        unsafe { msg_send![self.as_ptr(), waitForFence:fence.0] }
+    }
+}
+
+trait RenderCommandEncoderExt {
+    fn update_fence_before_stages(&self, fence: &Fence, stages: MTLRenderStage);
+    fn wait_for_fence_before_stages(&self, fence: &Fence, stages: MTLRenderStage);
+}
+
+impl RenderCommandEncoderExt for RenderCommandEncoderRef {
+    fn update_fence_before_stages(&self, fence: &Fence, stages: MTLRenderStage) {
+        unsafe { msg_send![self.as_ptr(), updateFence:fence.0 beforeStages:stages] }
+    }
+
+    fn wait_for_fence_before_stages(&self, fence: &Fence, stages: MTLRenderStage) {
+        unsafe {
+            msg_send![self.as_ptr(), waitForFence:fence.0 beforeStages:stages]
+        }
+    }
+}
+
+#[repr(u32)]
+enum MTLRenderStage {
+    Vertex = 0,
+    Fragment = 1,
 }
 
 // Memory management helpers

@@ -3,8 +3,6 @@ TARGET_DIR?=../resources/shaders
 EMPTY=
 
 SHADERS=\
-	bin.fs.glsl \
-	bin.vs.glsl \
 	blit.fs.glsl \
 	blit.vs.glsl \
 	blit_buffer.fs.glsl \
