@@ -11,7 +11,7 @@
 //! Implements the fast lattice-clipping algorithm from Nehab and Hoppe, "Random-Access Rendering
 //! of General Vector Graphics" 2006.
 
-use crate::builder::{BuiltPathData, ObjectBuilder, Occluder, SceneBuilder};
+use crate::builder::{BuiltPathBinCPUData, BuiltPathData, ObjectBuilder, Occluder, SceneBuilder};
 use crate::gpu::options::RendererGPUFeatures;
 use crate::gpu_data::AlphaTileId;
 use crate::options::PrepareMode;
@@ -88,8 +88,10 @@ impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
 
     fn prepare_tiles(&mut self) {
         // Don't do this here if the GPU will do it.
-        let backdrops = match self.object_builder.built_path.data {
-            BuiltPathData::CPU(ref mut tiled_data) => &mut tiled_data.backdrops,
+        let (backdrops, tiles, clips) = match self.object_builder.built_path.data {
+            BuiltPathData::CPU(ref mut tiled_data) => {
+                (&mut tiled_data.backdrops, &mut tiled_data.tiles, &mut tiled_data.clip_tiles)
+            }
             BuiltPathData::TransformCPUBinGPU(_) | BuiltPathData::GPU => {
                 panic!("We shouldn't be preparing tiles on CPU!")
             }
@@ -99,16 +101,10 @@ impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
             TilingPathInfo::Draw(DrawTilingPathInfo { built_clip_path, .. }) => built_clip_path,
             _ => None,
         };
-        let clips = &mut self.object_builder.built_path.clip_tiles;
 
         // Propagate backdrops.
-        let tiles_across = self.object_builder.built_path.tiles.rect.width() as usize;
-        for (draw_tile_index, draw_tile) in self.object_builder
-                                                .built_path
-                                                .tiles
-                                                .data
-                                                .iter_mut()
-                                                .enumerate() {
+        let tiles_across = tiles.rect.width() as usize;
+        for (draw_tile_index, draw_tile) in tiles.data.iter_mut().enumerate() {
             let tile_coords = vec2i(draw_tile.tile_x as i32, draw_tile.tile_y as i32);
             let column = draw_tile_index % tiles_across;
             let delta = draw_tile.backdrop as i32;
@@ -117,7 +113,11 @@ impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
             let mut draw_tile_backdrop = backdrops[column] as i8;
 
             if let Some(built_clip_path) = built_clip_path {
-                match built_clip_path.tiles.get(tile_coords) {
+                let clip_tiles = match built_clip_path.data {
+                    BuiltPathData::CPU(BuiltPathBinCPUData { ref tiles, .. }) => tiles,
+                    _ => unreachable!(),
+                };
+                match clip_tiles.get(tile_coords) {
                     Some(clip_tile) => {
                         if clip_tile.alpha_tile_id != AlphaTileId(!0) &&
                                 draw_alpha_tile_id != AlphaTileId(!0) {
@@ -196,61 +196,6 @@ impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
             clip_tile.src_backdrop = built_clip_tile.backdrop as i32;
         }
         */
-    }
-
-    fn pack_and_cull(&mut self) {
-        let draw_tiling_path_info = match self.path_info {
-            TilingPathInfo::Clip => return,
-            TilingPathInfo::Draw(draw_tiling_path_info) => draw_tiling_path_info,
-        };
-
-        let blend_mode_is_destructive = draw_tiling_path_info.blend_mode.is_destructive();
-
-        for (draw_tile_index, draw_tile) in self.object_builder
-                                                .built_path
-                                                .tiles
-                                                .data
-                                                .iter()
-                                                .enumerate() {
-            let packed_tile = PackedTile::new(draw_tile_index as u32,
-                                              draw_tile,
-                                              &draw_tiling_path_info,
-                                              &self.object_builder);
-
-            match packed_tile.tile_type {
-                TileType::Solid => {
-                    if let Some(ref mut occluders) = self.object_builder.built_path.occluders {
-                        occluders.push(Occluder::new(packed_tile.tile_coords));
-                        /*
-                        packed_tile.add_to(solid_tiles,
-                                            &mut self.object_builder.built_path.clip_tiles,
-                                            &draw_tiling_path_info,
-                                            &self.scene_builder);
-                        */
-                    }
-                }
-                TileType::SingleMask => {
-                    debug_assert_ne!(packed_tile.draw_tile.alpha_tile_id.page(), !0);
-                    /*
-                    packed_tile.add_to(&mut self.object_builder.built_path.single_mask_tiles,
-                                       &mut self.object_builder.built_path.clip_tiles,
-                                       &draw_tiling_path_info,
-                                       &self.scene_builder);
-                    */
-                }
-                TileType::Empty if blend_mode_is_destructive => {
-                    /*
-                    packed_tile.add_to(&mut self.object_builder.built_path.empty_tiles,
-                                       &mut self.object_builder.built_path.clip_tiles,
-                                       &draw_tiling_path_info,
-                                       &self.scene_builder);
-                    */
-                }
-                TileType::Empty => {
-                    // Just cull.
-                }
-            }
-        }
     }
 }
 

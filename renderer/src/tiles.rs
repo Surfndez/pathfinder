@@ -9,7 +9,8 @@
 // except according to those terms.
 
 use crate::builder::{BuiltPath, ObjectBuilder};
-use crate::gpu_data::TileObjectPrimitive;
+use crate::gpu_data::{TILE_CTRL_MASK_0_SHIFT, TILE_CTRL_MASK_EVEN_ODD};
+use crate::gpu_data::{TILE_CTRL_MASK_WINDING, TileObjectPrimitive};
 use crate::paint::{PaintId, PaintMetadata};
 use pathfinder_content::effects::BlendMode;
 use pathfinder_content::fill::FillRule;
@@ -43,6 +44,24 @@ impl<'a> TilingPathInfo<'a> {
             TilingPathInfo::Clip => false,
         }
     }
+
+    pub(crate) fn to_ctrl(&self) -> u8 {
+        let mut ctrl = 0;
+        match *self {
+            TilingPathInfo::Draw(ref draw_tiling_path_info) => {
+                match draw_tiling_path_info.fill_rule {
+                    FillRule::EvenOdd => {
+                        ctrl |= (TILE_CTRL_MASK_EVEN_ODD << TILE_CTRL_MASK_0_SHIFT) as u8
+                    }
+                    FillRule::Winding => {
+                        ctrl |= (TILE_CTRL_MASK_WINDING << TILE_CTRL_MASK_0_SHIFT) as u8
+                    }
+                }
+            }
+            TilingPathInfo::Clip => {}
+        }
+        ctrl
+    }
 }
 
 pub(crate) struct PackedTile<'a> {
@@ -60,6 +79,7 @@ pub(crate) enum TileType {
 }
 
 impl<'a> PackedTile<'a> {
+    /*
     pub(crate) fn new(draw_tile_index: u32,
                       draw_tile: &'a TileObjectPrimitive,
                       draw_tiling_path_info: &DrawTilingPathInfo<'a>,
@@ -164,6 +184,7 @@ impl<'a> PackedTile<'a> {
             }
         }
     }
+    */
 }
 
 pub fn round_rect_out_to_tile_bounds(rect: RectF) -> RectI {

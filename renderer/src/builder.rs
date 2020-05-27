@@ -18,7 +18,7 @@ use crate::gpu_data::{PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, Prepare
 use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatchId};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::{PrepareMode, PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
-use crate::paint::{PaintInfo, PaintMetadata};
+use crate::paint::{PaintId, PaintInfo, PaintMetadata};
 use crate::scene::{DisplayItem, DrawPath, Scene, SceneSink};
 use crate::tile_map::DenseTileMap;
 use crate::tiler::Tiler;
@@ -90,10 +90,12 @@ impl BuiltDrawPath {
 #[derive(Debug)]
 pub(crate) struct BuiltPath {
     pub data: BuiltPathData,
-    pub tiles: DenseTileMap<TileObjectPrimitive>,
-    pub clip_tiles: Option<DenseTileMap<Clip>>,
+    pub tile_bounds: RectI,
     pub occluders: Option<Vec<Occluder>>,
     pub fill_rule: FillRule,
+    pub has_clip: bool,
+    pub ctrl_byte: u8,
+    pub paint_id: PaintId,
 }
 
 #[derive(Debug)]
@@ -108,6 +110,8 @@ pub(crate) struct BuiltPathBinCPUData {
     /// During tiling, or if backdrop computation is done on GPU, this stores the sum of backdrops
     /// for tile columns above the viewport.
     pub backdrops: Vec<i32>,
+    pub tiles: DenseTileMap<TileObjectPrimitive>,
+    pub clip_tiles: Option<DenseTileMap<Clip>>,
 }
 
 #[derive(Debug)]
@@ -529,7 +533,6 @@ struct DrawPathBuildParams<'a> {
 }
 
 impl BuiltPath {
-    // If `segments` is `None`, then tiling is being done on CPU. Otherwise, it's done on GPU.
     fn new(path_id: u32,
            path_bounds: RectF,
            view_box_bounds: RectF,
@@ -545,21 +548,12 @@ impl BuiltPath {
             TilingPathInfo::Clip => true,
         };
 
-        let color = match *tiling_path_info {
-            TilingPathInfo::Draw(ref draw_tiling_path_info) => draw_tiling_path_info.paint_id.0,
-            TilingPathInfo::Clip => 0,
+        let paint_id = match *tiling_path_info {
+            TilingPathInfo::Draw(ref draw_tiling_path_info) => draw_tiling_path_info.paint_id,
+            TilingPathInfo::Clip => PaintId(0),
         };
 
-        let mut ctrl = 0;
-        match *tiling_path_info {
-            TilingPathInfo::Draw(ref draw_tiling_path_info) => {
-                match draw_tiling_path_info.fill_rule {
-                    FillRule::EvenOdd => ctrl |= TILE_CTRL_MASK_EVEN_ODD << TILE_CTRL_MASK_0_SHIFT,
-                    FillRule::Winding => ctrl |= TILE_CTRL_MASK_WINDING << TILE_CTRL_MASK_0_SHIFT,
-                }
-            }
-            TilingPathInfo::Clip => {}
-        };
+        let ctrl_byte = tiling_path_info.to_ctrl();
 
         let tile_map_bounds = if tiling_path_info.has_destructive_blend_mode() {
             view_box_bounds
@@ -567,37 +561,43 @@ impl BuiltPath {
             path_bounds
         };
 
-        let tiles = DenseTileMap::from_builder(|tile_coord| {
-            TileObjectPrimitive {
-                tile_x: tile_coord.x() as i16,
-                tile_y: tile_coord.y() as i16,
-                alpha_tile_id: AlphaTileId(!0),
-                path_id,
-                color,
-                backdrop: 0,
-                ctrl: ctrl as u8,
-            }
-        }, tiles::round_rect_out_to_tile_bounds(tile_map_bounds));
+        let tile_bounds = tiles::round_rect_out_to_tile_bounds(tile_map_bounds);
 
-        let clip_tiles = match *tiling_path_info {
-            TilingPathInfo::Draw(ref draw_tiling_path_info) if
-                    draw_tiling_path_info.built_clip_path.is_some() => {
-                Some(DenseTileMap::from_builder(|tile_coord| {
-                    Clip {
-                        dest_tile_id: AlphaTileId(!0),
-                        dest_backdrop: 0,
-                        src_tile_id: AlphaTileId(!0),
-                        src_backdrop: 0,
-                    }
-                }, tiles::round_rect_out_to_tile_bounds(tile_map_bounds)))
+        let has_clip = match *tiling_path_info {
+            TilingPathInfo::Draw(ref draw_tiling_path_info) => {
+                draw_tiling_path_info.built_clip_path.is_some()
             }
-            _ => None,
+            _ => false,
         };
 
         let data = match *prepare_mode {
             PrepareMode::CPU => {
                 BuiltPathData::CPU(BuiltPathBinCPUData {
-                    backdrops: vec![0; tiles.rect.width() as usize],
+                    backdrops: vec![0; tile_bounds.width() as usize],
+                    tiles: DenseTileMap::from_builder(|tile_coord| {
+                            TileObjectPrimitive {
+                                tile_x: tile_coord.x() as i16,
+                                tile_y: tile_coord.y() as i16,
+                                alpha_tile_id: AlphaTileId(!0),
+                                path_id,
+                                color: paint_id.0,
+                                backdrop: 0,
+                                ctrl: ctrl_byte,
+                            }
+                        }, tile_bounds),
+                    clip_tiles: match *tiling_path_info {
+                        TilingPathInfo::Draw(ref draw_tiling_path_info) if has_clip => {
+                            Some(DenseTileMap::from_builder(|tile_coord| {
+                                Clip {
+                                    dest_tile_id: AlphaTileId(!0),
+                                    dest_backdrop: 0,
+                                    src_tile_id: AlphaTileId(!0),
+                                    src_backdrop: 0,
+                                }
+                            }, tile_bounds))
+                        }
+                        _ => None,
+                    },
                 })
             }
             PrepareMode::TransformCPUBinGPU => {
@@ -610,10 +610,12 @@ impl BuiltPath {
 
         BuiltPath {
             data,
-            tiles,
-            clip_tiles,
+            tile_bounds,
+            has_clip,
             fill_rule,
             occluders: if occludes { Some(vec![]) } else { None },
+            ctrl_byte,
+            paint_id,
         }
     }
 }
@@ -700,37 +702,60 @@ impl ObjectBuilder {
                                         scene_builder: &SceneBuilder,
                                         tile_coords: Vector2I)
                                         -> AlphaTileId {
-        let local_tile_index = self.built_path.tiles.coords_to_index_unchecked(tile_coords);
-        let alpha_tile_id = self.built_path.tiles.data[local_tile_index].alpha_tile_id;
+        let local_tile_index = self.tile_coords_to_local_index_unchecked(tile_coords) as usize;
+
+        let tiles = match self.built_path.data {
+            BuiltPathData::CPU(ref mut cpu_data) => &mut cpu_data.tiles,
+            BuiltPathData::GPU | BuiltPathData::TransformCPUBinGPU(_) => {
+                panic!("Can't allocate alpha tile index on CPU if not doing building on CPU!")
+            }
+        };
+
+        let alpha_tile_id = tiles.data[local_tile_index].alpha_tile_id;
         if alpha_tile_id.is_valid() {
             return alpha_tile_id;
         }
 
         let alpha_tile_id = AlphaTileId::new(&scene_builder.next_alpha_tile_indices, 0);
-        self.built_path.tiles.data[local_tile_index].alpha_tile_id = alpha_tile_id;
+        tiles.data[local_tile_index].alpha_tile_id = alpha_tile_id;
         alpha_tile_id
     }
 
     #[inline]
+    pub(crate) fn tile_coords_to_local_index_unchecked(&self, coords: Vector2I) -> u32 {
+        let tile_rect = self.built_path.tile_bounds;
+        let offset = coords - tile_rect.origin();
+        (offset.x() + tile_rect.width() * offset.y()) as u32
+    }
+
+    #[inline]
     pub(crate) fn tile_coords_to_local_index(&self, coords: Vector2I) -> Option<u32> {
-        self.built_path.tiles.coords_to_index(coords).map(|index| index as u32)
+        if self.built_path.tile_bounds.contains_point(coords) {
+            Some(self.tile_coords_to_local_index_unchecked(coords))
+        } else {
+            None
+        }
     }
 
     #[inline]
     pub(crate) fn local_tile_index_to_coords(&self, tile_index: u32) -> Vector2I {
-        self.built_path.tiles.index_to_coords(tile_index as usize)
+        let tile_rect = self.built_path.tile_bounds;
+        let tile_index = tile_index as i32;
+        vec2i(tile_index % tile_rect.width(), tile_index / tile_rect.width()) + tile_rect.origin()
     }
 
     #[inline]
     pub(crate) fn adjust_alpha_tile_backdrop(&mut self, tile_coords: Vector2I, delta: i8) {
-        let backdrops = match self.built_path.data {
-            BuiltPathData::CPU(ref mut tiled_data) => &mut tiled_data.backdrops,
+        let (tiles, backdrops) = match self.built_path.data {
+            BuiltPathData::CPU(ref mut tiled_data) => {
+                (&mut tiled_data.tiles, &mut tiled_data.backdrops)
+            }
             BuiltPathData::TransformCPUBinGPU(_) | BuiltPathData::GPU => unreachable!(),
         };
 
-        let tile_offset = tile_coords - self.built_path.tiles.rect.origin();
-        if tile_offset.x() < 0 || tile_offset.x() >= self.built_path.tiles.rect.width() ||
-                tile_offset.y() >= self.built_path.tiles.rect.height() {
+        let tile_offset = tile_coords - tiles.rect.origin();
+        if tile_offset.x() < 0 || tile_offset.x() >= tiles.rect.width() ||
+                tile_offset.y() >= tiles.rect.height() {
             return;
         }
 
@@ -739,8 +764,8 @@ impl ObjectBuilder {
             return;
         }
 
-        let local_tile_index = self.built_path.tiles.coords_to_index_unchecked(tile_coords);
-        self.built_path.tiles.data[local_tile_index].backdrop += delta;
+        let local_tile_index = tiles.coords_to_index_unchecked(tile_coords);
+        tiles.data[local_tile_index].backdrop += delta;
     }
 }
 
@@ -896,7 +921,11 @@ impl PrepareTilesBatch {
 
         match self.modal {
             PrepareTilesModalInfo::CPU(ref mut cpu_info) if z_write => {
-                for tile in &path.tiles.data {
+                let tiles = match path.data {
+                    BuiltPathData::CPU(ref cpu_data) => &cpu_data.tiles,
+                    BuiltPathData::GPU | BuiltPathData::TransformCPUBinGPU(_) => unreachable!(),
+                };
+                for tile in &tiles.data {
                     if tile.backdrop == 0 || tile.alpha_tile_id != AlphaTileId(!0) {
                         continue;
                     }
@@ -906,12 +935,20 @@ impl PrepareTilesBatch {
                                           .expect("Z value out of bounds!");
                     *z_value = (*z_value).max(path_index.0 as i32);
                 }
+                self.tiles.extend_from_slice(&tiles.data);
             }
-            PrepareTilesModalInfo::CPU(_) => {}
+            PrepareTilesModalInfo::CPU(_) => {
+                match path.data {
+                    BuiltPathData::CPU(ref cpu_data) => {
+                        self.tiles.extend_from_slice(&cpu_data.tiles.data)
+                    }
+                    BuiltPathData::GPU | BuiltPathData::TransformCPUBinGPU(_) => unreachable!(),
+                }
+            }
             PrepareTilesModalInfo::GPU(ref mut gpu_info) => {
                 let path_index = PathIndex(gpu_info.propagate_metadata.len() as u32);
                 gpu_info.propagate_metadata.push(PropagateMetadata {
-                    tile_rect: path.tiles.rect,
+                    tile_rect: path.tile_bounds,
                     tile_offset: self.tiles.len() as u32,
                     backdrops_offset: gpu_info.backdrops.len() as u32,
                     z_write: z_write as u32,
@@ -927,10 +964,25 @@ impl PrepareTilesBatch {
                     }
                     BuiltPathData::GPU => gpu_info.add_segments(path, path_index, path_outline),
                 }
+
+                // Add tiles.
+                // TODO(pcwalton): Do this on GPU instead.
+                self.tiles.reserve(path.tile_bounds.area() as usize);
+                for y in path.tile_bounds.min_y()..path.tile_bounds.max_y() {
+                    for x in path.tile_bounds.min_x()..path.tile_bounds.max_x() {
+                        self.tiles.push(TileObjectPrimitive {
+                            alpha_tile_id: AlphaTileId(!0),
+                            backdrop: 0,
+                            path_id: path_index.0,
+                            tile_x: x as i16,
+                            tile_y: y as i16,
+                            ctrl: path.ctrl_byte,
+                            color: path.paint_id.0,
+                        });
+                    }
+                }
             }
         }
-
-        self.tiles.extend_from_slice(&path.tiles.data);
 
         if clip_path_id.is_some() {
             if self.clipped_path_info.is_none() {
@@ -948,13 +1000,17 @@ impl PrepareTilesBatch {
 
             let clipped_path_info = self.clipped_path_info.as_mut().unwrap();
             clipped_path_info.clipped_paths.push(path_index);
-            clipped_path_info.max_clipped_tile_count += path.tiles.data.len() as u32;
+            clipped_path_info.max_clipped_tile_count += path.tile_bounds.area() as u32;
 
             // If clips are computed on CPU, add them to this batch.
             if let Some(ref mut dest_clips) = clipped_path_info.clips {
-                let src_tiles = path.clip_tiles
-                                    .as_ref()
-                                    .expect("Clip tiles weren't computed on CPU!");
+                let src_tiles = match path.data {
+                    BuiltPathData::CPU(BuiltPathBinCPUData {
+                        clip_tiles: Some(ref src_tiles),
+                        ..
+                    }) => src_tiles,
+                    _ => panic!("Clip tiles weren't computed on CPU!"),
+                };
                 dest_clips.extend_from_slice(&src_tiles.data);
             }
         }
@@ -965,7 +1021,7 @@ impl PrepareTilesBatch {
 
 impl PrepareTilesGPUInfo {
     fn add_segments(&mut self, path: &BuiltPath, path_index: PathIndex, outline: &Outline) {
-        for _ in 0..path.tiles.rect.width() {
+        for _ in 0..path.tile_bounds.width() {
             self.backdrops.push(0);
         }
     }
