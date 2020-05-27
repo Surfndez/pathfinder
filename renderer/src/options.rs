@@ -20,16 +20,14 @@ use pathfinder_content::clip::PolygonClipper3D;
 
 pub struct RenderCommandListener<'a> {
     send_fn: RenderCommandSendFunction<'a>,
-    pub gpu_features: RendererGPUFeatures,
 }
 
 pub type RenderCommandSendFunction<'a> = Box<dyn Fn(RenderCommand) + Send + Sync + 'a>;
 
 impl<'a> RenderCommandListener<'a> {
     #[inline]
-    pub fn new(send_fn: RenderCommandSendFunction<'a>, gpu_features: RendererGPUFeatures)
-               -> RenderCommandListener<'a> {
-        RenderCommandListener { send_fn, gpu_features }
+    pub fn new(send_fn: RenderCommandSendFunction<'a>) -> RenderCommandListener<'a> {
+        RenderCommandListener { send_fn }
     }
 
     #[inline]

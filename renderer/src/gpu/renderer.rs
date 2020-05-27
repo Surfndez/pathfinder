@@ -17,7 +17,7 @@ use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionPro
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
 use crate::gpu_data::{BinSegment, Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
-use crate::gpu_data::{SegmentIndices, TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
+use crate::gpu_data::{SegmentIndices, Segments, TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive};
 use crate::options::BoundingQuad;
 use crate::paint::PaintCompositeOp;
@@ -133,6 +133,11 @@ pub struct Renderer<D> where D: Device {
     area_lut_texture: D::Texture,
     gamma_lut_texture: D::Texture,
 
+    // Scene
+    points_buffer: D::Buffer,
+    point_indices_buffer: D::Buffer,
+    point_index_count: u32,
+
     // Frames
     front_frame: Frame<D>,
     back_frame: Frame<D>,
@@ -231,6 +236,9 @@ impl<D> Renderer<D> where D: Device {
                                BufferData::Memory(&QUAD_VERTEX_INDICES),
                                BufferTarget::Index);
 
+        let points_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let point_indices_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+
         let window_size = dest_framebuffer.window_size(&device);
 
         let timer_query_cache = TimerQueryCache::new(&device);
@@ -283,6 +291,10 @@ impl<D> Renderer<D> where D: Device {
             texture_pages: vec![],
             render_targets: vec![],
             render_target_stack: vec![],
+
+            points_buffer,
+            point_indices_buffer,
+            point_index_count: 0,
 
             front_frame,
             back_frame,
@@ -353,6 +365,7 @@ impl<D> Renderer<D> where D: Device {
             RenderCommand::FlushFills => {
                 self.draw_buffered_fills();
             }
+            RenderCommand::UploadScene(ref segments) => self.upload_scene(segments),
             RenderCommand::BeginTileDrawing => {}
             RenderCommand::PushRenderTarget(render_target_id) => {
                 self.push_render_target(render_target_id)
@@ -623,6 +636,17 @@ impl<D> Renderer<D> where D: Device {
         self.device.upload_to_texture(texture, rect, TextureDataRef::F16(&texels));
     }
 
+    fn upload_scene(&mut self, segments: &Segments) {
+        println!("upload_scene({})", segments.indices.len());
+        self.device.allocate_buffer(&self.points_buffer,
+                                    BufferData::Memory(&segments.points),
+                                    BufferTarget::Storage);
+        self.device.allocate_buffer(&self.point_indices_buffer,
+                                    BufferData::Memory(&segments.indices),
+                                    BufferTarget::Storage);
+        self.point_index_count = segments.indices.len() as u32;
+    }
+
     fn upload_tiles(&mut self, tiles: &[TileObjectPrimitive]) -> StorageID {
         //debug_assert!(tiles.len() <= MAX_TILES_PER_BATCH);
 
@@ -817,27 +841,15 @@ impl<D> Renderer<D> where D: Device {
         fill_storage_id
     }
 
-    fn dice_segments(&mut self,
-                     points: &[Vector2F],
-                     indices: &[SegmentIndices],
-                     transform: Transform2F)
-                     -> (D::Buffer, u32) {
+    fn dice_segments(&mut self, transform: Transform2F) -> (D::Buffer, u32) {
         println!("dice_segments(): transform={:?}", transform);
 
         // FIXME(pcwalton): Buffer reuse
         let indirect_compute_params_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
-        let points_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
-        let input_indices_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
         let output_segments_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
-        self.device
-            .allocate_buffer(&indirect_compute_params_buffer,
-                             BufferData::Memory(&[0, 0, 0, 0, indices.len() as u32, 0, 0, 0]),
-                             BufferTarget::Storage);
-        self.device.allocate_buffer(&points_buffer,
-                                    BufferData::Memory(points),
-                                    BufferTarget::Storage);
-        self.device.allocate_buffer(&input_indices_buffer,
-                                    BufferData::Memory(indices),
+        let index_count = self.point_index_count;
+        self.device.allocate_buffer(&indirect_compute_params_buffer,
+                                    BufferData::Memory(&[0, 0, 0, 0, index_count, 0, 0, 0]),
                                     BufferTarget::Storage);
         // FIXME(pcwalton): Better memory management!!
         self.device.allocate_buffer::<[u32; 8]>(&output_segments_buffer,
@@ -847,8 +859,7 @@ impl<D> Renderer<D> where D: Device {
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
-        let compute_dimensions =
-            ComputeDimensions { x: (indices.len() as u32 + 63) / 64, y: 1, z: 1 };
+        let compute_dimensions = ComputeDimensions { x: (index_count + 63) / 64, y: 1, z: 1 };
         self.device.dispatch_compute(compute_dimensions, &ComputeState {
             program: &self.dice_compute_program.program,
             textures: &[],
@@ -862,8 +873,9 @@ impl<D> Renderer<D> where D: Device {
             storage_buffers: &[
                 (&self.dice_compute_program.compute_indirect_params_storage_buffer,
                  &indirect_compute_params_buffer),
-                (&self.dice_compute_program.points_storage_buffer, &points_buffer),
-                (&self.dice_compute_program.input_indices_storage_buffer, &input_indices_buffer),
+                (&self.dice_compute_program.points_storage_buffer, &self.points_buffer),
+                (&self.dice_compute_program.input_indices_storage_buffer,
+                 &self.point_indices_buffer),
                 (&self.dice_compute_program.output_segments_storage_buffer,
                  &output_segments_buffer),
             ],
@@ -878,9 +890,8 @@ impl<D> Renderer<D> where D: Device {
         let indirect_compute_params = self.device.read_buffer(&indirect_compute_params_buffer,
                                                               BufferTarget::Storage,
                                                               0..8);
-        println!("GPU dicing: points={} indices={} output_segments={}",
-                 points.len(),
-                 indices.len(),
+        println!("GPU dicing: indices={} output_segments={}",
+                 index_count,
                  indirect_compute_params[5]);
 
         (output_segments_buffer, indirect_compute_params[5])
@@ -1346,12 +1357,8 @@ impl<D> Renderer<D> where D: Device {
                     self.upload_propagate_data(&gpu_info.propagate_metadata, &gpu_info.backdrops);
 
                 // Bin and render fills if requested.
-                if let PrepareTilesGPUModalInfo::GPUBinning {
-                    ref segments,
-                    transform,
-                } = gpu_info.modal {
-                    let (segments_buffer, segment_count) =
-                        self.dice_segments(&segments.points, &segments.indices, transform);
+                if let PrepareTilesGPUModalInfo::GPUBinning { transform } = gpu_info.modal {
+                    let (segments_buffer, segment_count) = self.dice_segments(transform);
                     let (fill_storage_id, instance_count) =
                         self.bin_segments_via_compute(segments_buffer,
                                                       segment_count,

@@ -259,19 +259,14 @@ impl<W> DemoApp<W> where W: Window {
             self.renderer.enable_depth();
         }
 
-        self.renderer.begin_scene();
-
         // Issue render commands!
-        for command in self.render_command_stream.as_mut().unwrap() {
-            self.renderer.render_command(&command);
-        }
+        self.scene_proxy.render(&mut self.renderer);
 
         self.current_frame
             .as_mut()
             .unwrap()
             .scene_stats
             .push(self.renderer.stats);
-        self.renderer.end_scene();
     }
 
     pub fn take_raster_screenshot(&mut self, path: PathBuf) {

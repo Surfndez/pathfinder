@@ -27,25 +27,25 @@ use pathfinder_simd::default::{F32x2, U32x2};
 
 const FLATTENING_TOLERANCE: f32 = 0.25;
 
-pub(crate) struct Tiler<'a, 'b> {
-    scene_builder: &'a SceneBuilder<'b, 'a>,
+pub(crate) struct Tiler<'a, 'b, 'c, 'd> {
+    scene_builder: &'a SceneBuilder<'b, 'a, 'c, 'd>,
     pub(crate) object_builder: ObjectBuilder,
     outline: &'a Outline,
     path_info: TilingPathInfo<'a>,
 }
 
-impl<'a, 'b> Tiler<'a, 'b> {
-    pub(crate) fn new(scene_builder: &'a SceneBuilder<'b, 'a>,
+impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
+    pub(crate) fn new(scene_builder: &'a SceneBuilder<'b, 'a, 'c, 'd>,
                       path_id: u32,
                       outline: &'a Outline,
                       fill_rule: FillRule,
                       view_box: RectF,
                       prepare_mode: &PrepareMode,
                       path_info: TilingPathInfo<'a>)
-                      -> Tiler<'a, 'b> {
+                      -> Tiler<'a, 'b, 'c, 'd> {
         let bounds = outline.bounds().intersection(view_box).unwrap_or(RectF::default());
 
-        let tiled_on_cpu = !scene_builder.listener
+        let tiled_on_cpu = !scene_builder.sink
                                          .gpu_features
                                          .contains(RendererGPUFeatures::BIN_ON_GPU);
 
@@ -75,7 +75,7 @@ impl<'a, 'b> Tiler<'a, 'b> {
 
     fn generate_fills(&mut self) {
         debug_assert!(!self.scene_builder
-                           .listener
+                           .sink
                            .gpu_features
                            .contains(RendererGPUFeatures::BIN_ON_GPU));
 

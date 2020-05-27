@@ -70,6 +70,11 @@ pub enum RenderCommand {
     // Flushes the queue of fills.
     FlushFills,
 
+    /// Upload a scene to GPU.
+    /// 
+    /// This will only be sent if dicing and binning is done on GPU.
+    UploadScene(Segments),
+
     // Pushes a render target onto the stack. Draw commands go to the render target on top of the
     // stack.
     PushRenderTarget(RenderTargetId),
@@ -161,8 +166,6 @@ pub struct PrepareTilesGPUInfo {
 pub enum PrepareTilesGPUModalInfo {
     CPUBinning,
     GPUBinning {
-        /// All line segments.
-        segments: Segments,
         /// A transform to apply to the segments.
         transform: Transform2F,
     }
@@ -399,6 +402,12 @@ impl Debug for RenderCommand {
                 write!(formatter, "AddFills(x{})", fills.len())
             }
             RenderCommand::FlushFills => write!(formatter, "FlushFills"),
+            RenderCommand::UploadScene(ref segments) => {
+                write!(formatter,
+                       "UploadScene(P {}, I {})",
+                       segments.points.len(),
+                       segments.indices.len())
+            }
             RenderCommand::PrepareTiles(ref batch) => {
                 let clipped_path_count = match batch.clipped_path_info {
                     None => 0,

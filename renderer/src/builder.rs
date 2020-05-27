@@ -19,7 +19,7 @@ use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatch
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive};
 use crate::options::{PrepareMode, PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
 use crate::paint::{PaintInfo, PaintMetadata};
-use crate::scene::{DisplayItem, DrawPath, Scene};
+use crate::scene::{DisplayItem, DrawPath, Scene, SceneSink};
 use crate::tile_map::DenseTileMap;
 use crate::tiler::Tiler;
 use crate::tiles::{self, DrawTilingPathInfo, PackedTile, TILE_HEIGHT, TILE_WIDTH, TilingPathInfo};
@@ -47,11 +47,11 @@ pub(crate) const ALPHA_TILES_PER_LEVEL: usize = 1 << (32 - ALPHA_TILE_LEVEL_COUN
 const CURVE_IS_QUADRATIC: u32 = 0x80000000;
 const CURVE_IS_CUBIC:     u32 = 0x40000000;
 
-pub(crate) struct SceneBuilder<'a, 'b> {
+pub(crate) struct SceneBuilder<'a, 'b, 'c, 'd> {
     scene: &'a mut Scene,
     built_options: &'b PreparedBuildOptions,
     next_alpha_tile_indices: [AtomicUsize; ALPHA_TILE_LEVEL_COUNT],
-    pub(crate) listener: RenderCommandListener<'a>,
+    pub(crate) sink: &'c mut SceneSink<'d>,
 }
 
 #[derive(Debug)]
@@ -127,16 +127,16 @@ pub(crate) struct Occluder {
     pub(crate) coords: Vector2I,
 }
 
-impl<'a, 'b> SceneBuilder<'a, 'b> {
+impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
     pub(crate) fn new(scene: &'a mut Scene,
                       built_options: &'b PreparedBuildOptions,
-                      listener: RenderCommandListener<'a>)
-                      -> SceneBuilder<'a, 'b> {
+                      sink: &'c mut SceneSink<'d>)
+                      -> SceneBuilder<'a, 'b, 'c, 'd> {
         SceneBuilder {
             scene,
             built_options,
             next_alpha_tile_indices: [AtomicUsize::new(0), AtomicUsize::new(0)],
-            listener,
+            sink,
         }
     }
 
@@ -152,11 +152,13 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
 
         let needs_readable_framebuffer = self.needs_readable_framebuffer();
 
-        self.listener.send(RenderCommand::Start {
+        self.sink.listener.send(RenderCommand::Start {
             bounding_quad,
             path_count: total_path_count,
             needs_readable_framebuffer,
         });
+
+        let prepare_mode = self.built_options.to_prepare_mode(self.sink.gpu_features);
 
         let render_transform = match self.built_options.transform {
             PreparedRenderTransform::Transform2D(transform) => transform.inverse(),
@@ -170,10 +172,9 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
             render_target_metadata: _,
         } = self.scene.build_paint_info(render_transform);
         for render_command in render_commands {
-            self.listener.send(render_command);
+            self.sink.listener.send(render_command);
         }
 
-        let prepare_mode = self.built_options.to_prepare_mode(self.listener.gpu_features);
         let built_paths = match prepare_mode {
             PrepareMode::CPU | PrepareMode::TransformCPUBinGPU => {
                 self.build_paths_on_cpu(executor, &paint_metadata, &prepare_mode)
@@ -183,10 +184,21 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
             }
         };
 
+        // FIXME(pcwalton): Bad logic.
+        // TODO(pcwalton): Do this earlier?
+        match prepare_mode {
+            PrepareMode::GPU { .. } if self.sink.last_scene.is_none() => {
+                let segments = Segments::from_built_paths(&built_paths, &self.scene);
+                self.sink.listener.send(RenderCommand::UploadScene(segments));
+                self.sink.last_scene = Some((self.scene.id, self.scene.epoch));
+            }
+            _ => {}
+        }
+
         self.finish_building(&paint_metadata, built_paths, prepare_mode);
 
         let cpu_build_time = Instant::now() - start_time;
-        self.listener.send(RenderCommand::Finish { cpu_build_time });
+        self.sink.listener.send(RenderCommand::Finish { cpu_build_time });
     }
 
     fn prepare_paths_for_gpu_building(&mut self,
@@ -344,7 +356,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
 
     fn send_fills(&self, fills: Vec<Fill>) {
         if !fills.is_empty() {
-            self.listener.send(RenderCommand::AddFills(fills));
+            self.sink.listener.send(RenderCommand::AddFills(fills));
         }
     }
 
@@ -352,7 +364,7 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                           paint_metadata: &[PaintMetadata],
                           prepare_mode: PrepareMode,
                           built_paths: BuiltPaths) {
-        let gpu_features = self.listener.gpu_features;
+        let gpu_features = self.sink.gpu_features;
         let (mut prepare_commands, mut draw_commands) = (vec![], vec![]);
 
         let scene_tile_rect = tiles::round_rect_out_to_tile_bounds(self.scene.view_box());
@@ -453,13 +465,13 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
 
         // Send commands.
         if !clip_prepare_batch.tiles.is_empty() {
-            self.listener.send(RenderCommand::PrepareTiles(clip_prepare_batch));
+            self.sink.listener.send(RenderCommand::PrepareTiles(clip_prepare_batch));
         }
         for command in prepare_commands {
-            self.listener.send(command);
+            self.sink.listener.send(command);
         }
         for command in draw_commands {
-            self.listener.send(command);
+            self.sink.listener.send(command);
         }
     }
 
@@ -467,8 +479,8 @@ impl<'a, 'b> SceneBuilder<'a, 'b> {
                        paint_metadata: &[PaintMetadata],
                        built_paths: BuiltPaths,
                        prepare_mode: PrepareMode) {
-        if !self.listener.gpu_features.contains(RendererGPUFeatures::BIN_ON_GPU) {
-            self.listener.send(RenderCommand::FlushFills);
+        if !self.sink.gpu_features.contains(RendererGPUFeatures::BIN_ON_GPU) {
+            self.sink.listener.send(RenderCommand::FlushFills);
         }
 
         self.build_tile_batches(paint_metadata, prepare_mode, built_paths);
@@ -865,10 +877,7 @@ impl PrepareTilesBatch {
                     PrepareTilesModalInfo::GPU(PrepareTilesGPUInfo {
                         backdrops: vec![],
                         propagate_metadata: vec![],
-                        modal: PrepareTilesGPUModalInfo::GPUBinning {
-                            segments: Segments { points: vec![], indices: vec![] },
-                            transform: *transform,
-                        },
+                        modal: PrepareTilesGPUModalInfo::GPUBinning { transform: *transform },
                     })
                 }
             },
@@ -959,17 +968,31 @@ impl PrepareTilesGPUInfo {
         for _ in 0..path.tiles.rect.width() {
             self.backdrops.push(0);
         }
+    }
+}
 
-        let bin_segments = match self.modal {
-            PrepareTilesGPUModalInfo::CPUBinning => {
-                panic!("Can't add segments when using CPU binning!")
-            }
-            PrepareTilesGPUModalInfo::GPUBinning { ref mut segments, .. } => segments,
-        };
+impl Segments {
+    fn from_built_paths(built_paths: &BuiltPaths, scene: &Scene) -> Segments {
+        let mut segments = Segments { points: vec![], indices: vec![] };
 
+        for (clip_path_index, clip_path) in scene.clip_paths.iter().enumerate() {
+            segments.add_path(&built_paths.clip[clip_path_index],
+                              PathIndex(clip_path_index as u32),
+                              clip_path.outline());
+        }
+        for (draw_path_index, draw_path) in scene.paths.iter().enumerate() {
+            segments.add_path(&built_paths.draw[draw_path_index].path,
+                              PathIndex(draw_path_index as u32),
+                              draw_path.outline());
+        }
+
+        segments
+    }
+
+    fn add_path(&mut self, path: &BuiltPath, path_index: PathIndex, outline: &Outline) {
         for contour in outline.contours() {
             let point_count = contour.len() as u32;
-            bin_segments.points.reserve(point_count as usize);
+            self.points.reserve(point_count as usize);
 
             for point_index in 0..point_count {
                 if !contour.flags_of(point_index).intersects(PointFlags::CONTROL_POINT_0 |
@@ -987,20 +1010,16 @@ impl PrepareTilesGPUInfo {
                         }
                     }
 
-                    if point_index + 1 < point_count || contour.is_closed() {
-                        bin_segments.indices.push(SegmentIndices {
-                            first_point_index: bin_segments.points.len() as u32,
-                            flags_path_index: path_index.0 | flags,
-                        });
-                    }
+                    self.indices.push(SegmentIndices {
+                        first_point_index: self.points.len() as u32,
+                        flags_path_index: path_index.0 | flags,
+                    });
                 }
 
-                bin_segments.points.push(contour.position_of(point_index));
+                self.points.push(contour.position_of(point_index));
             }
 
-            if contour.is_closed() {
-                bin_segments.points.push(contour.position_of(0));
-            }
+            self.points.push(contour.position_of(0));
         }
     }
 }

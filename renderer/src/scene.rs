@@ -12,6 +12,7 @@
 
 use crate::builder::SceneBuilder;
 use crate::concurrent::executor::Executor;
+use crate::gpu::options::RendererGPUFeatures;
 use crate::options::{BuildOptions, PreparedBuildOptions};
 use crate::options::{PreparedRenderTransform, RenderCommandListener};
 use crate::paint::{MergedPaletteInfo, Paint, PaintId, PaintInfo, Palette};
@@ -34,7 +35,9 @@ pub struct Scene {
     palette: Palette,
     bounds: RectF,
     view_box: RectF,
-    id: SceneId,
+    pub(crate) id: SceneId,
+    // FIXME(pcwalton): Actually update this!
+    pub(crate) epoch: SceneEpoch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -52,6 +55,7 @@ impl Scene {
             bounds: RectF::default(),
             view_box: RectF::default(),
             id: scene_id,
+            epoch: SceneEpoch(1),
         }
     }
 
@@ -238,13 +242,13 @@ impl Scene {
     }
 
     #[inline]
-    pub fn build<'a, E>(&mut self,
-                        options: BuildOptions,
-                        listener: RenderCommandListener<'a>,
-                        executor: &E)
-                        where E: Executor {
+    pub fn build<'a, 'b, E>(&mut self,
+                            options: BuildOptions,
+                            sink: &'b mut SceneSink<'a>,
+                            executor: &E)
+                            where E: Executor {
         let prepared_options = options.prepare(self.bounds);
-        SceneBuilder::new(self, &prepared_options, listener).build(executor)
+        SceneBuilder::new(self, &prepared_options, sink).build(executor)
     }
 
     pub fn paths<'a>(&'a self) -> PathIter {
@@ -252,6 +256,29 @@ impl Scene {
             scene: self,
             pos: 0
         }
+    }
+}
+
+pub struct SceneSink<'a> {
+    pub(crate) listener: RenderCommandListener<'a>,
+    pub(crate) gpu_features: RendererGPUFeatures,
+    pub(crate) last_scene: Option<(SceneId, SceneEpoch)>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SceneEpoch(pub u64);
+
+impl<'a> SceneSink<'a> {
+    #[inline]
+    pub fn new(listener: RenderCommandListener<'a>) -> SceneSink<'a> {
+        SceneSink::with_gpu_features(listener, RendererGPUFeatures::all())
+    }
+
+    #[inline]
+    pub fn with_gpu_features(listener: RenderCommandListener<'a>,
+                             gpu_features: RendererGPUFeatures)
+                             -> SceneSink<'a> {
+        SceneSink { listener, gpu_features, last_scene: None }
     }
 }
 
