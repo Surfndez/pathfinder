@@ -757,8 +757,9 @@ impl ObjectBuilder {
                 from_y: from_y as u16,
                 to_x: to_x as u16,
                 to_y: to_y as u16,
-            }, 
-            alpha_tile_index: alpha_tile_id.0,
+            },
+            // If fills are being done with compute, then this value will be overwritten later.
+            link: alpha_tile_id.0,
         });
     }
 

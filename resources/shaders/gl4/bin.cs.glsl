@@ -28,6 +28,8 @@ precision highp float;
 
 layout(local_size_x = 64)in;
 
+uniform int uFillInComputeEnabled;
+
 struct Segment {
     vec4 line;
     uvec4 pathIndex;
@@ -59,6 +61,10 @@ layout(std430, binding = 4)buffer bTiles {
     restrict uint iTiles[];
 };
 
+layout(std430, binding = 5)buffer bFillTileMap {
+    restrict uint iFillTileMap[];
+};
+
 bool computeTileIndex(ivec2 tileCoords,
                       ivec4 pathTileRect,
                       uint pathTileOffset,
@@ -87,9 +93,20 @@ void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTi
     uint fillIndex = atomicAdd(iIndirectDrawParams[1], 1);
 
 
+
+    uint fillLink;
+    if(uFillInComputeEnabled != 0){
+
+        fillLink = atomicExchange(iFillTileMap[tileIndex], fillIndex);
+    } else {
+
+        fillLink = tileIndex;
+    }
+
+
     iFills[fillIndex * 3 + 0]= scaledLocalLine . x |(scaledLocalLine . y << 16);
     iFills[fillIndex * 3 + 1]= scaledLocalLine . z |(scaledLocalLine . w << 16);
-    iFills[fillIndex * 3 + 2]= tileIndex;
+    iFills[fillIndex * 3 + 2]= fillLink;
 }
 
 void adjustBackdrop(int backdropDelta, ivec2 tileCoords, ivec4 pathTileRect, uint pathTileOffset){

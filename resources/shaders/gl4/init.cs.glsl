@@ -43,13 +43,18 @@ layout(std430, binding = 1)buffer bTiles {
     restrict uvec4 iTiles[];
 };
 
+layout(std430, binding = 2)buffer bFillTileMap {
+    restrict int iFillTileMap[];
+};
+
 void main(){
     uint tileIndex = gl_GlobalInvocationID . x;
     if(tileIndex >= uint(uTileCount))
         return;
 
     uint lowPathIndex = 0, highPathIndex = uint(uPathCount);
-    while(lowPathIndex + 1 < highPathIndex){
+    int iteration = 0;
+    while(iteration < 1024 && lowPathIndex + 1 < highPathIndex){
         uint midPathIndex = lowPathIndex +(highPathIndex - lowPathIndex)/ 2;
         uint midTileIndex = iTilePathInfo[midPathIndex]. z;
         if(tileIndex < midTileIndex){
@@ -59,10 +64,10 @@ void main(){
             if(tileIndex == midTileIndex)
                 break;
         }
+        iteration ++;
     }
 
     uint pathIndex = lowPathIndex;
-
     uvec4 pathInfo = iTilePathInfo[pathIndex];
 
     ivec2 packedTileRect = ivec2(pathInfo . xy);
@@ -77,5 +82,7 @@ void main(){
                               ~ 0u,
                               pathIndex,
                               pathInfo . w);
+
+    iFillTileMap[tileIndex]= - 1;
 }
 

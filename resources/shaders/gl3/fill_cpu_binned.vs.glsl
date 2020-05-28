@@ -14,6 +14,9 @@
 
 #extension GL_GOOGLE_include_directive : enable
 
+
+
+
 precision highp float;
 
 
@@ -87,6 +90,11 @@ out vec2 vFrom;
 out vec2 vTo;
 
 void main(){
+
+
+
+
+
     gl_Position = computeVertexPosition(uint(aTileIndex),
                                         aTessCoord,
                                         aLineSegment,

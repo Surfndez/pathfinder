@@ -12,6 +12,9 @@
 
 #extension GL_GOOGLE_include_directive : enable
 
+// TODO(pcwalton): See if we can use preprocessor magic to conditionally remove the SSBO, so that
+// we can merge this shader with `fill_gpu_binned.vs.glsl`.
+
 precision highp float;
 
 #ifdef GL_ES
@@ -31,6 +34,11 @@ out vec2 vFrom;
 out vec2 vTo;
 
 void main() {
+    // If we binned on CPU, then `aTileIndex` refers to an alpha tile index. (For GPU binning, it
+    // refers to a global tile index.)
+    //
+    // This is unfortunately very confusing, but I don't know of any other way to make the D3D10
+    // rasterization pipeline work simultaneously with compute.
     gl_Position = computeVertexPosition(uint(aTileIndex),
                                         aTessCoord,
                                         aLineSegment,

@@ -55,6 +55,7 @@ layout(local_size_x = 16, local_size_y = 4)in;
 uniform writeonly image2D uDest;
 uniform sampler2D uAreaLUT;
 uniform int uFirstTileIndex;
+uniform int uBinnedOnGPU;
 
 layout(std430, binding = 0)buffer bFills {
     restrict readonly uint iFills[];
@@ -62,6 +63,10 @@ layout(std430, binding = 0)buffer bFills {
 
 layout(std430, binding = 1)buffer bFillTileMap {
     restrict readonly int iFillTileMap[];
+};
+
+layout(std430, binding = 2)buffer bTiles {
+    restrict readonly int iTiles[];
 };
 
 void main(){
@@ -75,6 +80,7 @@ void main(){
         return;
 
     vec4 coverages = vec4(0.0);
+    int iteration = 0;
     do {
         uint fillFrom = iFills[fillIndex * 3 + 0], fillTo = iFills[fillIndex * 3 + 1];
         vec4 lineSegment = vec4(fillFrom & 0xffff, fillFrom >> 16,
@@ -85,11 +91,24 @@ void main(){
                                      uAreaLUT);
 
         fillIndex = int(iFills[fillIndex * 3 + 2]);
-    } while(fillIndex >= 0);
+        iteration ++;
+    } while(fillIndex >= 0 && iteration < 1024);
 
-    ivec2 tileOrigin =
-        ivec2(tileIndex & 0xff,(tileIndex >> 8u)& 0xff +(((tileIndex >> 16u)& 0xff)<< 8u))*
-        ivec2(16, 4);
+
+
+
+
+
+
+    uint alphaTileIndex;
+    if(uBinnedOnGPU != 0)
+        alphaTileIndex = iTiles[tileIndex * 4 + 1];
+    else
+        alphaTileIndex = tileIndex;
+
+    ivec2 tileOrigin = ivec2(16, 4)*
+        ivec2(alphaTileIndex & 0xff,
+              (alphaTileIndex >> 8u)& 0xff +(((alphaTileIndex >> 16u)& 0xff)<< 8u));
     ivec2 destCoord = tileOrigin + ivec2(gl_LocalInvocationID . xy);
     imageStore(uDest, destCoord, coverages);
 }

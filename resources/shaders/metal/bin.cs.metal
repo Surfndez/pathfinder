@@ -18,6 +18,11 @@ struct bIndirectDrawParams
     uint iIndirectDrawParams[1];
 };
 
+struct bFillTileMap
+{
+    uint iFillTileMap[1];
+};
+
 struct bFills
 {
     uint iFills[1];
@@ -50,7 +55,7 @@ bool computeTileIndex(thread const int2& tileCoords, thread const int4& pathTile
 }
 
 static inline __attribute__((always_inline))
-void addFill(thread const float4& lineSegment, thread const int2& tileCoords, thread const int4& pathTileRect, thread const uint& pathTileOffset, device bTiles& v_112, device bIndirectDrawParams& v_132, device bFills& v_144)
+void addFill(thread const float4& lineSegment, thread const int2& tileCoords, thread const int4& pathTileRect, thread const uint& pathTileOffset, device bTiles& v_112, device bIndirectDrawParams& v_132, thread int uFillInComputeEnabled, device bFillTileMap& v_151, device bFills& v_161)
 {
     int2 param = tileCoords;
     int4 param_1 = pathTileRect;
@@ -75,9 +80,19 @@ void addFill(thread const float4& lineSegment, thread const int2& tileCoords, th
     }
     uint _140 = atomic_fetch_add_explicit((device atomic_uint*)&v_132.iIndirectDrawParams[1], 1u, memory_order_relaxed);
     uint fillIndex = _140;
-    v_144.iFills[(fillIndex * 3u) + 0u] = scaledLocalLine.x | (scaledLocalLine.y << uint(16));
-    v_144.iFills[(fillIndex * 3u) + 1u] = scaledLocalLine.z | (scaledLocalLine.w << uint(16));
-    v_144.iFills[(fillIndex * 3u) + 2u] = tileIndex;
+    uint fillLink;
+    if (uFillInComputeEnabled != 0)
+    {
+        uint _155 = atomic_exchange_explicit((device atomic_uint*)&v_151.iFillTileMap[tileIndex], fillIndex, memory_order_relaxed);
+        fillLink = _155;
+    }
+    else
+    {
+        fillLink = tileIndex;
+    }
+    v_161.iFills[(fillIndex * 3u) + 0u] = scaledLocalLine.x | (scaledLocalLine.y << uint(16));
+    v_161.iFills[(fillIndex * 3u) + 1u] = scaledLocalLine.z | (scaledLocalLine.w << uint(16));
+    v_161.iFills[(fillIndex * 3u) + 2u] = fillLink;
 }
 
 static inline __attribute__((always_inline))
@@ -87,21 +102,21 @@ void adjustBackdrop(thread const int& backdropDelta, thread const int2& tileCoor
     int4 param_1 = pathTileRect;
     uint param_2 = pathTileOffset;
     uint param_3;
-    bool _179 = computeTileIndex(param, param_1, param_2, param_3);
+    bool _196 = computeTileIndex(param, param_1, param_2, param_3);
     uint tileIndex = param_3;
-    if (_179)
+    if (_196)
     {
         uint lastValue = v_112.iTiles[(tileIndex * 4u) + 3u];
         while (true)
         {
             int newBackdrop = (int(lastValue) >> 24) + backdropDelta;
             uint newValue = (lastValue & 16777215u) | uint(newBackdrop << 24);
-            uint _217;
+            uint _234;
             do
             {
-                _217 = lastValue;
-            } while (!atomic_compare_exchange_weak_explicit((device atomic_uint*)&v_112.iTiles[(tileIndex * 4u) + 3u], &_217, newValue, memory_order_relaxed, memory_order_relaxed) && _217 == lastValue);
-            uint prevValue = _217;
+                _234 = lastValue;
+            } while (!atomic_compare_exchange_weak_explicit((device atomic_uint*)&v_112.iTiles[(tileIndex * 4u) + 3u], &_234, newValue, memory_order_relaxed, memory_order_relaxed) && _234 == lastValue);
+            uint prevValue = _234;
             if (prevValue == lastValue)
             {
                 break;
@@ -111,17 +126,17 @@ void adjustBackdrop(thread const int& backdropDelta, thread const int2& tileCoor
     }
 }
 
-kernel void main0(device bTiles& v_112 [[buffer(0)]], device bIndirectDrawParams& v_132 [[buffer(1)]], device bFills& v_144 [[buffer(2)]], const device bSegments& _245 [[buffer(3)]], const device bMetadata& _258 [[buffer(4)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
+kernel void main0(constant int& uFillInComputeEnabled [[buffer(2)]], device bTiles& v_112 [[buffer(0)]], device bIndirectDrawParams& v_132 [[buffer(1)]], device bFillTileMap& v_151 [[buffer(3)]], device bFills& v_161 [[buffer(4)]], const device bSegments& _262 [[buffer(5)]], const device bMetadata& _275 [[buffer(6)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
 {
     uint segmentIndex = gl_GlobalInvocationID.x;
     if (segmentIndex >= v_132.iIndirectDrawParams[5])
     {
         return;
     }
-    float4 lineSegment = _245.iSegments[segmentIndex].line;
-    uint pathIndex = _245.iSegments[segmentIndex].pathIndex.x;
-    int4 pathTileRect = _258.iMetadata[(pathIndex * 2u) + 0u];
-    uint pathTileOffset = uint(_258.iMetadata[(pathIndex * 2u) + 1u].x);
+    float4 lineSegment = _262.iSegments[segmentIndex].line;
+    uint pathIndex = _262.iSegments[segmentIndex].pathIndex.x;
+    int4 pathTileRect = _275.iMetadata[(pathIndex * 2u) + 0u];
+    uint pathTileOffset = uint(_275.iMetadata[(pathIndex * 2u) + 1u].x);
     int2 tileSize = int2(16);
     int4 tileLineSegment = int4(floor(lineSegment / float4(tileSize.xyxy)));
     int2 fromTileCoords = tileLineSegment.xy;
@@ -137,7 +152,7 @@ kernel void main0(device bTiles& v_112 [[buffer(0)]], device bIndirectDrawParams
     int lastStepDirection = 0;
     uint iteration = 0u;
     int nextStepDirection;
-    float _392;
+    float _409;
     float4 auxiliarySegment;
     while (iteration < 1024u)
     {
@@ -165,13 +180,13 @@ kernel void main0(device bTiles& v_112 [[buffer(0)]], device bIndirectDrawParams
         }
         if (nextStepDirection == 1)
         {
-            _392 = tMax.x;
+            _409 = tMax.x;
         }
         else
         {
-            _392 = tMax.y;
+            _409 = tMax.y;
         }
-        float nextT = fast::min(_392, 1.0);
+        float nextT = fast::min(_409, 1.0);
         if (all(tileCoords == toTileCoords))
         {
             nextStepDirection = 0;
@@ -182,7 +197,7 @@ kernel void main0(device bTiles& v_112 [[buffer(0)]], device bIndirectDrawParams
         int2 param_1 = tileCoords;
         int4 param_2 = pathTileRect;
         uint param_3 = pathTileOffset;
-        addFill(param, param_1, param_2, param_3, v_112, v_132, v_144);
+        addFill(param, param_1, param_2, param_3, v_112, v_132, uFillInComputeEnabled, v_151, v_161);
         bool haveAuxiliarySegment = false;
         if ((tileStep.y < 0) && (nextStepDirection == 2))
         {
@@ -203,7 +218,7 @@ kernel void main0(device bTiles& v_112 [[buffer(0)]], device bIndirectDrawParams
             int2 param_5 = tileCoords;
             int4 param_6 = pathTileRect;
             uint param_7 = pathTileOffset;
-            addFill(param_4, param_5, param_6, param_7, v_112, v_132, v_144);
+            addFill(param_4, param_5, param_6, param_7, v_112, v_132, uFillInComputeEnabled, v_151, v_161);
         }
         int backdropAdjustment = 0;
         if ((tileStep.x < 0) && (lastStepDirection == 1))

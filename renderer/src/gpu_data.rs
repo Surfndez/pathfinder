@@ -296,8 +296,11 @@ pub struct TextureMetadataEntry {
 #[repr(C)]
 pub struct Fill {
     pub line_segment: LineSegmentU16,
-    // NB: This is overloaded to mean the next fill in the compute phase.
-    pub alpha_tile_index: u32,
+    // The meaning of this field depends on whether fills are being done with the GPU rasterizer or
+    // GPU compute. If raster, this field names the index of the alpha tile that this fill belongs
+    // to. If compute, this field names the index of the next fill in the singly-linked list of
+    // fills belonging to this alpha tile.
+    pub link: u32,
 }
 
 #[derive(Clone, Copy, Debug)]

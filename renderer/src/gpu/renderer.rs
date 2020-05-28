@@ -676,26 +676,48 @@ impl<D> Renderer<D> where D: Device {
         self.ensure_index_buffer(tiles.len());
     }
 
+    fn allocate_fill_tile_map(&mut self, tile_count: u32) -> StorageID {
+        self.back_frame.fill_tile_map_storage_allocator.allocate(&self.device,
+                                                                    tile_count as u64,
+                                                                    |device, size| {
+            let buffer = device.create_buffer(BufferUploadMode::Dynamic);
+            device.allocate_buffer::<i32>(&buffer,
+                                            BufferData::Uninitialized(size as usize),
+                                            BufferTarget::Storage);
+            buffer
+        })
+    }
+
     fn initialize_tiles(&mut self,
                         tile_storage_id: StorageID,
+                        fill_tile_map_storage_id: StorageID,
                         tile_count: u32,
                         tile_path_info: &[TilePathInfo]) {
+        println!("initialize_tiles(path_count={} tile_count={})",
+                 tile_path_info.len(),
+                 tile_count);
+
         // TODO(pcwalton): Buffer reuse
         let tile_path_info_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
         self.device.allocate_buffer(&tile_path_info_buffer,
                                     BufferData::Memory(tile_path_info),
                                     BufferTarget::Storage);
-        //println!("path_count={} tile_path_info={:#?}", tile_path_info.len(), tile_path_info);
 
         let tiles_buffer = &self.back_frame
                                 .tile_vertex_storage_allocator
                                 .get(tile_storage_id)
                                 .vertex_buffer;
 
+        // Allocate fill tile map.
+        let fill_tile_map_buffer = &self.back_frame
+                                        .fill_tile_map_storage_allocator
+                                        .get(fill_tile_map_storage_id);
+
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
         let compute_dimensions = ComputeDimensions { x: (tile_count + 63) / 64, y: 1, z: 1 };
+        println!("... dispatching initialize_tiles()");
         self.device.dispatch_compute(compute_dimensions, &ComputeState {
             program: &self.init_program.program,
             textures: &[],
@@ -708,20 +730,24 @@ impl<D> Renderer<D> where D: Device {
             storage_buffers: &[
                 (&self.init_program.tiles_storage_buffer, tiles_buffer),
                 (&self.init_program.tile_path_info_storage_buffer, &tile_path_info_buffer),
+                (&self.init_program.fill_tile_map_storage_buffer, &fill_tile_map_buffer),
             ],
         });
+        println!("... done dispatching initialize_tiles()");
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
 
+        println!("... about to end commands");
         self.device.end_commands();
         self.device.begin_commands();
+        println!("... beginning commands");
 
         // FIXME(pcwalton): Better synchronization!!!
-        let tiles_buffer = self.device.read_buffer(&tiles_buffer,
+        /*let tiles_buffer = self.device.read_buffer(&tiles_buffer,
                                                    BufferTarget::Storage,
-                                                   0..(4 * tile_count as usize));
-        //println!("tiles buffer: {:#?}", tiles_buffer);
+                                                   0..(4 * tile_count as usize));*/
+        println!("got tiles buffer");
     }
 
     fn upload_propagate_data(&mut self,
@@ -840,8 +866,10 @@ impl<D> Renderer<D> where D: Device {
                                 segments_buffer: D::Buffer,
                                 segment_count: u32,
                                 propagate_metadata_storage_id: StorageID,
-                                tile_storage_id: StorageID)
-                                -> (StorageID, u32) {
+                                tile_storage_id: StorageID,
+                                fill_tile_map_storage_id: StorageID,
+                                tile_count: u32)
+                                -> FillStorageInfo {
         // FIXME(pcwalton): Don't hardcode 3M fills!!
         let fill_storage_id = {
             let fill_program = &self.fill_program;
@@ -876,6 +904,31 @@ impl<D> Renderer<D> where D: Device {
             BufferData::Memory(&[6, 0, 0, 0, 0, segment_count, 0, 0]),
             BufferTarget::Storage);
 
+        let mut storage_buffers = vec![
+            (&self.bin_compute_program.metadata_storage_buffer, propagate_metadata_storage_buffer),
+            (&self.bin_compute_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
+            (&self.bin_compute_program.indirect_draw_params_storage_buffer,
+             &self.back_frame.fill_indirect_draw_params_buffer),
+            (&self.bin_compute_program.tiles_storage_buffer, alpha_tile_buffer),
+            (&self.bin_compute_program.segments_storage_buffer, &segments_buffer),
+        ];
+
+        let fill_tile_map_storage_id = if self.gpu_features()
+                                              .contains(RendererGPUFeatures::FILL_IN_COMPUTE) {
+            let fill_map_buffer =
+                self.back_frame.fill_tile_map_storage_allocator.get(fill_tile_map_storage_id);
+
+            storage_buffers.push((&self.bin_compute_program.fill_tile_map_storage_buffer,
+                                  &fill_map_buffer));
+            Some(fill_tile_map_storage_id)
+        } else {
+            // Need to initialize the buffer with some random old buffer we have lying around on
+            // Metal.
+            storage_buffers.push((&self.bin_compute_program.fill_tile_map_storage_buffer,
+                                  &self.back_frame.z_buffer));
+            None
+        };
+
         //println!("main_viewport={:?}", main_viewport);
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
@@ -890,18 +943,12 @@ impl<D> Renderer<D> where D: Device {
         self.device.dispatch_compute(compute_dimensions, &ComputeState {
             program: &self.bin_compute_program.program,
             textures: &[],
-            uniforms: &[],
-            images: &[],
-            storage_buffers: &[
-                (&self.bin_compute_program.metadata_storage_buffer,
-                 propagate_metadata_storage_buffer),
-                (&self.bin_compute_program.fills_storage_buffer,
-                 &fill_vertex_storage.vertex_buffer),
-                (&self.bin_compute_program.indirect_draw_params_storage_buffer,
-                 &self.back_frame.fill_indirect_draw_params_buffer),
-                (&self.bin_compute_program.tiles_storage_buffer, alpha_tile_buffer),
-                (&self.bin_compute_program.segments_storage_buffer, &segments_buffer),
+            uniforms: &[
+                (&self.bin_compute_program.fill_in_compute_enabled_uniform,
+                 UniformData::Int(fill_tile_map_storage_id.is_some() as i32)),
             ],
+            images: &[],
+            storage_buffers: &storage_buffers,
         });
 
         self.device.end_timer_query(&timer_query);
@@ -933,7 +980,18 @@ impl<D> Renderer<D> where D: Device {
                  duration.as_secs_f64() * 1000.0);
                  */
 
-        (fill_storage_id, indirect_draw_params[1])
+        if self.gpu_features().contains(RendererGPUFeatures::FILL_IN_COMPUTE) {
+            FillStorageInfo::Compute(FillComputeStorageInfo {
+                fill_storage_id,
+                fill_tile_map_storage_id: fill_tile_map_storage_id.unwrap(),
+                // FIXME(pcwalton): Don't process all tiles!
+                first_fill_tile: 0,
+                fill_tile_count: tile_count,
+            })
+        } else {
+            let fill_count = indirect_draw_params[1];
+            FillStorageInfo::Raster(FillRasterStorageInfo { fill_storage_id, fill_count })
+        }
     }
 
     fn add_fills(&mut self, fill_batch: &[Fill]) {
@@ -948,7 +1006,7 @@ impl<D> Renderer<D> where D: Device {
         self.back_frame.pending_fills.reserve(fill_batch.len());
         for fill in fill_batch {
             self.back_frame.max_alpha_tile_index =
-                self.back_frame.max_alpha_tile_index.max(fill.alpha_tile_index + 1);
+                self.back_frame.max_alpha_tile_index.max(fill.link + 1);
             self.back_frame.pending_fills.push(*fill);
         }
 
@@ -970,15 +1028,18 @@ impl<D> Renderer<D> where D: Device {
         match self.fill_program {
             FillProgram::Raster(_) => {
                 let fill_storage_info = self.upload_buffered_fills_for_raster();
-                self.draw_fills_via_raster(fill_storage_info.storage_id,
+                self.draw_fills_via_raster(fill_storage_info.fill_storage_id,
                                            None,
-                                           FillCount::Direct(fill_storage_info.fill_count));
+                                           PrimitiveCount::Direct(fill_storage_info.fill_count));
             }
-            FillProgram::Compute(_) => self.draw_buffered_fills_via_compute(),
+            FillProgram::Compute(_) => {
+                let fill_storage_info = self.upload_buffered_fills_for_compute();
+                self.draw_fills_via_compute(fill_storage_info, None);
+            }
         }
     }
 
-    fn upload_buffered_fills_for_raster(&mut self) -> FillStorageInfo {
+    fn upload_buffered_fills_for_raster(&mut self) -> FillRasterStorageInfo {
         let buffered_fills = &mut self.back_frame.buffered_fills;
         debug_assert!(!buffered_fills.is_empty());
 
@@ -1006,13 +1067,79 @@ impl<D> Renderer<D> where D: Device {
 
         let fill_count = buffered_fills.len() as u32;
         buffered_fills.clear();
-        FillStorageInfo { storage_id, fill_count }
+
+        FillRasterStorageInfo { fill_storage_id: storage_id, fill_count }
+    }
+
+    fn upload_buffered_fills_for_compute(&mut self) -> FillComputeStorageInfo {
+        let buffered_fills = &mut self.back_frame.buffered_fills;
+        debug_assert!(!buffered_fills.is_empty());
+
+        // Allocate buffered fill buffer.
+        let fill_storage_id = {
+            let fill_program = &self.fill_program;
+            let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
+            let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
+            self.back_frame.fill_vertex_storage_allocator.allocate(&self.device,
+                                                                   MAX_FILLS_PER_BATCH as u64,
+                                                                   |device, size| {
+                FillVertexStorage::new(size,
+                                       device,
+                                       fill_program,
+                                       quad_vertex_positions_buffer,
+                                       quad_vertex_indices_buffer)
+            })
+        };
+        let fill_vertex_storage = self.back_frame
+                                      .fill_vertex_storage_allocator
+                                      .get(fill_storage_id);
+
+        // Initialize the tile map.
+        self.fill_tile_map.clear();
+
+        // Create a linked list running through all our fills. This is where we convert the `link`
+        // field from referring to the alpha tile index to referring to the next fill in the list.
+        let (mut first_fill_tile, mut last_fill_tile) = (u32::MAX, 0);
+        for (fill_index, fill) in buffered_fills.iter_mut().enumerate() {
+            let fill_tile_index = fill.link as usize;
+            while fill_tile_index >= self.fill_tile_map.len() {
+                self.fill_tile_map.push(-1);
+            }
+            fill.link = self.fill_tile_map[fill_tile_index] as u32;
+            self.fill_tile_map[fill_tile_index] = fill_index as i32;
+            first_fill_tile = first_fill_tile.min(fill_tile_index as u32);
+            last_fill_tile = last_fill_tile.max(fill_tile_index as u32);
+        }
+        let fill_tile_count = last_fill_tile - first_fill_tile + 1;
+
+        // Allocate fill tile map.
+        let fill_tile_map_storage_id =
+            self.back_frame.fill_tile_map_storage_allocator.allocate(&self.device,
+                                                                     last_fill_tile as u64,
+                                                                     |device, size| {
+                let buffer = device.create_buffer(BufferUploadMode::Dynamic);
+                device.allocate_buffer::<i32>(&buffer,
+                                              BufferData::Uninitialized(size as usize),
+                                              BufferTarget::Storage);
+                buffer
+            });
+        let fill_map_buffer =
+            self.back_frame.fill_tile_map_storage_allocator.get(fill_tile_map_storage_id);
+
+        buffered_fills.clear();
+
+        FillComputeStorageInfo {
+            fill_storage_id,
+            fill_tile_map_storage_id,
+            first_fill_tile,
+            fill_tile_count,
+        }
     }
 
     fn draw_fills_via_raster(&mut self,
                              fill_storage_id: StorageID,
                              tile_storage_id: Option<StorageID>,
-                             fill_count: FillCount) {
+                             fill_count: PrimitiveCount) {
         println!("draw_fills_via_raster()");
         let fill_raster_program = match self.fill_program {
             FillProgram::Raster(ref fill_raster_program) => fill_raster_program,
@@ -1079,10 +1206,10 @@ impl<D> Renderer<D> where D: Device {
         };
 
         match fill_count {
-            FillCount::Direct(fill_count) => {
+            PrimitiveCount::Direct(fill_count) => {
                 self.device.draw_elements_instanced(6, fill_count, &render_state)
             }
-            FillCount::Indirect => {
+            PrimitiveCount::Indirect => {
                 let indirect_buffer = &self.back_frame.fill_indirect_draw_params_buffer;
                 self.device.draw_elements_indirect(indirect_buffer, &render_state)
             }
@@ -1094,75 +1221,32 @@ impl<D> Renderer<D> where D: Device {
         self.back_frame.framebuffer_flags.insert(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY);
     }
 
-    fn draw_buffered_fills_via_compute(&mut self) {
+    fn draw_fills_via_compute(&mut self,
+                              fill_storage_info: FillComputeStorageInfo,
+                              tile_storage_id: Option<StorageID>) {
+        let FillComputeStorageInfo {
+            fill_storage_id,
+            fill_tile_map_storage_id,
+            first_fill_tile,
+            fill_tile_count,
+        } = fill_storage_info;
+
+        println!("draw_fills_via_compute(first_fill_tile={}, fill_tile_count={}, tile_storage_id={:?})",
+                 first_fill_tile,
+                 fill_tile_count,
+                 tile_storage_id);
+
         let fill_compute_program = match self.fill_program {
             FillProgram::Compute(ref fill_compute_program) => fill_compute_program,
             _ => unreachable!(),
         };
 
-        let buffered_fills = &mut self.back_frame.buffered_fills;
-        if buffered_fills.is_empty() {
-            return;
-        }
-
-        // Allocate buffered fill buffer.
-        let fill_vertex_storage_id = {
-            let fill_program = &self.fill_program;
-            let quad_vertex_positions_buffer = &self.quad_vertex_positions_buffer;
-            let quad_vertex_indices_buffer = &self.quad_vertex_indices_buffer;
-            self.back_frame.fill_vertex_storage_allocator.allocate(&self.device,
-                                                                   MAX_FILLS_PER_BATCH as u64,
-                                                                   |device, size| {
-                FillVertexStorage::new(size,
-                                       device,
-                                       fill_program,
-                                       quad_vertex_positions_buffer,
-                                       quad_vertex_indices_buffer)
-            })
-        };
-        let fill_vertex_storage = self.back_frame
+        let fill_vertex_storage = self.back_frame   
                                       .fill_vertex_storage_allocator
-                                      .get(fill_vertex_storage_id);
+                                      .get(fill_storage_id);
 
-        // Initialize the tile map.
-        self.fill_tile_map.clear();
-
-        // Create a linked list running through all our fills.
-        let (mut first_fill_tile, mut last_fill_tile) = (u32::MAX, 0);
-        for (fill_index, fill) in buffered_fills.iter_mut().enumerate() {
-            let fill_tile_index = fill.alpha_tile_index as usize;
-            while fill_tile_index >= self.fill_tile_map.len() {
-                self.fill_tile_map.push(-1);
-            }
-            fill.alpha_tile_index = self.fill_tile_map[fill_tile_index] as u32;
-            self.fill_tile_map[fill_tile_index] = fill_index as i32;
-            first_fill_tile = first_fill_tile.min(fill_tile_index as u32);
-            last_fill_tile = last_fill_tile.max(fill_tile_index as u32);
-        }
-        let fill_tile_count = last_fill_tile - first_fill_tile + 1;
-
-        // Allocate fill tile map.
-        let fill_map_storage_id =
-            self.back_frame.fill_tile_map_storage_allocator.allocate(&self.device,
-                                                                     last_fill_tile as u64,
-                                                                     |device, size| {
-                let buffer = device.create_buffer(BufferUploadMode::Dynamic);
-                device.allocate_buffer::<i32>(&buffer,
-                                              BufferData::Uninitialized(size as usize),
-                                              BufferTarget::Storage);
-                buffer
-            });
         let fill_map_buffer =
-            self.back_frame.fill_tile_map_storage_allocator.get(fill_map_storage_id);
-
-        self.device.upload_to_buffer(&fill_vertex_storage.vertex_buffer,
-                                     0,
-                                     &buffered_fills,
-                                     BufferTarget::Storage);
-        self.device.upload_to_buffer(fill_map_buffer,
-                                     0,
-                                     &self.fill_tile_map,
-                                     BufferTarget::Storage);
+            self.back_frame.fill_tile_map_storage_allocator.get(fill_tile_map_storage_id);
 
         let mask_framebuffer = self.back_frame
                                    .mask_framebuffer
@@ -1173,8 +1257,28 @@ impl<D> Renderer<D> where D: Device {
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
-        debug_assert!(buffered_fills.len() <= u32::MAX as usize);
-        let dimensions = ComputeDimensions { x: 1, y: 1, z: fill_tile_count as u32 };
+        let mut storage_buffers = vec![
+            (&fill_compute_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
+            (&fill_compute_program.fill_tile_map_storage_buffer, fill_map_buffer),
+        ];
+
+        match tile_storage_id {
+            Some(tile_storage_id) => {
+                let tiles_buffer = &self.back_frame
+                                        .tile_vertex_storage_allocator
+                                        .get(tile_storage_id)
+                                        .vertex_buffer;
+                storage_buffers.push((&fill_compute_program.tiles_storage_buffer, &tiles_buffer));
+            }
+            None => {
+                // Work around a Metal bug by assigning any old shader to this buffer slot.
+                storage_buffers.push((&fill_compute_program.tiles_storage_buffer,
+                                      &self.back_frame.z_buffer));
+            }
+        }
+
+        // TODO(pcwalton): Indirect compute dispatch!
+        let dimensions = ComputeDimensions { x: 1, y: 1, z: fill_tile_count };
         self.device.dispatch_compute(dimensions, &ComputeState {
             program: &fill_compute_program.program,
             textures: &[(&fill_compute_program.area_lut_texture, &self.area_lut_texture)],
@@ -1182,18 +1286,16 @@ impl<D> Renderer<D> where D: Device {
             uniforms: &[
                 (&fill_compute_program.first_tile_index_uniform,
                  UniformData::Int(first_fill_tile as i32)),
+                (&fill_compute_program.binned_on_gpu_uniform,
+                 UniformData::Int(tile_storage_id.is_some() as i32)),
             ],
-            storage_buffers: &[
-                (&fill_compute_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
-                (&fill_compute_program.fill_tile_map_storage_buffer, fill_map_buffer),
-            ],
+            storage_buffers: &storage_buffers,
         });
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
 
         self.back_frame.framebuffer_flags.insert(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY);
-        buffered_fills.clear();
     }
 
     fn clip_tiles(&mut self, clip_storage_id: StorageID, max_clipped_tile_count: u32) {
@@ -1267,9 +1369,11 @@ impl<D> Renderer<D> where D: Device {
 
     // Computes backdrops, performs clipping, and populates Z buffers.
     fn prepare_tiles(&mut self, batch: &PrepareTilesBatch) {
+        println!("prepare_tiles()");
         // Upload tiles to GPU or initialize them as appropriate.
         self.stats.alpha_tile_count += batch.tile_count as usize;
         let tile_vertex_storage_id = self.allocate_tiles(batch.tile_count);
+        let fill_tile_map_storage_id = self.allocate_fill_tile_map(batch.tile_count);
         match batch.modal {
             PrepareTilesModalInfo::CPU(ref cpu_info) => {
                 self.upload_tiles(tile_vertex_storage_id, &cpu_info.tiles);
@@ -1278,9 +1382,11 @@ impl<D> Renderer<D> where D: Device {
                 match gpu_info.modal {
                     PrepareTilesGPUModalInfo::CPUBinning { ref tiles, .. } => {
                         self.upload_tiles(tile_vertex_storage_id, tiles);
+                        // FIXME(pcwalton): Initialize fill vertex tile map!
                     }
                     PrepareTilesGPUModalInfo::GPUBinning { ref tile_path_info, .. } => {
                         self.initialize_tiles(tile_vertex_storage_id,
+                                              fill_tile_map_storage_id,
                                               batch.tile_count,
                                               tile_path_info)
                     }
@@ -1314,17 +1420,27 @@ impl<D> Renderer<D> where D: Device {
                 // Bin and render fills if requested.
                 if let PrepareTilesGPUModalInfo::GPUBinning { transform, .. } = gpu_info.modal {
                     let (segments_buffer, segment_count) = self.dice_segments(transform);
-                    let (fill_storage_id, instance_count) =
+                    let fill_storage_info =
                         self.bin_segments_via_compute(segments_buffer,
                                                       segment_count,
                                                       propagate_metadata_storage_id,
-                                                      tile_vertex_storage_id);
+                                                      tile_vertex_storage_id,
+                                                      fill_tile_map_storage_id,
+                                                      batch.tile_count);
                     // FIXME(pcwalton): Don't unconditionally pass true for copying here.
                     self.reallocate_alpha_tile_pages_if_necessary(true);
-                    // TODO(pcwalton): Fills via compute.
-                    self.draw_fills_via_raster(fill_storage_id,
-                                               Some(tile_vertex_storage_id),
-                                               FillCount::Direct(instance_count));
+                    match fill_storage_info {
+                        FillStorageInfo::Raster(fill_storage_info) => {
+                            self.draw_fills_via_raster(
+                                fill_storage_info.fill_storage_id,
+                                Some(tile_vertex_storage_id),
+                                PrimitiveCount::Direct(fill_storage_info.fill_count));
+                        }
+                        FillStorageInfo::Compute(fill_storage_info) => {
+                            self.draw_fills_via_compute(fill_storage_info,
+                                                        Some(tile_vertex_storage_id));
+                        }
+                    }
                 }
 
                 self.propagate_tiles(gpu_info.propagate_metadata.len() as u32,
@@ -2783,14 +2899,28 @@ struct ClipStorageIDs {
     vertices: StorageID,
 }
 
-#[derive(Clone, Copy)]
-struct FillStorageInfo {
-    storage_id: StorageID,
+#[derive(Clone)]
+struct FillRasterStorageInfo {
+    fill_storage_id: StorageID,
     fill_count: u32,
 }
 
+#[derive(Clone)]
+struct FillComputeStorageInfo {
+    fill_storage_id: StorageID,
+    fill_tile_map_storage_id: StorageID,
+    fill_tile_count: u32,
+    first_fill_tile: u32,
+}
+
+#[derive(Clone)]
+enum FillStorageInfo {
+    Raster(FillRasterStorageInfo),
+    Compute(FillComputeStorageInfo),
+}
+
 #[derive(Clone, Copy)]
-enum FillCount {
+enum PrimitiveCount {
     Direct(u32),
     Indirect,
 }

@@ -14,9 +14,14 @@ struct bTiles
     uint4 iTiles[1];
 };
 
+struct bFillTileMap
+{
+    int iFillTileMap[1];
+};
+
 constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(64u, 1u, 1u);
 
-kernel void main0(constant int& uTileCount [[buffer(0)]], constant int& uPathCount [[buffer(1)]], const device bTilePathInfo& _55 [[buffer(2)]], device bTiles& _138 [[buffer(3)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
+kernel void main0(constant int& uTileCount [[buffer(0)]], constant int& uPathCount [[buffer(1)]], const device bTilePathInfo& _64 [[buffer(2)]], device bTiles& _148 [[buffer(3)]], device bFillTileMap& _170 [[buffer(4)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
 {
     uint tileIndex = gl_GlobalInvocationID.x;
     if (tileIndex >= uint(uTileCount))
@@ -25,30 +30,51 @@ kernel void main0(constant int& uTileCount [[buffer(0)]], constant int& uPathCou
     }
     uint lowPathIndex = 0u;
     uint highPathIndex = uint(uPathCount);
-    while ((lowPathIndex + 1u) < highPathIndex)
+    int iteration = 0;
+    for (;;)
     {
-        uint midPathIndex = lowPathIndex + ((highPathIndex - lowPathIndex) / 2u);
-        uint midTileIndex = _55.iTilePathInfo[midPathIndex].z;
-        if (tileIndex < midTileIndex)
+        bool _42 = iteration < 1024;
+        bool _50;
+        if (_42)
         {
-            highPathIndex = midPathIndex;
+            _50 = (lowPathIndex + 1u) < highPathIndex;
         }
         else
         {
-            lowPathIndex = midPathIndex;
-            if (tileIndex == midTileIndex)
+            _50 = _42;
+        }
+        if (_50)
+        {
+            uint midPathIndex = lowPathIndex + ((highPathIndex - lowPathIndex) / 2u);
+            uint midTileIndex = _64.iTilePathInfo[midPathIndex].z;
+            if (tileIndex < midTileIndex)
             {
-                break;
+                highPathIndex = midPathIndex;
             }
+            else
+            {
+                lowPathIndex = midPathIndex;
+                if (tileIndex == midTileIndex)
+                {
+                    break;
+                }
+            }
+            iteration++;
+            continue;
+        }
+        else
+        {
+            break;
         }
     }
     uint pathIndex = lowPathIndex;
-    uint4 pathInfo = _55.iTilePathInfo[pathIndex];
+    uint4 pathInfo = _64.iTilePathInfo[pathIndex];
     int2 packedTileRect = int2(pathInfo.xy);
     int4 tileRect = int4((packedTileRect.x << 16) >> 16, packedTileRect.x >> 16, (packedTileRect.y << 16) >> 16, packedTileRect.y >> 16);
     uint tileOffset = tileIndex - pathInfo.z;
     uint tileWidth = uint(tileRect.z - tileRect.x);
     int2 tileCoords = tileRect.xy + int2(int(tileOffset % tileWidth), int(tileOffset / tileWidth));
-    _138.iTiles[tileIndex] = uint4((uint(tileCoords.x) & 65535u) | (uint(tileCoords.y) << uint(16)), 4294967295u, pathIndex, pathInfo.w);
+    _148.iTiles[tileIndex] = uint4((uint(tileCoords.x) & 65535u) | (uint(tileCoords.y) << uint(16)), 4294967295u, pathIndex, pathInfo.w);
+    _170.iFillTileMap[tileIndex] = -1;
 }
 
