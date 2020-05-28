@@ -13,7 +13,7 @@
 use crate::concurrent::executor::Executor;
 use crate::gpu::options::{RendererGPUFeatures, RendererOptions};
 use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
-use crate::gpu_data::{AlphaTileId, BinSegment, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, ClippedPathInfo, DrawTileBatch, Fill};
+use crate::gpu_data::{AlphaTileId, BackdropInfo, BinSegment, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, ClippedPathInfo, DrawTileBatch, Fill};
 use crate::gpu_data::{PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand, SegmentIndices, Segments, TILE_CTRL_MASK_0_SHIFT};
 use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatchId};
 use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive, TilePathInfo};
@@ -1020,19 +1020,25 @@ impl PrepareTilesBatch {
                 gpu_info.propagate_metadata.push(PropagateMetadata {
                     tile_rect: path.tile_bounds,
                     tile_offset: self.tile_count,
-                    backdrops_offset: gpu_info.backdrops.len() as u32,
+                    pad: 0,
                     z_write: z_write as u32,
                     clip_path: clip_path_id.unwrap_or(PathIndex(!0)),
                 });
 
                 match path.data {
                     BuiltPathData::CPU(ref data) => {
-                        gpu_info.backdrops.extend_from_slice(&data.backdrops);
+                        gpu_info.backdrops.reserve(data.backdrops.len());
+                        for (tile_x_offset, backdrop) in data.backdrops.iter().enumerate() {
+                            gpu_info.backdrops.push(BackdropInfo {
+                                initial_backdrop: *backdrop as i16,
+                                tile_x_offset: tile_x_offset as i16,
+                                path_index,
+                            });
+                        }
                     }
-                    BuiltPathData::TransformCPUBinGPU(ref data) => {
-                        gpu_info.add_segments(path, path_index, &data.outline);
+                    BuiltPathData::TransformCPUBinGPU(_) | BuiltPathData::GPU => {
+                        init_backdrops(&mut gpu_info.backdrops, path_index, path.tile_bounds);
                     }
-                    BuiltPathData::GPU => gpu_info.add_segments(path, path_index, path_outline),
                 }
 
                 // Add tiles.
@@ -1099,11 +1105,9 @@ impl PrepareTilesBatch {
     }
 }
 
-impl PrepareTilesGPUInfo {
-    fn add_segments(&mut self, path: &BuiltPath, path_index: PathIndex, outline: &Outline) {
-        for _ in 0..path.tile_bounds.width() {
-            self.backdrops.push(0);
-        }
+fn init_backdrops(backdrops: &mut Vec<BackdropInfo>, path_index: PathIndex, tile_rect: RectI) {
+    for tile_x_offset in 0..(tile_rect.width() as i16) {
+        backdrops.push(BackdropInfo { initial_backdrop: 0, path_index, tile_x_offset });
     }
 }
 

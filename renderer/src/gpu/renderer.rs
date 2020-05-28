@@ -13,10 +13,10 @@ use crate::gpu::options::{DestFramebuffer, RendererGPUFeatures, RendererOptions}
 use crate::gpu::shaders::{BinComputeProgram, BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
 use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram, ClipTileCopyVertexArray};
 use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, DiceComputeProgram, FillProgram, FillVertexArray};
-use crate::gpu::shaders::{InitProgram, MAX_FILLS_PER_BATCH, PropagateProgram, ReprojectionProgram};
+use crate::gpu::shaders::{InitProgram, MAX_FILLS_PER_BATCH, PROPAGATE_WORKGROUP_SIZE, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
-use crate::gpu_data::{BinSegment, Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
+use crate::gpu_data::{BackdropInfo, BinSegment, Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
 use crate::gpu_data::{SegmentIndices, Segments, TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive, TilePathInfo};
 use crate::options::BoundingQuad;
@@ -726,7 +726,7 @@ impl<D> Renderer<D> where D: Device {
 
     fn upload_propagate_data(&mut self,
                              propagate_metadata: &[PropagateMetadata],
-                             backdrops: &[i32])
+                             backdrops: &[BackdropInfo])
                              -> StorageID {
         //println!("propagate metadata: {:#?}", propagate_metadata);
 
@@ -1328,6 +1328,7 @@ impl<D> Renderer<D> where D: Device {
                 }
 
                 self.propagate_tiles(gpu_info.propagate_metadata.len() as u32,
+                                     gpu_info.backdrops.len() as u32,
                                      tile_vertex_storage_id,
                                      propagate_metadata_storage_id,
                                      clip_storage_ids.as_ref());
@@ -1369,6 +1370,7 @@ impl<D> Renderer<D> where D: Device {
 
     fn propagate_tiles(&mut self,
                        path_count: u32,
+                       column_count: u32,
                        tile_storage_id: StorageID,
                        propagate_metadata_storage_id: StorageID,
                        clip_storage_ids: Option<&ClipStorageIDs>) {
@@ -1416,7 +1418,11 @@ impl<D> Renderer<D> where D: Device {
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
-        let dimensions = ComputeDimensions { x: 1, y: path_count, z: 1 };
+        let dimensions = ComputeDimensions {
+            x: (column_count + PROPAGATE_WORKGROUP_SIZE - 1) / PROPAGATE_WORKGROUP_SIZE,
+            y: 1,
+            z: 1,
+        };
         self.device.dispatch_compute(dimensions, &ComputeState {
             program: &propagate_program.program,
             textures: &[],
@@ -1424,6 +1430,7 @@ impl<D> Renderer<D> where D: Device {
             uniforms: &[
                 (&propagate_program.framebuffer_tile_size_uniform,
                  UniformData::IVec2(self.framebuffer_tile_size().0)),
+                (&propagate_program.column_count_uniform, UniformData::Int(column_count as i32)),
             ],
             storage_buffers: &storage_buffers,
         });

@@ -20,21 +20,33 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
-// TODO(pcwalton): Improve occupancy!
 layout(local_size_x = 256) in;
 
 uniform ivec2 uFramebufferTileSize;
+uniform int uColumnCount;
 
 layout(std430, binding = 0) buffer bDrawMetadata {
+    // [0]: tile rect
+    // [1].x: tile offset
+    // [1].y: unused
+    // [1].z: Z write enabled?
+    // [1].w: clip path ID, or ~0
     restrict readonly uvec4 iDrawMetadata[];
 };
 
 layout(std430, binding = 1) buffer bClipMetadata {
+    // [0]: tile rect
+    // [1].x: tile offset
+    // [1].y: unused
+    // [1].z: unused
+    // [1].w: unused
     restrict readonly uvec4 iClipMetadata[];
 };
 
 layout(std430, binding = 2) buffer bBackdrops {
-    restrict readonly int iBackdrops[];
+    // x: backdrop in low 16 bits, tile X offset in high 16 bits
+    // y: path ID
+    restrict readonly ivec2 iBackdrops[];
 };
 
 layout(std430, binding = 3) buffer bDrawTiles {
@@ -58,13 +70,19 @@ uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord) {
 }
 
 void main() {
-    uint drawPathIndex = gl_WorkGroupID.y;
-    uint tileX = uint(gl_LocalInvocationID.x);
+    uint columnIndex = gl_GlobalInvocationID.x;
+    if (int(columnIndex) >= uColumnCount)
+        return;
+
+    ivec2 backdropData = iBackdrops[columnIndex];
+    int currentBackdrop = (backdropData.x << 16) >> 16;
+    int tileX = backdropData.x >> 16;
+    uint drawPathIndex = uint(backdropData.y);
 
     uvec4 drawTileRect = iDrawMetadata[drawPathIndex * 2 + 0];
     uvec4 drawOffsets = iDrawMetadata[drawPathIndex * 2 + 1];
     uvec2 drawTileSize = drawTileRect.zw - drawTileRect.xy;
-    uint drawTileBufferOffset = drawOffsets.x, drawBackdropOffset = drawOffsets.y;
+    uint drawTileBufferOffset = drawOffsets.x;
     bool zWrite = drawOffsets.z != 0;
 
     if (tileX >= drawTileSize.x)
@@ -78,7 +96,6 @@ void main() {
     }
     uint clipTileBufferOffset = clipOffsets.x, clipBackdropOffset = clipOffsets.y;
 
-    int currentBackdrop = iBackdrops[drawBackdropOffset + tileX];
     for (uint tileY = 0; tileY < drawTileSize.y; tileY++) {
         uvec2 drawTileCoord = uvec2(tileX, tileY);
         uint drawTileIndex = calculateTileIndex(drawTileBufferOffset, drawTileRect, drawTileCoord);

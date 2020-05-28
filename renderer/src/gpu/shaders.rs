@@ -23,6 +23,8 @@ const CLIP_TILE_INSTANCE_SIZE: usize = 16;
 pub const MAX_FILLS_PER_BATCH: usize = 0x10000;
 pub const MAX_TILES_PER_BATCH: usize = MASK_TILES_ACROSS as usize * MASK_TILES_DOWN as usize;
 
+pub const PROPAGATE_WORKGROUP_SIZE: u32 = 256;
+
 pub struct BlitVertexArray<D> where D: Device {
     pub vertex_array: D::VertexArray,
 }
@@ -704,6 +706,7 @@ impl<D> TilePostPrograms<D> where D: Device {
 pub struct PropagateProgram<D> where D: Device {
     pub program: D::Program,
     pub framebuffer_tile_size_uniform: D::Uniform,
+    pub column_count_uniform: D::Uniform,
     pub draw_metadata_storage_buffer: D::StorageBuffer,
     pub clip_metadata_storage_buffer: D::StorageBuffer,
     pub backdrops_storage_buffer: D::StorageBuffer,
@@ -716,10 +719,11 @@ pub struct PropagateProgram<D> where D: Device {
 impl<D> PropagateProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> PropagateProgram<D> {
         let mut program = device.create_compute_program(resources, "propagate");
-        let local_size = ComputeDimensions { x: 256, y: 1, z: 1 };
+        let local_size = ComputeDimensions { x: PROPAGATE_WORKGROUP_SIZE, y: 1, z: 1 };
         device.set_compute_program_local_size(&mut program, local_size);
 
         let framebuffer_tile_size_uniform = device.get_uniform(&program, "FramebufferTileSize");
+        let column_count_uniform = device.get_uniform(&program, "ColumnCount");
         let draw_metadata_storage_buffer = device.get_storage_buffer(&program, "DrawMetadata", 0);
         let clip_metadata_storage_buffer = device.get_storage_buffer(&program, "ClipMetadata", 1);
         let backdrops_storage_buffer = device.get_storage_buffer(&program, "Backdrops", 2);
@@ -731,6 +735,7 @@ impl<D> PropagateProgram<D> where D: Device {
         PropagateProgram {
             program,
             framebuffer_tile_size_uniform,
+            column_count_uniform,
             draw_metadata_storage_buffer,
             clip_metadata_storage_buffer,
             backdrops_storage_buffer,

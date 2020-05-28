@@ -153,11 +153,11 @@ pub struct PrepareTilesCPUInfo {
 #[derive(Clone, Debug)]
 pub struct PrepareTilesGPUInfo {
     /// Initial backdrop values for each tile column, packed together.
-    pub backdrops: Vec<i32>,
+    pub backdrops: Vec<BackdropInfo>,
 
     /// Mapping from path ID to metadata needed to compute propagation on GPU.
     /// 
-    /// This contains indices into the `tiles` and `backdrops` vectors.
+    /// This contains indices into the `tiles` vector.
     pub propagate_metadata: Vec<PropagateMetadata>,
 
     /// Info specific to the binning mode in use (CPU or GPU).
@@ -280,7 +280,7 @@ pub struct TilePathInfo {
 pub struct PropagateMetadata {
     pub tile_rect: RectI,
     pub tile_offset: u32,
-    pub backdrops_offset: u32,
+    pub pad: u32,
     pub z_write: u32,
     pub clip_path: PathIndex,
 }
@@ -354,6 +354,15 @@ pub struct BinSegment {
     pub pad0: u32,
     pub pad1: u32,
     pub pad2: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct BackdropInfo {
+    pub initial_backdrop: i16,
+    // Column number, where 0 is the leftmost column in the tile rect.
+    pub tile_x_offset: i16,
+    pub path_index: PathIndex,
 }
 
 /*

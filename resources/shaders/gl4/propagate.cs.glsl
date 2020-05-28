@@ -22,21 +22,33 @@ precision highp float;
 
 
 
-
 layout(local_size_x = 256)in;
 
 uniform ivec2 uFramebufferTileSize;
+uniform int uColumnCount;
 
 layout(std430, binding = 0)buffer bDrawMetadata {
+
+
+
+
+
     restrict readonly uvec4 iDrawMetadata[];
 };
 
 layout(std430, binding = 1)buffer bClipMetadata {
+
+
+
+
+
     restrict readonly uvec4 iClipMetadata[];
 };
 
 layout(std430, binding = 2)buffer bBackdrops {
-    restrict readonly int iBackdrops[];
+
+
+    restrict readonly ivec2 iBackdrops[];
 };
 
 layout(std430, binding = 3)buffer bDrawTiles {
@@ -60,13 +72,19 @@ uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord){
 }
 
 void main(){
-    uint drawPathIndex = gl_WorkGroupID . y;
-    uint tileX = uint(gl_LocalInvocationID . x);
+    uint columnIndex = gl_GlobalInvocationID . x;
+    if(int(columnIndex)>= uColumnCount)
+        return;
+
+    ivec2 backdropData = iBackdrops[columnIndex];
+    int currentBackdrop =(backdropData . x << 16)>> 16;
+    int tileX = backdropData . x >> 16;
+    uint drawPathIndex = uint(backdropData . y);
 
     uvec4 drawTileRect = iDrawMetadata[drawPathIndex * 2 + 0];
     uvec4 drawOffsets = iDrawMetadata[drawPathIndex * 2 + 1];
     uvec2 drawTileSize = drawTileRect . zw - drawTileRect . xy;
-    uint drawTileBufferOffset = drawOffsets . x, drawBackdropOffset = drawOffsets . y;
+    uint drawTileBufferOffset = drawOffsets . x;
     bool zWrite = drawOffsets . z != 0;
 
     if(tileX >= drawTileSize . x)
@@ -80,7 +98,6 @@ void main(){
     }
     uint clipTileBufferOffset = clipOffsets . x, clipBackdropOffset = clipOffsets . y;
 
-    int currentBackdrop = iBackdrops[drawBackdropOffset + tileX];
     for(uint tileY = 0;tileY < drawTileSize . y;tileY ++){
         uvec2 drawTileCoord = uvec2(tileX, tileY);
         uint drawTileIndex = calculateTileIndex(drawTileBufferOffset, drawTileRect, drawTileCoord);
