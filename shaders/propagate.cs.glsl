@@ -20,7 +20,7 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
-layout(local_size_x = 256) in;
+layout(local_size_x = 64) in;
 
 uniform ivec2 uFramebufferTileSize;
 uniform int uColumnCount;
@@ -84,9 +84,6 @@ void main() {
     uvec2 drawTileSize = drawTileRect.zw - drawTileRect.xy;
     uint drawTileBufferOffset = drawOffsets.x;
     bool zWrite = drawOffsets.z != 0;
-
-    if (tileX >= drawTileSize.x)
-        return;
 
     int clipPathIndex = int(drawOffsets.w);
     uvec4 clipTileRect = uvec4(0u), clipOffsets = uvec4(0u);
