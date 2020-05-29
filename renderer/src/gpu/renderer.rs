@@ -16,7 +16,7 @@ use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, DiceComputeProgr
 use crate::gpu::shaders::{InitProgram, MAX_FILLS_PER_BATCH, PROPAGATE_WORKGROUP_SIZE, PropagateProgram, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
-use crate::gpu_data::{BackdropInfo, BinSegment, Clip, ClipBatchKey, ClipBatchKind, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
+use crate::gpu_data::{BackdropInfo, BinSegment, Clip, ClipBatchKey, ClipBatchKind, DiceMetadata, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
 use crate::gpu_data::{SegmentIndices, Segments, TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
 use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive, TilePathInfo};
 use crate::options::BoundingQuad;
@@ -806,12 +806,15 @@ impl<D> Renderer<D> where D: Device {
         self.back_frame.quads_vertex_indices_length = length;
     }
 
-    fn dice_segments(&mut self, transform: Transform2F) -> (D::Buffer, u32) {
-        println!("dice_segments(): transform={:?}", transform);
-
+    fn dice_segments(&mut self,
+                     dice_metadata: &[DiceMetadata],
+                     batch_segment_count: u32,
+                     transform: Transform2F)
+                     -> (D::Buffer, u32) {
         // FIXME(pcwalton): Buffer reuse
         let indirect_compute_params_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
         let output_segments_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        let dice_metadata_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
         let index_count = self.point_index_count;
         self.device.allocate_buffer(&indirect_compute_params_buffer,
                                     BufferData::Memory(&[0, 0, 0, 0, index_count, 0, 0, 0]),
@@ -820,11 +823,19 @@ impl<D> Renderer<D> where D: Device {
         self.device.allocate_buffer::<[u32; 8]>(&output_segments_buffer,
                                                 BufferData::Uninitialized(3 * 1024 * 1024),
                                                 BufferTarget::Storage);
+        self.device.allocate_buffer(&dice_metadata_buffer,
+                                    BufferData::Memory(dice_metadata),
+                                    BufferTarget::Storage);
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
 
-        let compute_dimensions = ComputeDimensions { x: (index_count + 63) / 64, y: 1, z: 1 };
+        let compute_dimensions = ComputeDimensions {
+            x: (batch_segment_count + 63) / 64,
+            y: 1,
+            z: 1,
+        };
+
         self.device.dispatch_compute(compute_dimensions, &ComputeState {
             program: &self.dice_compute_program.program,
             textures: &[],
@@ -833,6 +844,11 @@ impl<D> Renderer<D> where D: Device {
                  UniformData::Mat2(transform.matrix.0)),
                 (&self.dice_compute_program.translation_uniform,
                  UniformData::Vec2(transform.vector.0)),
+                 // FIXME(pcwalton): This is wrong!
+                (&self.dice_compute_program.path_count_uniform,
+                 UniformData::Int(dice_metadata.len() as i32)),
+                (&self.dice_compute_program.last_batch_segment_index_uniform,
+                 UniformData::Int(batch_segment_count as i32)),
             ],
             images: &[],
             storage_buffers: &[
@@ -843,6 +859,7 @@ impl<D> Renderer<D> where D: Device {
                  &self.point_indices_buffer),
                 (&self.dice_compute_program.output_segments_storage_buffer,
                  &output_segments_buffer),
+                (&self.dice_compute_program.dice_metadata_storage_buffer, &dice_metadata_buffer),
             ],
         });
 
@@ -911,6 +928,8 @@ impl<D> Renderer<D> where D: Device {
              &self.back_frame.fill_indirect_draw_params_buffer),
             (&self.bin_compute_program.tiles_storage_buffer, alpha_tile_buffer),
             (&self.bin_compute_program.segments_storage_buffer, &segments_buffer),
+            (&self.bin_compute_program.backdrops_storage_buffer,
+             &self.back_frame.backdrops_buffer),
         ];
 
         let fill_tile_map_storage_id = if self.gpu_features()
@@ -1369,7 +1388,7 @@ impl<D> Renderer<D> where D: Device {
 
     // Computes backdrops, performs clipping, and populates Z buffers.
     fn prepare_tiles(&mut self, batch: &PrepareTilesBatch) {
-        println!("prepare_tiles()");
+        println!("prepare_tiles(segment count={})", batch.segment_count);
         // Upload tiles to GPU or initialize them as appropriate.
         self.stats.alpha_tile_count += batch.tile_count as usize;
         let tile_vertex_storage_id = self.allocate_tiles(batch.tile_count);
@@ -1418,8 +1437,13 @@ impl<D> Renderer<D> where D: Device {
                     self.upload_propagate_data(&gpu_info.propagate_metadata, &gpu_info.backdrops);
 
                 // Bin and render fills if requested.
-                if let PrepareTilesGPUModalInfo::GPUBinning { transform, .. } = gpu_info.modal {
-                    let (segments_buffer, segment_count) = self.dice_segments(transform);
+                if let PrepareTilesGPUModalInfo::GPUBinning {
+                    ref dice_metadata,
+                    transform,
+                    ..
+                } = gpu_info.modal {
+                    let (segments_buffer, segment_count) =
+                        self.dice_segments(dice_metadata, batch.segment_count, transform);
                     let fill_storage_info =
                         self.bin_segments_via_compute(segments_buffer,
                                                       segment_count,

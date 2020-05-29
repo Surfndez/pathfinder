@@ -116,16 +116,14 @@ pub struct PrepareTilesBatch {
     /// 
     /// The renderer should not assume that these values are consecutive.
     pub batch_id: TileBatchId,
-
     /// The number of paths in this batch.
     pub path_count: u32,
-
     /// The number of tiles in this batch.
     pub tile_count: u32,
-
+    /// The total number of segments in this batch.
+    pub segment_count: u32,
     /// Information about a batch of tiles specific to the rendering mode (CPU or GPU).
     pub modal: PrepareTilesModalInfo,
-
     /// Information about clips applied to paths, if any of the paths have clips.
     pub clipped_path_info: Option<ClippedPathInfo>,
 }
@@ -155,7 +153,7 @@ pub struct PrepareTilesGPUInfo {
     /// Initial backdrop values for each tile column, packed together.
     pub backdrops: Vec<BackdropInfo>,
 
-    /// Mapping from path ID to metadata needed to compute propagation on GPU.
+    /// Mapping from path index to metadata needed to compute propagation on GPU.
     /// 
     /// This contains indices into the `tiles` vector.
     pub propagate_metadata: Vec<PropagateMetadata>,
@@ -173,6 +171,7 @@ pub enum PrepareTilesGPUModalInfo {
         tiles: Vec<TileObjectPrimitive>,
     },
     GPUBinning {
+        dice_metadata: Vec<DiceMetadata>,
         /// Sparse information about all the allocated tiles.
         tile_path_info: Vec<TilePathInfo>,
         /// A transform to apply to the segments.
@@ -190,7 +189,7 @@ pub struct Segments {
 #[repr(C)]
 pub struct SegmentIndices {
     pub first_point_index: u32,
-    pub flags_path_index: u32,
+    pub flags: u32,
 }
 
 /// Information about clips applied to paths in a batch.
@@ -275,14 +274,28 @@ pub struct TilePathInfo {
     pub backdrop: i8,
 }
 
+// TODO(pcwalton): Pack better!
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct PropagateMetadata {
     pub tile_rect: RectI,
     pub tile_offset: u32,
-    pub pad: u32,
+    pub path_id: PathIndex,
     pub z_write: u32,
     pub clip_path: PathIndex,
+    pub backdrop_offset: u32,
+    pub pad0: u32,
+    pub pad1: u32,
+    pub pad2: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct DiceMetadata {
+    pub global_path_id: PathIndex,
+    pub first_global_segment_index: u32,
+    pub first_batch_segment_index: u32,
+    pub pad: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -362,9 +375,9 @@ pub struct BinSegment {
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct BackdropInfo {
-    pub initial_backdrop: i16,
+    pub initial_backdrop: i32,
     // Column number, where 0 is the leftmost column in the tile rect.
-    pub tile_x_offset: i16,
+    pub tile_x_offset: i32,
     pub path_index: PathIndex,
 }
 

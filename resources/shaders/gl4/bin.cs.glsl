@@ -40,6 +40,12 @@ layout(std430, binding = 0)buffer bSegments {
 };
 
 layout(std430, binding = 1)buffer bMetadata {
+
+
+
+
+
+
     restrict readonly ivec4 iMetadata[];
 };
 
@@ -65,25 +71,42 @@ layout(std430, binding = 5)buffer bFillTileMap {
     restrict uint iFillTileMap[];
 };
 
+layout(std430, binding = 6)buffer bBackdrops {
+
+
+
+    restrict uint iBackdrops[];
+};
+
+uint computeTileIndexNoCheck(ivec2 tileCoords, ivec4 pathTileRect, uint pathTileOffset){
+    ivec2 offsetCoords = tileCoords - pathTileRect . xy;
+    return pathTileOffset + offsetCoords . x + offsetCoords . y *(pathTileRect . z - pathTileRect . x);
+}
+
+bvec4 computeTileOutcodes(ivec2 tileCoords, ivec4 pathTileRect){
+    return bvec4(lessThan(tileCoords, pathTileRect . xy),
+                 greaterThanEqual(tileCoords, pathTileRect . zw));
+}
+
 bool computeTileIndex(ivec2 tileCoords,
                       ivec4 pathTileRect,
                       uint pathTileOffset,
                       out uint outTileIndex){
-    ivec2 offsetCoords = tileCoords - pathTileRect . xy;
-    outTileIndex = pathTileOffset + offsetCoords . x +
-        offsetCoords . y *(pathTileRect . z - pathTileRect . x);
-    return all(bvec4(greaterThanEqual(tileCoords, pathTileRect . xy),
-                     lessThan(tileCoords, pathTileRect . zw)));
+    outTileIndex = computeTileIndexNoCheck(tileCoords, pathTileRect, pathTileOffset);
+    return ! any(computeTileOutcodes(tileCoords, pathTileRect));
 }
 
 void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTileOffset){
 
     uint tileIndex;
-    if(! computeTileIndex(tileCoords, pathTileRect, pathTileOffset, tileIndex))
+    if(! computeTileIndex(tileCoords, pathTileRect, pathTileOffset, tileIndex)){
         return;
+    }
 
 
     uvec4 scaledLocalLine = uvec4((lineSegment - vec4(tileCoords . xyxy * ivec4(16)))* vec4(256.0));
+    if(scaledLocalLine . x == scaledLocalLine . z)
+        return;
 
 
     if(atomicCompSwap(iTiles[tileIndex * 4 + 1], uint(- 1), 0u)== uint(- 1))
@@ -109,21 +132,20 @@ void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTi
     iFills[fillIndex * 3 + 2]= fillLink;
 }
 
-void adjustBackdrop(int backdropDelta, ivec2 tileCoords, ivec4 pathTileRect, uint pathTileOffset){
-    uint tileIndex;
-    if(computeTileIndex(tileCoords, pathTileRect, pathTileOffset, tileIndex)){
-
-
-        uint lastValue = iTiles[tileIndex * 4 + 3];
-        uint newValue, prevValue;
-        while(true){
-            int newBackdrop =(int(lastValue)>> 24)+ backdropDelta;
-            newValue =(lastValue & 0x00ffffffu)| uint(newBackdrop << 24);
-            prevValue = atomicCompSwap(iTiles[tileIndex * 4 + 3], lastValue, newValue);
-            if(prevValue == lastValue)
-                break;
-            lastValue = prevValue;
+void adjustBackdrop(int backdropDelta,
+                    ivec2 tileCoords,
+                    ivec4 pathTileRect,
+                    uint pathTileOffset,
+                    uint pathBackdropOffset){
+    bvec4 outcodes = computeTileOutcodes(tileCoords, pathTileRect);
+    if(any(outcodes)){
+        if(! outcodes . x && outcodes . y && ! outcodes . z){
+            uint backdropIndex = pathBackdropOffset + uint(tileCoords . x - pathTileRect . x);
+            atomicAdd(iBackdrops[backdropIndex * 3], backdropDelta);
         }
+    } else {
+        uint tileIndex = computeTileIndexNoCheck(tileCoords, pathTileRect, pathTileOffset);
+        atomicAdd(iTiles[tileIndex * 4 + 3], backdropDelta << 24);
     }
 }
 
@@ -135,8 +157,9 @@ void main(){
     vec4 lineSegment = iSegments[segmentIndex]. line;
     uint pathIndex = iSegments[segmentIndex]. pathIndex . x;
 
-    ivec4 pathTileRect = iMetadata[pathIndex * 2 + 0];
-    uint pathTileOffset = uint(iMetadata[pathIndex * 2 + 1]. x);
+    ivec4 pathTileRect = iMetadata[pathIndex * 3 + 0];
+    uint pathTileOffset = uint(iMetadata[pathIndex * 3 + 1]. x);
+    uint pathBackdropOffset = uint(iMetadata[pathIndex * 3 + 2]. x);
 
 
 
@@ -195,12 +218,22 @@ void main(){
             addFill(auxiliarySegment, tileCoords, pathTileRect, pathTileOffset);
 
 
-        int backdropAdjustment = 0;
-        if(tileStep . x < 0 && lastStepDirection == 1)
-            backdropAdjustment = 1;
-        else if(tileStep . x > 0 && nextStepDirection == 1)
-            backdropAdjustment = - 1;
-        adjustBackdrop(backdropAdjustment, tileCoords, pathTileRect, pathTileOffset);
+
+
+
+        if(tileStep . x < 0 && lastStepDirection == 1){
+            adjustBackdrop(1,
+                           tileCoords,
+                           pathTileRect,
+                           pathTileOffset,
+                           pathBackdropOffset);
+        } else if(tileStep . x > 0 && nextStepDirection == 1){
+            adjustBackdrop(- 1,
+                           tileCoords,
+                           pathTileRect,
+                           pathTileOffset,
+                           pathBackdropOffset);
+        }
 
 
         if(nextStepDirection == 1){

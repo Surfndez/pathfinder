@@ -33,6 +33,7 @@ layout(std430, binding = 0)buffer bDrawMetadata {
 
 
 
+
     restrict readonly uvec4 iDrawMetadata[];
 };
 
@@ -48,7 +49,8 @@ layout(std430, binding = 1)buffer bClipMetadata {
 layout(std430, binding = 2)buffer bBackdrops {
 
 
-    restrict readonly ivec2 iBackdrops[];
+
+    restrict readonly int iBackdrops[];
 };
 
 layout(std430, binding = 3)buffer bDrawTiles {
@@ -76,13 +78,12 @@ void main(){
     if(int(columnIndex)>= uColumnCount)
         return;
 
-    ivec2 backdropData = iBackdrops[columnIndex];
-    int currentBackdrop =(backdropData . x << 16)>> 16;
-    int tileX = backdropData . x >> 16;
-    uint drawPathIndex = uint(backdropData . y);
+    int currentBackdrop = iBackdrops[columnIndex * 3 + 0];
+    int tileX = iBackdrops[columnIndex * 3 + 1];
+    uint drawPathIndex = uint(iBackdrops[columnIndex * 3 + 2]);
 
-    uvec4 drawTileRect = iDrawMetadata[drawPathIndex * 2 + 0];
-    uvec4 drawOffsets = iDrawMetadata[drawPathIndex * 2 + 1];
+    uvec4 drawTileRect = iDrawMetadata[drawPathIndex * 3 + 0];
+    uvec4 drawOffsets = iDrawMetadata[drawPathIndex * 3 + 1];
     uvec2 drawTileSize = drawTileRect . zw - drawTileRect . xy;
     uint drawTileBufferOffset = drawOffsets . x;
     bool zWrite = drawOffsets . z != 0;

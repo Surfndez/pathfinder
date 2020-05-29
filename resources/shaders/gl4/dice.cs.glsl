@@ -23,7 +23,6 @@
 
 
 
-
 precision highp float;
 
 
@@ -34,6 +33,8 @@ layout(local_size_x = 64)in;
 
 uniform mat2 uTransform;
 uniform vec2 uTranslation;
+uniform int uPathCount;
+uniform int uLastBatchSegmentIndex;
 
 struct Segment {
     vec4 line;
@@ -50,15 +51,24 @@ layout(std430, binding = 0)buffer bComputeIndirectParams {
     restrict uint iComputeIndirectParams[];
 };
 
-layout(std430, binding = 1)buffer bPoints {
+
+layout(std430, binding = 1)buffer bDiceMetadata {
+
+
+
+
+    restrict readonly uvec4 iDiceMetadata[];
+};
+
+layout(std430, binding = 2)buffer bPoints {
     restrict readonly vec2 iPoints[];
 };
 
-layout(std430, binding = 2)buffer bInputIndices {
+layout(std430, binding = 3)buffer bInputIndices {
     restrict readonly uvec2 iInputIndices[];
 };
 
-layout(std430, binding = 3)buffer bOutputSegments {
+layout(std430, binding = 4)buffer bOutputSegments {
     restrict Segment iOutputSegments[];
 };
 
@@ -101,13 +111,35 @@ vec2 getPoint(uint pointIndex){
 }
 
 void main(){
-    uint inputIndex = gl_GlobalInvocationID . x;
-    if(inputIndex >= iComputeIndirectParams[4])
+    uint batchSegmentIndex = gl_GlobalInvocationID . x;
+    if(batchSegmentIndex >= uLastBatchSegmentIndex)
         return;
 
-    uvec2 inputIndices = iInputIndices[inputIndex];
+
+    uint lowPathIndex = 0, highPathIndex = uint(uPathCount);
+    int iteration = 0;
+    while(iteration < 1024 && lowPathIndex + 1 < highPathIndex){
+        uint midPathIndex = lowPathIndex +(highPathIndex - lowPathIndex)/ 2;
+        uint midBatchSegmentIndex = iDiceMetadata[midPathIndex]. z;
+        if(batchSegmentIndex < midBatchSegmentIndex){
+            highPathIndex = midPathIndex;
+        } else {
+            lowPathIndex = midPathIndex;
+            if(batchSegmentIndex == midBatchSegmentIndex)
+                break;
+        }
+        iteration ++;
+    }
+
+    uint batchPathIndex = lowPathIndex;
+    uvec4 diceMetadata = iDiceMetadata[batchPathIndex];
+    uint firstGlobalSegmentIndexInPath = diceMetadata . y;
+    uint firstBatchSegmentIndexInPath = diceMetadata . z;
+    uint globalSegmentIndex = batchSegmentIndex - firstBatchSegmentIndexInPath +
+        firstGlobalSegmentIndexInPath;
+
+    uvec2 inputIndices = iInputIndices[globalSegmentIndex];
     uint fromPointIndex = inputIndices . x, flagsPathIndex = inputIndices . y;
-    uint pathIndex = flagsPathIndex & 0xbfffffffu;
 
     uint toPointIndex = fromPointIndex;
     if((flagsPathIndex & 0x40000000u)!= 0u)
@@ -120,7 +152,7 @@ void main(){
     vec4 baseline = vec4(getPoint(fromPointIndex), getPoint(toPointIndex));
     if((flagsPathIndex &(0x40000000u |
                                                              0x80000000u))== 0){
-        emitLineSegment(baseline, pathIndex);
+        emitLineSegment(baseline, batchPathIndex);
         return;
     }
 
@@ -145,7 +177,7 @@ void main(){
         baseline = baselines[curveStackSize];
         ctrl = ctrls[curveStackSize];
         if(curveIsFlat(baseline, ctrl)|| curveStackSize + 2 >= 32){
-            emitLineSegment(baseline, pathIndex);
+            emitLineSegment(baseline, batchPathIndex);
         } else {
             subdivideCurve(baseline,
                            ctrl,

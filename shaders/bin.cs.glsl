@@ -38,6 +38,12 @@ layout(std430, binding = 0) buffer bSegments {
 };
 
 layout(std430, binding = 1) buffer bMetadata {
+    // [0]: tile rect
+    // [1].x: tile offset
+    // [1].y: path ID
+    // [1].z: z write flag
+    // [1].w: clip path ID
+    // [2].x: backdrop offset
     restrict readonly ivec4 iMetadata[];
 };
 
@@ -63,25 +69,42 @@ layout(std430, binding = 5) buffer bFillTileMap {
     restrict uint iFillTileMap[];
 };
 
+layout(std430, binding = 6) buffer bBackdrops {
+    // [0]: backdrop
+    // [1]: tile X offset
+    // [2]: path ID
+    restrict uint iBackdrops[];
+};
+
+uint computeTileIndexNoCheck(ivec2 tileCoords, ivec4 pathTileRect, uint pathTileOffset) {
+    ivec2 offsetCoords = tileCoords - pathTileRect.xy;
+    return pathTileOffset + offsetCoords.x + offsetCoords.y * (pathTileRect.z - pathTileRect.x);
+}
+
+bvec4 computeTileOutcodes(ivec2 tileCoords, ivec4 pathTileRect) {
+    return bvec4(lessThan(tileCoords, pathTileRect.xy),
+                 greaterThanEqual(tileCoords, pathTileRect.zw));
+}
+
 bool computeTileIndex(ivec2 tileCoords,
                       ivec4 pathTileRect,
                       uint pathTileOffset,
                       out uint outTileIndex) {
-    ivec2 offsetCoords = tileCoords - pathTileRect.xy;
-    outTileIndex = pathTileOffset + offsetCoords.x +
-        offsetCoords.y * (pathTileRect.z - pathTileRect.x);
-    return all(bvec4(greaterThanEqual(tileCoords, pathTileRect.xy),
-                     lessThan(tileCoords, pathTileRect.zw)));
+    outTileIndex = computeTileIndexNoCheck(tileCoords, pathTileRect, pathTileOffset);
+    return !any(computeTileOutcodes(tileCoords, pathTileRect));
 }
 
 void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTileOffset) {
     // Compute tile offset. If out of bounds, cull.
     uint tileIndex;
-    if (!computeTileIndex(tileCoords, pathTileRect, pathTileOffset, tileIndex))
+    if (!computeTileIndex(tileCoords, pathTileRect, pathTileOffset, tileIndex)) {
         return;
+    }
 
-    // Clip line.
+    // Clip line. If too narrow, cull.
     uvec4 scaledLocalLine = uvec4((lineSegment - vec4(tileCoords.xyxy * ivec4(16))) * vec4(256.0));
+    if (scaledLocalLine.x == scaledLocalLine.z)
+        return;
 
     // Allocate an alpha tile if necessary.
     if (atomicCompSwap(iTiles[tileIndex * 4 + 1], uint(-1), 0u) == uint(-1))
@@ -107,21 +130,20 @@ void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTi
     iFills[fillIndex * 3 + 2] = fillLink;
 }
 
-void adjustBackdrop(int backdropDelta, ivec2 tileCoords, ivec4 pathTileRect, uint pathTileOffset) {
-    uint tileIndex;
-    if (computeTileIndex(tileCoords, pathTileRect, pathTileOffset, tileIndex)) {
-        // TODO(pcwalton): Split out backdrop into a whole word if we can so we can use atomic
-        // adds. Or consider pivoting backdrop around 128 and using atomicAdd/atomicSub.
-        uint lastValue = iTiles[tileIndex * 4 + 3];
-        uint newValue, prevValue;
-        while (true) {
-            int newBackdrop = (int(lastValue) >> 24) + backdropDelta;
-            newValue = (lastValue & 0x00ffffffu) | uint(newBackdrop << 24);
-            prevValue = atomicCompSwap(iTiles[tileIndex * 4 + 3], lastValue, newValue);
-            if (prevValue == lastValue)
-                break;
-            lastValue = prevValue;
+void adjustBackdrop(int backdropDelta,
+                    ivec2 tileCoords,
+                    ivec4 pathTileRect,
+                    uint pathTileOffset,
+                    uint pathBackdropOffset) {
+    bvec4 outcodes = computeTileOutcodes(tileCoords, pathTileRect);
+    if (any(outcodes)) {
+        if (!outcodes.x && outcodes.y && !outcodes.z) {
+            uint backdropIndex = pathBackdropOffset + uint(tileCoords.x - pathTileRect.x);
+            atomicAdd(iBackdrops[backdropIndex * 3], backdropDelta);
         }
+    } else {
+        uint tileIndex = computeTileIndexNoCheck(tileCoords, pathTileRect, pathTileOffset);
+        atomicAdd(iTiles[tileIndex * 4 + 3], backdropDelta << 24);
     }
 }
 
@@ -133,8 +155,9 @@ void main() {
     vec4 lineSegment = iSegments[segmentIndex].line;
     uint pathIndex = iSegments[segmentIndex].pathIndex.x;
 
-    ivec4 pathTileRect = iMetadata[pathIndex * 2 + 0];
-    uint pathTileOffset = uint(iMetadata[pathIndex * 2 + 1].x);
+    ivec4 pathTileRect = iMetadata[pathIndex * 3 + 0];
+    uint pathTileOffset = uint(iMetadata[pathIndex * 3 + 1].x);
+    uint pathBackdropOffset = uint(iMetadata[pathIndex * 3 + 2].x);
 
     // Following is a straight port of `process_line_segment()`:
 
@@ -193,12 +216,22 @@ void main() {
             addFill(auxiliarySegment, tileCoords, pathTileRect, pathTileOffset);
 
         // Adjust backdrop if necessary.
-        int backdropAdjustment = 0;
-        if (tileStep.x < 0 && lastStepDirection == STEP_DIRECTION_X)
-            backdropAdjustment = 1;
-        else if (tileStep.x > 0 && nextStepDirection == STEP_DIRECTION_X)
-            backdropAdjustment = -1;
-        adjustBackdrop(backdropAdjustment, tileCoords, pathTileRect, pathTileOffset);
+        //
+        // NB: Do not refactor the calls below. This exact code sequence is needed to avoid a
+        // miscompilation on the Radeon Metal compiler.
+        if (tileStep.x < 0 && lastStepDirection == STEP_DIRECTION_X) {
+            adjustBackdrop(1,
+                           tileCoords,
+                           pathTileRect,
+                           pathTileOffset,
+                           pathBackdropOffset);
+        } else if (tileStep.x > 0 && nextStepDirection == STEP_DIRECTION_X) {
+            adjustBackdrop(-1,
+                           tileCoords,
+                           pathTileRect,
+                           pathTileOffset,
+                           pathBackdropOffset);
+        }
 
         // Take a step.
         if (nextStepDirection == STEP_DIRECTION_X) {

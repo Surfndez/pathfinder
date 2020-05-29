@@ -910,6 +910,7 @@ pub struct BinComputeProgram<D> where D: Device {
     pub tiles_storage_buffer: D::StorageBuffer,
     pub segments_storage_buffer: D::StorageBuffer,
     pub fill_tile_map_storage_buffer: D::StorageBuffer,
+    pub backdrops_storage_buffer: D::StorageBuffer,
 }
 
 impl<D> BinComputeProgram<D> where D: Device {
@@ -927,6 +928,7 @@ impl<D> BinComputeProgram<D> where D: Device {
         let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 3);
         let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 4);
         let fill_tile_map_storage_buffer = device.get_storage_buffer(&program, "FillTileMap", 5);
+        let backdrops_storage_buffer = device.get_storage_buffer(&program, "Backdrops", 6);
 
         BinComputeProgram {
             program,
@@ -937,6 +939,7 @@ impl<D> BinComputeProgram<D> where D: Device {
             tiles_storage_buffer,
             segments_storage_buffer,
             fill_tile_map_storage_buffer,
+            backdrops_storage_buffer,
         }
     }
 }
@@ -945,7 +948,10 @@ pub struct DiceComputeProgram<D> where D: Device {
     pub program: D::Program,
     pub transform_uniform: D::Uniform,
     pub translation_uniform: D::Uniform,
+    pub path_count_uniform: D::Uniform,
+    pub last_batch_segment_index_uniform: D::Uniform,
     pub compute_indirect_params_storage_buffer: D::StorageBuffer,
+    pub dice_metadata_storage_buffer: D::StorageBuffer,
     pub points_storage_buffer: D::StorageBuffer,
     pub input_indices_storage_buffer: D::StorageBuffer,
     pub output_segments_storage_buffer: D::StorageBuffer,
@@ -959,19 +965,26 @@ impl<D> DiceComputeProgram<D> where D: Device {
 
         let transform_uniform = device.get_uniform(&program, "Transform");
         let translation_uniform = device.get_uniform(&program, "Translation");
+        let path_count_uniform = device.get_uniform(&program, "PathCount");
+        let last_batch_segment_index_uniform = device.get_uniform(&program,
+                                                                  "LastBatchSegmentIndex");
 
         let compute_indirect_params_storage_buffer =
             device.get_storage_buffer(&program, "ComputeIndirectParams", 0);
-        let points_storage_buffer = device.get_storage_buffer(&program, "Points", 1);
-        let input_indices_storage_buffer = device.get_storage_buffer(&program, "InputIndices", 2);
+        let dice_metadata_storage_buffer = device.get_storage_buffer(&program, "DiceMetadata", 1);
+        let points_storage_buffer = device.get_storage_buffer(&program, "Points", 2);
+        let input_indices_storage_buffer = device.get_storage_buffer(&program, "InputIndices", 3);
         let output_segments_storage_buffer =
-            device.get_storage_buffer(&program, "OutputSegments", 3);
+            device.get_storage_buffer(&program, "OutputSegments", 4);
 
         DiceComputeProgram {
             program,
             transform_uniform,
             translation_uniform,
+            path_count_uniform,
+            last_batch_segment_index_uniform,
             compute_indirect_params_storage_buffer,
+            dice_metadata_storage_buffer,
             points_storage_buffer,
             input_indices_storage_buffer,
             output_segments_storage_buffer,

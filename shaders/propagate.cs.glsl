@@ -28,9 +28,10 @@ uniform int uColumnCount;
 layout(std430, binding = 0) buffer bDrawMetadata {
     // [0]: tile rect
     // [1].x: tile offset
-    // [1].y: unused
+    // [1].y: path ID
     // [1].z: Z write enabled?
     // [1].w: clip path ID, or ~0
+    // [2].x: backdrop column offset
     restrict readonly uvec4 iDrawMetadata[];
 };
 
@@ -44,9 +45,10 @@ layout(std430, binding = 1) buffer bClipMetadata {
 };
 
 layout(std430, binding = 2) buffer bBackdrops {
-    // x: backdrop in low 16 bits, tile X offset in high 16 bits
-    // y: path ID
-    restrict readonly ivec2 iBackdrops[];
+    // [0]: backdrop
+    // [1]: tile X offset
+    // [2]: path ID
+    restrict readonly int iBackdrops[];
 };
 
 layout(std430, binding = 3) buffer bDrawTiles {
@@ -74,13 +76,12 @@ void main() {
     if (int(columnIndex) >= uColumnCount)
         return;
 
-    ivec2 backdropData = iBackdrops[columnIndex];
-    int currentBackdrop = (backdropData.x << 16) >> 16;
-    int tileX = backdropData.x >> 16;
-    uint drawPathIndex = uint(backdropData.y);
+    int currentBackdrop = iBackdrops[columnIndex * 3 + 0];
+    int tileX = iBackdrops[columnIndex * 3 + 1];
+    uint drawPathIndex = uint(iBackdrops[columnIndex * 3 + 2]);
 
-    uvec4 drawTileRect = iDrawMetadata[drawPathIndex * 2 + 0];
-    uvec4 drawOffsets = iDrawMetadata[drawPathIndex * 2 + 1];
+    uvec4 drawTileRect = iDrawMetadata[drawPathIndex * 3 + 0];
+    uvec4 drawOffsets = iDrawMetadata[drawPathIndex * 3 + 1];
     uvec2 drawTileSize = drawTileRect.zw - drawTileRect.xy;
     uint drawTileBufferOffset = drawOffsets.x;
     bool zWrite = drawOffsets.z != 0;

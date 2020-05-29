@@ -68,6 +68,11 @@ struct bPoints
     float2 iPoints[1];
 };
 
+struct bDiceMetadata
+{
+    uint4 iDiceMetadata[1];
+};
+
 struct bInputIndices
 {
     uint2 iInputIndices[1];
@@ -122,17 +127,60 @@ void subdivideCurve(thread const float4& baseline, thread const float4& ctrl, th
     nextCtrl = float4(p1p2p3, p2p3);
 }
 
-kernel void main0(constant float2x2& uTransform [[buffer(2)]], constant float2& uTranslation [[buffer(4)]], device bComputeIndirectParams& v_42 [[buffer(0)]], device bOutputSegments& v_64 [[buffer(1)]], const device bPoints& v_186 [[buffer(3)]], const device bInputIndices& _219 [[buffer(5)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
+kernel void main0(constant int& uLastBatchSegmentIndex [[buffer(5)]], constant int& uPathCount [[buffer(6)]], constant float2x2& uTransform [[buffer(2)]], constant float2& uTranslation [[buffer(4)]], device bComputeIndirectParams& v_42 [[buffer(0)]], device bOutputSegments& v_64 [[buffer(1)]], const device bPoints& v_186 [[buffer(3)]], const device bDiceMetadata& _248 [[buffer(7)]], const device bInputIndices& _294 [[buffer(8)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
 {
-    uint inputIndex = gl_GlobalInvocationID.x;
-    if (inputIndex >= v_42.iComputeIndirectParams[4])
+    uint batchSegmentIndex = gl_GlobalInvocationID.x;
+    if (batchSegmentIndex >= uint(uLastBatchSegmentIndex))
     {
         return;
     }
-    uint2 inputIndices = _219.iInputIndices[inputIndex];
+    uint lowPathIndex = 0u;
+    uint highPathIndex = uint(uPathCount);
+    int iteration = 0;
+    for (;;)
+    {
+        bool _228 = iteration < 1024;
+        bool _235;
+        if (_228)
+        {
+            _235 = (lowPathIndex + 1u) < highPathIndex;
+        }
+        else
+        {
+            _235 = _228;
+        }
+        if (_235)
+        {
+            uint midPathIndex = lowPathIndex + ((highPathIndex - lowPathIndex) / 2u);
+            uint midBatchSegmentIndex = _248.iDiceMetadata[midPathIndex].z;
+            if (batchSegmentIndex < midBatchSegmentIndex)
+            {
+                highPathIndex = midPathIndex;
+            }
+            else
+            {
+                lowPathIndex = midPathIndex;
+                if (batchSegmentIndex == midBatchSegmentIndex)
+                {
+                    break;
+                }
+            }
+            iteration++;
+            continue;
+        }
+        else
+        {
+            break;
+        }
+    }
+    uint batchPathIndex = lowPathIndex;
+    uint4 diceMetadata = _248.iDiceMetadata[batchPathIndex];
+    uint firstGlobalSegmentIndexInPath = diceMetadata.y;
+    uint firstBatchSegmentIndexInPath = diceMetadata.z;
+    uint globalSegmentIndex = (batchSegmentIndex - firstBatchSegmentIndexInPath) + firstGlobalSegmentIndexInPath;
+    uint2 inputIndices = _294.iInputIndices[globalSegmentIndex];
     uint fromPointIndex = inputIndices.x;
     uint flagsPathIndex = inputIndices.y;
-    uint pathIndex = flagsPathIndex & 3221225471u;
     uint toPointIndex = fromPointIndex;
     if ((flagsPathIndex & 1073741824u) != 0u)
     {
@@ -155,7 +203,7 @@ kernel void main0(constant float2x2& uTransform [[buffer(2)]], constant float2& 
     if ((flagsPathIndex & 3221225472u) == 0u)
     {
         float4 param_2 = baseline;
-        uint param_3 = pathIndex;
+        uint param_3 = batchPathIndex;
         emitLineSegment(param_2, param_3, v_42, v_64);
         return;
     }
@@ -188,20 +236,20 @@ kernel void main0(constant float2x2& uTransform [[buffer(2)]], constant float2& 
         ctrl = ctrls[curveStackSize];
         float4 param_6 = baseline;
         float4 param_7 = ctrl;
-        bool _346 = curveIsFlat(param_6, param_7);
-        bool _355;
-        if (!_346)
+        bool _415 = curveIsFlat(param_6, param_7);
+        bool _424;
+        if (!_415)
         {
-            _355 = (curveStackSize + 2) >= 32;
+            _424 = (curveStackSize + 2) >= 32;
         }
         else
         {
-            _355 = _346;
+            _424 = _415;
         }
-        if (_355)
+        if (_424)
         {
             float4 param_8 = baseline;
-            uint param_9 = pathIndex;
+            uint param_9 = batchPathIndex;
             emitLineSegment(param_8, param_9, v_42, v_64);
         }
         else

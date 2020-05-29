@@ -23,6 +23,7 @@ use pathfinder_content::render_target::RenderTargetId;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::{Vector2I, vec2f};
+use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_SCENE_ID: AtomicUsize = AtomicUsize::new(0);
@@ -262,7 +263,18 @@ impl Scene {
 pub struct SceneSink<'a> {
     pub(crate) listener: RenderCommandListener<'a>,
     pub(crate) gpu_features: RendererGPUFeatures,
-    pub(crate) last_scene: Option<(SceneId, SceneEpoch)>,
+    pub(crate) last_scene: Option<LastSceneInfo>,
+}
+
+pub(crate) struct LastSceneInfo {
+    pub(crate) scene_id: SceneId,
+    pub(crate) scene_epoch: SceneEpoch,
+    pub(crate) segment_ranges: SegmentRanges,
+}
+
+pub(crate) struct SegmentRanges {
+    pub(crate) draw: Vec<Range<u32>>,
+    pub(crate) clip: Vec<Range<u32>>,
 }
 
 #[derive(Clone, Copy)]

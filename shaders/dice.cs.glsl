@@ -18,7 +18,6 @@
 
 #define FLAGS_PATH_INDEX_CURVE_IS_QUADRATIC   0x80000000u
 #define FLAGS_PATH_INDEX_CURVE_IS_CUBIC       0x40000000u
-#define FLAGS_PATH_INDEX_PATH_INDEX_BITMASK   0xbfffffffu
 
 #define TOLERANCE   0.25
 
@@ -32,6 +31,8 @@ layout(local_size_x = 64) in;
 
 uniform mat2 uTransform;
 uniform vec2 uTranslation;
+uniform int uPathCount;
+uniform int uLastBatchSegmentIndex;
 
 struct Segment {
     vec4 line;
@@ -43,20 +44,29 @@ layout(std430, binding = 0) buffer bComputeIndirectParams {
     // [1]: number of y workgroups (always 1)
     // [2]: number of z workgroups (always 1)
     // [3]: unused
-    // [4]: number of input indices
+    // [4]: unused
     // [5]: number of output segments
     restrict uint iComputeIndirectParams[];
 };
 
-layout(std430, binding = 1) buffer bPoints {
+// Indexed by batch path index.
+layout(std430, binding = 1) buffer bDiceMetadata {
+    // x: global path ID
+    // y: first global segment index
+    // z: first batch segment index
+    // w: unused
+    restrict readonly uvec4 iDiceMetadata[];
+};
+
+layout(std430, binding = 2) buffer bPoints {
     restrict readonly vec2 iPoints[];
 };
 
-layout(std430, binding = 2) buffer bInputIndices {
+layout(std430, binding = 3) buffer bInputIndices {
     restrict readonly uvec2 iInputIndices[];
 };
 
-layout(std430, binding = 3) buffer bOutputSegments {
+layout(std430, binding = 4) buffer bOutputSegments {
     restrict Segment iOutputSegments[];
 };
 
@@ -99,13 +109,35 @@ vec2 getPoint(uint pointIndex) {
 }
 
 void main() {
-    uint inputIndex = gl_GlobalInvocationID.x;
-    if (inputIndex >= iComputeIndirectParams[4])
+    uint batchSegmentIndex = gl_GlobalInvocationID.x;
+    if (batchSegmentIndex >= uLastBatchSegmentIndex)
         return;
 
-    uvec2 inputIndices = iInputIndices[inputIndex];
+    // Find the path index.
+    uint lowPathIndex = 0, highPathIndex = uint(uPathCount);
+    int iteration = 0;
+    while (iteration < 1024 && lowPathIndex + 1 < highPathIndex) {
+        uint midPathIndex = lowPathIndex + (highPathIndex - lowPathIndex) / 2;
+        uint midBatchSegmentIndex = iDiceMetadata[midPathIndex].z;
+        if (batchSegmentIndex < midBatchSegmentIndex) {
+            highPathIndex = midPathIndex;
+        } else {
+            lowPathIndex = midPathIndex;
+            if (batchSegmentIndex == midBatchSegmentIndex)
+                break;
+        }
+        iteration++;
+    }
+
+    uint batchPathIndex = lowPathIndex;
+    uvec4 diceMetadata = iDiceMetadata[batchPathIndex];
+    uint firstGlobalSegmentIndexInPath = diceMetadata.y;
+    uint firstBatchSegmentIndexInPath = diceMetadata.z;
+    uint globalSegmentIndex = batchSegmentIndex - firstBatchSegmentIndexInPath +
+        firstGlobalSegmentIndexInPath;
+
+    uvec2 inputIndices = iInputIndices[globalSegmentIndex];
     uint fromPointIndex = inputIndices.x, flagsPathIndex = inputIndices.y;
-    uint pathIndex = flagsPathIndex & FLAGS_PATH_INDEX_PATH_INDEX_BITMASK;
 
     uint toPointIndex = fromPointIndex;
     if ((flagsPathIndex & FLAGS_PATH_INDEX_CURVE_IS_CUBIC) != 0u)
@@ -118,7 +150,7 @@ void main() {
     vec4 baseline = vec4(getPoint(fromPointIndex), getPoint(toPointIndex));
     if ((flagsPathIndex & (FLAGS_PATH_INDEX_CURVE_IS_CUBIC |
                            FLAGS_PATH_INDEX_CURVE_IS_QUADRATIC)) == 0) {
-        emitLineSegment(baseline, pathIndex);
+        emitLineSegment(baseline, batchPathIndex);
         return;
     }
 
@@ -143,7 +175,7 @@ void main() {
         baseline = baselines[curveStackSize];
         ctrl = ctrls[curveStackSize];
         if (curveIsFlat(baseline, ctrl) || curveStackSize + 2 >= MAX_CURVE_STACK_SIZE) {
-            emitLineSegment(baseline, pathIndex);
+            emitLineSegment(baseline, batchPathIndex);
         } else {
             subdivideCurve(baseline,
                            ctrl,
