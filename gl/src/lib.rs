@@ -1129,12 +1129,6 @@ impl GLDevice {
                     texture_data_len = pixels.len() * mem::size_of::<f32>();
                     texture_data = TextureData::F32(pixels);
                 }
-                TextureFormat::R32I => {
-                    let mut pixels = vec![0; size.x() as usize * size.y() as usize * channels];
-                    texture_data_ptr = pixels.as_mut_ptr() as *mut u8;
-                    texture_data_len = pixels.len() * mem::size_of::<i32>();
-                    texture_data = TextureData::I32(pixels);
-                }
             }
 
             gl::BindBuffer(gl::PIXEL_PACK_BUFFER, receiver.gl_pixel_buffer); ck();
@@ -1149,7 +1143,6 @@ impl GLDevice {
                 TextureData::U16(ref mut pixels) => flip_y(pixels, size, channels),
                 TextureData::F16(ref mut pixels) => flip_y(pixels, size, channels),
                 TextureData::F32(ref mut pixels) => flip_y(pixels, size, channels),
-                TextureData::I32(ref mut pixels) => flip_y(pixels, size, channels),
             }
 
             texture_data
@@ -1460,7 +1453,6 @@ impl TextureFormatExt for TextureFormat {
         match self {
             TextureFormat::R8 => gl::R8 as GLint,
             TextureFormat::R16F => gl::R16F as GLint,
-            TextureFormat::R32I => gl::R32I as GLint,
             TextureFormat::RGBA8 => gl::RGBA8 as GLint,
             TextureFormat::RGBA16F => gl::RGBA16F as GLint,
             TextureFormat::RGBA32F => gl::RGBA32F as GLint,
@@ -1469,7 +1461,7 @@ impl TextureFormatExt for TextureFormat {
 
     fn gl_format(self) -> GLuint {
         match self {
-            TextureFormat::R8 | TextureFormat::R16F | TextureFormat::R32I => gl::RED,
+            TextureFormat::R8 | TextureFormat::R16F => gl::RED,
             TextureFormat::RGBA8 | TextureFormat::RGBA16F | TextureFormat::RGBA32F => gl::RGBA,
         }
     }
@@ -1478,7 +1470,6 @@ impl TextureFormatExt for TextureFormat {
         match self {
             TextureFormat::R8 | TextureFormat::RGBA8 => gl::UNSIGNED_BYTE,
             TextureFormat::R16F | TextureFormat::RGBA16F => gl::HALF_FLOAT,
-            TextureFormat::R32I => gl::INT,
             TextureFormat::RGBA32F => gl::FLOAT,
         }
     }

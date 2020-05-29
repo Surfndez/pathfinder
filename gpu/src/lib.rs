@@ -183,7 +183,6 @@ pub enum FeatureLevel {
 pub enum TextureFormat {
     R8,
     R16F,
-    R32I,
     RGBA8,
     RGBA16F,
     RGBA32F,
@@ -420,7 +419,6 @@ pub enum TextureData {
     U16(Vec<u16>),
     F16(Vec<f16>),
     F32(Vec<f32>),
-    I32(Vec<i32>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -428,7 +426,6 @@ pub enum TextureDataRef<'a> {
     U8(&'a [u8]),
     F16(&'a [f16]),
     F32(&'a [f32]),
-    I32(&'a [i32]),
 }
 
 impl UniformData {
@@ -460,7 +457,7 @@ impl TextureFormat {
     #[inline]
     pub fn channels(self) -> usize {
         match self {
-            TextureFormat::R8 | TextureFormat::R16F | TextureFormat::R32I => 1,
+            TextureFormat::R8 | TextureFormat::R16F => 1,
             TextureFormat::RGBA8 | TextureFormat::RGBA16F | TextureFormat::RGBA32F => 4,
         }
     }
@@ -470,7 +467,7 @@ impl TextureFormat {
         match self {
             TextureFormat::R8 => 1,
             TextureFormat::R16F => 2,
-            TextureFormat::R32I | TextureFormat::RGBA8 => 4,
+            TextureFormat::RGBA8 => 4,
             TextureFormat::RGBA16F => 8,
             TextureFormat::RGBA32F => 16,
         }
@@ -519,7 +516,6 @@ impl<'a> TextureDataRef<'a> {
                                       -> *const c_void {
         let channels = match (format, self) {
             (TextureFormat::R8, TextureDataRef::U8(_)) => 1,
-            (TextureFormat::R32I, TextureDataRef::I32(_)) => 1,
             (TextureFormat::RGBA8, TextureDataRef::U8(_)) => 4,
             (TextureFormat::RGBA16F, TextureDataRef::F16(_)) => 4,
             (TextureFormat::RGBA32F, TextureDataRef::F32(_)) => 4,
@@ -538,10 +534,6 @@ impl<'a> TextureDataRef<'a> {
                 data.as_ptr() as *const c_void
             }
             TextureDataRef::F32(data) => {
-                assert!(data.len() >= area * channels);
-                data.as_ptr() as *const c_void
-            }
-            TextureDataRef::I32(data) => {
                 assert!(data.len() >= area * channels);
                 data.as_ptr() as *const c_void
             }

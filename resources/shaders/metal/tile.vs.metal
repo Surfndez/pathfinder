@@ -23,30 +23,31 @@ struct main0_in
     int aColor [[attribute(5)]];
 };
 
-vertex main0_out main0(main0_in in [[stage_in]], constant int2& uZBufferSize [[buffer(1)]], constant int2& uTextureMetadataSize [[buffer(2)]], constant float2& uTileSize [[buffer(0)]], constant float4x4& uTransform [[buffer(3)]], texture2d<int> uZBuffer [[texture(0)]], texture2d<float> uTextureMetadata [[texture(1)]], sampler uZBufferSmplr [[sampler(0)]], sampler uTextureMetadataSmplr [[sampler(1)]])
+vertex main0_out main0(main0_in in [[stage_in]], constant int2& uZBufferSize [[buffer(1)]], constant int2& uTextureMetadataSize [[buffer(2)]], constant float2& uTileSize [[buffer(0)]], constant float4x4& uTransform [[buffer(3)]], texture2d<float> uZBuffer [[texture(0)]], texture2d<float> uTextureMetadata [[texture(1)]], sampler uZBufferSmplr [[sampler(0)]], sampler uTextureMetadataSmplr [[sampler(1)]])
 {
     main0_out out = {};
     float2 tileOrigin = float2(in.aTileOrigin);
     float2 tileOffset = float2(in.aTileOffset);
     float2 position = (tileOrigin + tileOffset) * uTileSize;
     bool cull = false;
-    if (in.aPathIndex < uZBuffer.sample(uZBufferSmplr, ((tileOrigin + float2(0.5)) / float2(uZBufferSize)), level(0.0)).x)
+    int4 zValue = int4(uZBuffer.sample(uZBufferSmplr, ((tileOrigin + float2(0.5)) / float2(uZBufferSize)), level(0.0)) * 255.0);
+    if (in.aPathIndex < (((zValue.x | (zValue.y << 8)) | (zValue.z << 16)) | (zValue.w << 24)))
     {
         cull = true;
     }
     uint2 maskTileCoord = uint2(in.aMaskTexCoord0.x, in.aMaskTexCoord0.y + (256u * in.aMaskTexCoord0.z));
     float2 maskTexCoord0 = (float2(maskTileCoord) + tileOffset) * uTileSize;
-    bool _89 = in.aCtrlBackdrop.y == 0;
-    bool _96;
-    if (_89)
+    bool _113 = in.aCtrlBackdrop.y == 0;
+    bool _119;
+    if (_113)
     {
-        _96 = in.aMaskTexCoord0.w != 0u;
+        _119 = in.aMaskTexCoord0.w != 0u;
     }
     else
     {
-        _96 = _89;
+        _119 = _113;
     }
-    if (_96)
+    if (_119)
     {
         cull = true;
     }

@@ -47,6 +47,7 @@ use std::f32;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Add, Div};
+use std::slice;
 use std::time::Duration;
 use std::u32;
 use vec_map::VecMap;
@@ -1618,9 +1619,14 @@ impl<D> Renderer<D> where D: Device {
             self.device.framebuffer_texture(&self.back_frame.z_buffer_framebuffer);
         debug_assert_eq!(z_buffer.rect.origin(), Vector2I::default());
         debug_assert_eq!(z_buffer.rect.size(), self.device.texture_size(z_buffer_texture));
-        self.device.upload_to_texture(z_buffer_texture,
-                                      z_buffer.rect,
-                                      TextureDataRef::I32(&z_buffer.data));
+        unsafe {
+            let z_data: &[i32] = &z_buffer.data;
+            let z_data: &[u8] = slice::from_raw_parts(z_data.as_ptr() as *const u8,
+                                                      z_data.len() * 4);
+            self.device.upload_to_texture(z_buffer_texture,
+                                          z_buffer.rect,
+                                          TextureDataRef::U8(&z_data));
+        }
     }
 
     fn allocate_clip_storage(&mut self, max_clipped_tile_count: u32) -> StorageID {
@@ -2240,11 +2246,10 @@ impl<D> Frame<D> where D: Device {
         let dest_blend_texture = device.create_texture(TextureFormat::RGBA8, window_size);
         let dest_blend_framebuffer = device.create_framebuffer(dest_blend_texture);
 
-        let propagate_metadata_buffer = device.create_buffer(BufferUploadMode::Dynamic);
         let backdrops_buffer = device.create_buffer(BufferUploadMode::Dynamic);
 
         let framebuffer_tile_size = pixel_size_to_tile_size(window_size);
-        let z_buffer_texture = device.create_texture(TextureFormat::R32I, framebuffer_tile_size);
+        let z_buffer_texture = device.create_texture(TextureFormat::RGBA8, framebuffer_tile_size);
         device.set_texture_sampling_mode(&z_buffer_texture,
                                          TextureSamplingFlags::NEAREST_MIN |
                                          TextureSamplingFlags::NEAREST_MAG);

@@ -328,7 +328,6 @@ impl Device for MetalDevice {
             TextureFormat::R8 => descriptor.set_pixel_format(MTLPixelFormat::R8Unorm),
             TextureFormat::R16F => descriptor.set_pixel_format(MTLPixelFormat::R16Float),
             TextureFormat::RGBA8 => descriptor.set_pixel_format(MTLPixelFormat::RGBA8Unorm),
-            TextureFormat::R32I => descriptor.set_pixel_format(MTLPixelFormat::R32Sint),
             TextureFormat::RGBA16F => descriptor.set_pixel_format(MTLPixelFormat::RGBA16Float),
             TextureFormat::RGBA32F => descriptor.set_pixel_format(MTLPixelFormat::RGBA32Float),
         }
@@ -2011,7 +2010,6 @@ impl TextureFormatExt for TextureFormat {
         match metal_pixel_format {
             MTLPixelFormat::R8Unorm => Some(TextureFormat::R8),
             MTLPixelFormat::R16Float => Some(TextureFormat::R16F),
-            MTLPixelFormat::R32Sint => Some(TextureFormat::R32I),
             MTLPixelFormat::RGBA8Unorm => Some(TextureFormat::RGBA8),
             MTLPixelFormat::BGRA8Unorm => {
                 // FIXME(pcwalton): This is wrong! But it prevents a crash for now.
@@ -2074,16 +2072,6 @@ impl MetalTextureDataReceiver {
                                          0,
                                          stride as u64 * 4);
                 TextureData::F32(pixels)
-            }
-            TextureFormat::R32I => {
-                let channels = format.channels();
-                let stride = size.x() as usize * channels;
-                let mut pixels = vec![0; stride * size.y() as usize];
-                self.0.texture.get_bytes(pixels.as_mut_ptr() as *mut _,
-                                         metal_region,
-                                         0,
-                                         stride as u64 * 4);
-                TextureData::I32(pixels)
             }
         };
 

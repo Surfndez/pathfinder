@@ -24,9 +24,13 @@ layout(std430, binding = 0) buffer bBuffer {
 
 in vec2 vTexCoord;
 
-out ivec4 oFragColor;
+out vec4 oFragColor;
 
 void main() {
     ivec2 texCoord = ivec2(floor(vTexCoord));
-    oFragColor = ivec4(iBuffer[texCoord.y * uBufferSize.x + texCoord.x]);
+    int value = iBuffer[texCoord.y * uBufferSize.x + texCoord.x];
+    oFragColor = vec4(value & 0xff,
+                      (value >> 8) & 0xff,
+                      (value >> 16) & 0xff,
+                      (value >> 24) & 0xff) / 255.0;
 }

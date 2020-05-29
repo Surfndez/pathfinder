@@ -20,7 +20,7 @@ uniform mat4 uTransform;
 uniform vec2 uTileSize;
 uniform sampler2D uTextureMetadata;
 uniform ivec2 uTextureMetadataSize;
-uniform isampler2D uZBuffer;
+uniform sampler2D uZBuffer;
 uniform ivec2 uZBufferSize;
 
 in ivec2 aTileOffset;
@@ -40,7 +40,9 @@ void main() {
     vec2 position = (tileOrigin + tileOffset) * uTileSize;
 
     bool cull = false;
-    if (aPathIndex < texture(uZBuffer, (tileOrigin + vec2(0.5)) / vec2(uZBufferSize)).x)
+
+    ivec4 zValue = ivec4(texture(uZBuffer, (tileOrigin + vec2(0.5)) / vec2(uZBufferSize)) * 255.0);
+    if (aPathIndex < (zValue.x | (zValue.y << 8) | (zValue.z << 16) | (zValue.w << 24)))
         cull = true;
 
     uvec2 maskTileCoord = uvec2(aMaskTexCoord0.x, aMaskTexCoord0.y + 256u * aMaskTexCoord0.z);
