@@ -540,7 +540,7 @@ pub struct FillComputeProgram<D> where D: Device {
     pub binned_on_gpu_uniform: D::Uniform,
     pub dest_image: D::ImageParameter,
     pub area_lut_texture: D::TextureParameter,
-    pub first_tile_index_uniform: D::Uniform,
+    pub tile_range_uniform: D::Uniform,
     pub fills_storage_buffer: D::StorageBuffer,
     pub fill_tile_map_storage_buffer: D::StorageBuffer,
     pub tiles_storage_buffer: D::StorageBuffer,
@@ -555,7 +555,7 @@ impl<D> FillComputeProgram<D> where D: Device {
         let binned_on_gpu_uniform = device.get_uniform(&program, "BinnedOnGPU");
         let dest_image = device.get_image_parameter(&program, "Dest");
         let area_lut_texture = device.get_texture_parameter(&program, "AreaLUT");
-        let first_tile_index_uniform = device.get_uniform(&program, "FirstTileIndex");
+        let tile_range_uniform = device.get_uniform(&program, "TileRange");
         let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 0);
         let fill_tile_map_storage_buffer = device.get_storage_buffer(&program, "FillTileMap", 1);
         let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 2);
@@ -565,7 +565,7 @@ impl<D> FillComputeProgram<D> where D: Device {
             binned_on_gpu_uniform,
             dest_image,
             area_lut_texture,
-            first_tile_index_uniform,
+            tile_range_uniform,
             fills_storage_buffer,
             fill_tile_map_storage_buffer,
             tiles_storage_buffer,

@@ -24,7 +24,7 @@ layout(local_size_x = 16, local_size_y = 4) in;
 
 uniform writeonly image2D uDest;
 uniform sampler2D uAreaLUT;
-uniform int uFirstTileIndex;
+uniform ivec2 uTileRange;
 uniform int uBinnedOnGPU;
 
 layout(std430, binding = 0) buffer bFills {
@@ -41,9 +41,12 @@ layout(std430, binding = 2) buffer bTiles {
 
 void main() {
     ivec2 tileSubCoord = ivec2(gl_LocalInvocationID.xy) * ivec2(1, 4);
-    uint tileIndexOffset = gl_WorkGroupID.z;
 
-    uint tileIndex = tileIndexOffset + uint(uFirstTileIndex);
+    // This is a workaround for the 64K workgroup dispatch limit in OpenGL.
+    uint tileIndexOffset = gl_WorkGroupID.x | (gl_WorkGroupID.y << 16);
+    uint tileIndex = tileIndexOffset + uint(uTileRange.x);
+    if (tileIndex >= uTileRange.y)
+        return;
 
     int fillIndex = iFillTileMap[tileIndex];
     if (fillIndex < 0)

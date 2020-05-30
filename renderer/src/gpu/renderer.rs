@@ -1297,15 +1297,22 @@ impl<D> Renderer<D> where D: Device {
             }
         }
 
+        // This setup is an annoying workaround for the 64K limit of compute invocation in OpenGL.
         // TODO(pcwalton): Indirect compute dispatch!
-        let dimensions = ComputeDimensions { x: 1, y: 1, z: fill_tile_count };
+        let dimensions = ComputeDimensions {
+            x: fill_tile_count.min(1 << 16),
+            y: (fill_tile_count + 0xffff) >> 16,
+            z: 1,
+        };
+        let fill_tile_range = I32x2::new(0, fill_tile_count as i32) +
+            I32x2::splat(first_fill_tile as i32);
+
         self.device.dispatch_compute(dimensions, &ComputeState {
             program: &fill_compute_program.program,
             textures: &[(&fill_compute_program.area_lut_texture, &self.area_lut_texture)],
             images: &[(&fill_compute_program.dest_image, image_texture, ImageAccess::Write)],
             uniforms: &[
-                (&fill_compute_program.first_tile_index_uniform,
-                 UniformData::Int(first_fill_tile as i32)),
+                (&fill_compute_program.tile_range_uniform, UniformData::IVec2(fill_tile_range)),
                 (&fill_compute_program.binned_on_gpu_uniform,
                  UniformData::Int(tile_storage_id.is_some() as i32)),
             ],
