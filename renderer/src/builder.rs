@@ -11,33 +11,30 @@
 //! Packs data onto the GPU.
 
 use crate::concurrent::executor::Executor;
-use crate::gpu::options::{RendererGPUFeatures, RendererOptions};
-use crate::gpu::renderer::{BlendModeExt, MASK_TILES_ACROSS, MASK_TILES_DOWN};
-use crate::gpu_data::{AlphaTileId, BackdropInfo, BinSegment, Clip, ClipBatchKey, ClipBatchKind, ClipMetadata, ClippedPathInfo, DiceMetadata, DrawTileBatch, Fill};
-use crate::gpu_data::{PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand, SegmentIndices, Segments, TILE_CTRL_MASK_0_SHIFT};
-use crate::gpu_data::{TILE_CTRL_MASK_EVEN_ODD, TILE_CTRL_MASK_WINDING, TileBatchId};
-use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive, TilePathInfo};
-use crate::options::{PrepareMode, PreparedBuildOptions, PreparedRenderTransform, RenderCommandListener};
+use crate::gpu::options::RendererGPUFeatures;
+use crate::gpu::renderer::BlendModeExt;
+use crate::gpu_data::{AlphaTileId, BackdropInfo, Clip, ClipBatchKey, ClippedPathInfo};
+use crate::gpu_data::{DiceMetadata, DrawTileBatch, Fill, PathIndex, PrepareTilesBatch};
+use crate::gpu_data::{PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo};
+use crate::gpu_data::{PrepareTilesModalInfo, PropagateMetadata, RenderCommand, SegmentIndices};
+use crate::gpu_data::{Segments, TileBatchId, TileBatchTexture, TileObjectPrimitive, TilePathInfo};
+use crate::options::{PrepareMode, PreparedBuildOptions, PreparedRenderTransform};
 use crate::paint::{PaintId, PaintInfo, PaintMetadata};
 use crate::scene::{ClipPathId, DisplayItem, DrawPath, LastSceneInfo, Scene, SceneSink, SegmentRanges};
 use crate::tile_map::DenseTileMap;
 use crate::tiler::Tiler;
 use crate::tiles::{self, DrawTilingPathInfo, TILE_HEIGHT, TILE_WIDTH, TilingPathInfo};
-use crate::z_buffer::{DepthMetadata, ZBuffer};
 use fxhash::FxHashMap;
 use instant::Instant;
 use pathfinder_content::effects::{BlendMode, Filter};
 use pathfinder_content::fill::FillRule;
-use pathfinder_content::outline::{ContourIterFlags, Outline, PointFlags};
-use pathfinder_content::render_target::RenderTargetId;
-use pathfinder_content::segment::Segment;
+use pathfinder_content::outline::{Outline, PointFlags};
 use pathfinder_geometry::line_segment::{LineSegment2F, LineSegmentU16};
 use pathfinder_geometry::rect::{RectF, RectI};
 use pathfinder_geometry::transform2d::Transform2F;
 use pathfinder_geometry::vector::{Vector2I, vec2i};
 use pathfinder_gpu::TextureSamplingFlags;
-use pathfinder_simd::default::{F32x4, I32x4};
-use std::collections::VecDeque;
+use pathfinder_simd::default::F32x4;
 use std::ops::Range;
 use std::sync::atomic::AtomicUsize;
 use std::u32;
@@ -184,10 +181,7 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
             PrepareMode::CPU | PrepareMode::TransformCPUBinGPU => {
                 Some(self.build_paths_on_cpu(executor, &paint_metadata, &prepare_mode))
             }
-            PrepareMode::GPU { transform } => {
-                None
-                //self.prepare_paths_for_gpu_building(transform, &paint_metadata)
-            }
+            PrepareMode::GPU { .. } => None,
         };
 
         // FIXME(pcwalton): Bad logic.
@@ -210,64 +204,6 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
         let cpu_build_time = Instant::now() - start_time;
         self.sink.listener.send(RenderCommand::Finish { cpu_build_time });
     }
-
-    /*
-    fn prepare_paths_for_gpu_building(&mut self,
-                                      transform: Transform2F,
-                                      paint_metadata: &[PaintMetadata])
-                                      -> BuiltPaths {
-        println!("prepare_paths_for_gpu_building()");
-
-        let prepare_mode = PrepareMode::GPU { transform };
-
-        let clip_path_count = self.scene.clip_paths.len();
-        let draw_path_count = self.scene.paths.len();
-        let effective_view_box = self.scene.effective_view_box(self.built_options);
-
-        let mut built_paths = BuiltPaths {
-            clip: Vec::with_capacity(clip_path_count),
-            draw: Vec::with_capacity(draw_path_count),
-        };
-
-        for clip_path_index in 0..clip_path_count {
-            let clip_path = &self.scene.clip_paths[clip_path_index];
-            let path_bounds = transform * clip_path.outline().bounds();
-            built_paths.clip.push(BuiltPath::new(clip_path_index as u32,
-                                                 path_bounds,
-                                                 effective_view_box,
-                                                 clip_path.fill_rule(),
-                                                 &prepare_mode,
-                                                 &TilingPathInfo::Clip));
-        }
-
-        for draw_path_index in 0..draw_path_count {
-            let draw_path = &self.scene.paths[draw_path_index];
-            let path_bounds = transform * draw_path.outline().bounds();
-
-            let paint_id = draw_path.paint();
-            let paint_metadata = &paint_metadata[paint_id.0 as usize];
-            let built_clip_path = draw_path.clip_path().map(|clip_path_id| {
-                &built_paths.clip[clip_path_id.0 as usize]
-            });
-
-            let built_path = BuiltPath::new(draw_path_index as u32,
-                                            path_bounds,
-                                            effective_view_box,
-                                            draw_path.fill_rule(),
-                                            &prepare_mode,
-                                            &TilingPathInfo::Draw(DrawTilingPathInfo {
-                                                paint_id,
-                                                paint_metadata,
-                                                blend_mode: draw_path.blend_mode(),
-                                                built_clip_path,
-                                                fill_rule: draw_path.fill_rule(),
-                                            }));
-            built_paths.draw.push(BuiltDrawPath::new(built_path, draw_path, &paint_metadata))
-        }
-
-        built_paths
-    }
-    */
 
     fn prepare_clip_path_for_gpu_binning(&self,
                                          clip_path_index: PathIndex,
@@ -403,9 +339,6 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
 
         let paint_id = path_object.paint();
         let paint_metadata = &paint_metadata[paint_id.0 as usize];
-        let built_clip_path = path_object.clip_path().map(|clip_path_id| {
-            &built_clip_paths[clip_path_id.0 as usize]
-        });
 
         let mut tiler = Tiler::new(self,
                                    path_index as u32,
@@ -438,7 +371,6 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
                           paint_metadata: &[PaintMetadata],
                           prepare_mode: PrepareMode,
                           built_paths: Option<BuiltPaths>) {
-        let gpu_features = self.sink.gpu_features;
         let (mut prepare_commands, mut draw_commands) = (vec![], vec![]);
 
         let scene_tile_rect = tiles::round_rect_out_to_tile_bounds(self.scene.view_box());
@@ -460,8 +392,6 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
                     start_index: start_draw_path_id,
                     end_index: end_draw_path_id,
                 } => {
-                    let start_time = ::std::time::Instant::now();
-
                     let mut batches = None;
                     for draw_path_id in start_draw_path_id..end_draw_path_id {
                         let draw_path =
@@ -540,9 +470,6 @@ impl<'a, 'b, 'c, 'd> SceneBuilder<'a, 'b, 'c, 'd> {
                                              clip_path,
                                              self.sink);
                     }
-
-                    let elapsed_time = ::std::time::Instant::now() - start_time;
-                    println!("copying: {}ms", elapsed_time.as_secs_f32() * 1000.0);
 
                     if let Some(PathBatches { draw, prepare }) = batches {
                         prepare_commands.push(RenderCommand::PrepareTiles(prepare));
@@ -705,13 +632,6 @@ impl BuiltPath {
     }
 }
 
-impl Occluder {
-    #[inline]
-    pub(crate) fn new(coords: Vector2I) -> Occluder {
-        Occluder { coords }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TileStats {
     pub solid_tile_count: u32,
@@ -824,13 +744,6 @@ impl ObjectBuilder {
     }
 
     #[inline]
-    pub(crate) fn local_tile_index_to_coords(&self, tile_index: u32) -> Vector2I {
-        let tile_rect = self.built_path.tile_bounds;
-        let tile_index = tile_index as i32;
-        vec2i(tile_index % tile_rect.width(), tile_index / tile_rect.width()) + tile_rect.origin()
-    }
-
-    #[inline]
     pub(crate) fn adjust_alpha_tile_backdrop(&mut self, tile_coords: Vector2I, delta: i8) {
         let (tiles, backdrops) = match self.built_path.data {
             BuiltPathData::CPU(ref mut tiled_data) => {
@@ -853,111 +766,6 @@ impl ObjectBuilder {
         let local_tile_index = tiles.coords_to_index_unchecked(tile_coords);
         tiles.data[local_tile_index].backdrop += delta;
     }
-}
-
-/*
-impl<'a> PackedTile<'a> {
-    pub(crate) fn add_to(&self,
-                         tiles: &mut Vec<BuiltTile>,
-                         clips: &mut Vec<BuiltClip>,
-                         draw_tiling_path_info: &DrawTilingPathInfo,
-                         scene_builder: &SceneBuilder) {
-        let draw_tile_page = self.draw_tile.alpha_tile_id.page() as u16;
-        let draw_tile_index = self.draw_tile.alpha_tile_id.tile() as u16;
-        let draw_tile_backdrop = self.draw_tile.backdrop as i8;
-
-        match self.clip_tile {
-            None => {
-                /*
-                tiles.push(BuiltTile {
-                    page: draw_tile_page,
-                    tile: Tile::new_alpha(self.tile_coords,
-                                          draw_tile_index,
-                                          draw_tile_backdrop,
-                                          draw_tiling_path_info),
-                });
-                */
-            }
-            Some(clip_tile) => {
-                let clip_tile_page = clip_tile.alpha_tile_id.page() as u16;
-                let clip_tile_index = clip_tile.alpha_tile_id.tile() as u16;
-                let clip_tile_backdrop = clip_tile.backdrop;
-
-                let dest_tile_id = AlphaTileId::new(&scene_builder.next_alpha_tile_indices, 1);
-                let dest_tile_page = dest_tile_id.page() as u16;
-                let dest_tile_index = dest_tile_id.tile() as u16;
-
-                clips.push(BuiltClip {
-                    clip: Clip::new(dest_tile_index, draw_tile_index, draw_tile_backdrop),
-                    key: ClipBatchKey {
-                        src_page: draw_tile_page,
-                        dest_page: dest_tile_page,
-                        kind: ClipBatchKind::Draw,
-                    },
-                });
-                clips.push(BuiltClip {
-                    clip: Clip::new(dest_tile_index, clip_tile_index, clip_tile_backdrop),
-                    key: ClipBatchKey {
-                        src_page: clip_tile_page,
-                        dest_page: dest_tile_page,
-                        kind: ClipBatchKind::Clip,
-                    },
-                });
-                /*
-                tiles.push(BuiltTile {
-                    page: dest_tile_page,
-                    tile: Tile::new_alpha(self.tile_coords,
-                                          dest_tile_index,
-                                          0,
-                                          draw_tiling_path_info),
-                });
-                */
-            }
-        }
-    }
-}
-*/
-
-/*
-impl Tile {
-    #[inline]
-    fn new_alpha(tile_origin: Vector2I,
-                 draw_tile_index: u16,
-                 draw_tile_backdrop: i8,
-                 draw_tiling_path_info: &DrawTilingPathInfo)
-                 -> Tile {
-        let mask_0_uv = calculate_mask_uv(draw_tile_index);
-
-        let mut ctrl = 0;
-        match draw_tiling_path_info.fill_rule {
-            FillRule::EvenOdd => ctrl |= TILE_CTRL_MASK_EVEN_ODD << TILE_CTRL_MASK_0_SHIFT,
-            FillRule::Winding => ctrl |= TILE_CTRL_MASK_WINDING << TILE_CTRL_MASK_0_SHIFT,
-        }
-
-        Tile {
-            tile_x: tile_origin.x() as i16,
-            tile_y: tile_origin.y() as i16,
-            mask_0_u: mask_0_uv.x() as u8,
-            mask_0_v: mask_0_uv.y() as u8,
-            mask_0_backdrop: draw_tile_backdrop,
-            ctrl: ctrl as u16,
-            pad: 0,
-            color: draw_tiling_path_info.paint_id.0,
-        }
-    }
-
-    #[inline]
-    pub fn tile_position(&self) -> Vector2I {
-        vec2i(self.tile_x as i32, self.tile_y as i32)
-    }
-}
-*/
-
-fn calculate_mask_uv(tile_index: u16) -> Vector2I {
-    debug_assert_eq!(MASK_TILES_ACROSS, MASK_TILES_DOWN);
-    let mask_u = tile_index as i32 % MASK_TILES_ACROSS as i32;
-    let mask_v = tile_index as i32 / MASK_TILES_ACROSS as i32;
-    vec2i(mask_u, mask_v)
 }
 
 struct PathBatches {
@@ -1161,13 +969,16 @@ fn init_backdrops(backdrops: &mut Vec<BackdropInfo>, path_index: PathIndex, tile
 impl Segments {
     fn from_scene(scene: &Scene) -> (Segments, SegmentRanges) {
         let mut segments = Segments { points: vec![], indices: vec![] };
-        let mut segment_ranges = SegmentRanges { clip: vec![], draw: vec![] };
+        let mut segment_ranges = SegmentRanges {
+            clip: Vec::with_capacity(scene.clip_paths.len()),
+            draw: Vec::with_capacity(scene.paths.len()),
+        };
 
-        for (clip_path_index, clip_path) in scene.clip_paths.iter().enumerate() {
+        for clip_path in &scene.clip_paths {
             let range = segments.add_path(clip_path.outline());
             segment_ranges.clip.push(range);
         }
-        for (draw_path_index, draw_path) in scene.paths.iter().enumerate() {
+        for draw_path in &scene.paths {
             let range = segments.add_path(draw_path.outline());
             segment_ranges.draw.push(range);
         }

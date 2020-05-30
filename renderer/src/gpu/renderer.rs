@@ -67,6 +67,7 @@ const SQRT_2_PI_INV: f32 = 0.3989422804014327;
 const TEXTURE_CACHE_SIZE: usize = 8;
 
 const MIN_PATH_INFO_STORAGE_CLASS:               usize = 10;    // 1024 entries
+const MIN_DICE_METADATA_STORAGE_CLASS:           usize = 10;    // 1024 entries
 const MIN_FILL_STORAGE_CLASS:                    usize = 14;    // 16K entries, 128kB
 const MIN_FILL_TILE_MAP_STORAGE_CLASS:           usize = 15;    // 32K entries, 128kB
 const MIN_TILE_STORAGE_CLASS:                    usize = 10;    // 1024 entries, 12kB
@@ -168,11 +169,12 @@ struct Frame<D> where D: Device {
     blit_vertex_array: BlitVertexArray<D>,
     blit_buffer_vertex_array: BlitBufferVertexArray<D>,
     clear_vertex_array: ClearVertexArray<D>,
-    path_info_storage_allocator: StorageAllocator<D, D::Buffer>,
+    path_info_storage_allocator: BufferStorageAllocator<D, TilePathInfo>,
+    dice_metadata_storage_allocator: StorageAllocator<D, DiceMetadataStorage<D>>,
     fill_vertex_storage_allocator: StorageAllocator<D, FillVertexStorage<D>>,
-    fill_tile_map_storage_allocator: StorageAllocator<D, D::Buffer>,  
+    fill_tile_map_storage_allocator: BufferStorageAllocator<D, i32>,
     tile_vertex_storage_allocator: StorageAllocator<D, TileVertexStorage<D>>,
-    tile_propagate_metadata_storage_allocator: StorageAllocator<D, D::Buffer>,
+    tile_propagate_metadata_storage_allocator: BufferStorageAllocator<D, PropagateMetadata>,
     clip_vertex_storage_allocator: StorageAllocator<D, ClipVertexStorage<D>>,
 
     // Maps tile batch IDs to tile vertex storage IDs.
@@ -338,7 +340,7 @@ impl<D> Renderer<D> where D: Device {
     }
 
     pub fn render_command(&mut self, command: &RenderCommand) {
-        println!("render command: {:?}", command);
+        debug!("render command: {:?}", command);
         match *command {
             RenderCommand::Start { bounding_quad, path_count, needs_readable_framebuffer } => {
                 self.start_rendering(bounding_quad, path_count, needs_readable_framebuffer);
@@ -389,6 +391,7 @@ impl<D> Renderer<D> where D: Device {
         self.device.end_commands();
 
         self.back_frame.path_info_storage_allocator.end_frame();
+        self.back_frame.dice_metadata_storage_allocator.end_frame();
         self.back_frame.fill_vertex_storage_allocator.end_frame();
         self.back_frame.fill_tile_map_storage_allocator.end_frame();
         self.back_frame.tile_vertex_storage_allocator.end_frame();
@@ -632,7 +635,6 @@ impl<D> Renderer<D> where D: Device {
     }
 
     fn upload_scene(&mut self, segments: &Segments) {
-        println!("upload_scene({})", segments.indices.len());
         self.device.allocate_buffer(&self.points_buffer,
                                     BufferData::Memory(&segments.points),
                                     BufferTarget::Storage);
@@ -672,13 +674,7 @@ impl<D> Renderer<D> where D: Device {
     fn allocate_fill_tile_map(&mut self, tile_count: u32) -> StorageID {
         self.back_frame.fill_tile_map_storage_allocator.allocate(&self.device,
                                                                  tile_count as u64,
-                                                                 |device, size| {
-            let buffer = device.create_buffer(BufferUploadMode::Dynamic);
-            device.allocate_buffer::<i32>(&buffer,
-                                            BufferData::Uninitialized(size as usize),
-                                            BufferTarget::Storage);
-            buffer
-        })
+                                                                 BufferTarget::Storage)
     }
 
     fn initialize_tiles(&mut self,
@@ -686,20 +682,10 @@ impl<D> Renderer<D> where D: Device {
                         fill_tile_map_storage_id: StorageID,
                         tile_count: u32,
                         tile_path_info: &[TilePathInfo]) {
-        println!("initialize_tiles(path_count={} tile_count={})",
-                 tile_path_info.len(),
-                 tile_count);
-
         let path_info_storage_id =
             self.back_frame.path_info_storage_allocator.allocate(&self.device,
                                                                  tile_path_info.len() as u64,
-                                                                 |device, size| {
-                let tile_path_info_buffer = device.create_buffer(BufferUploadMode::Dynamic);
-                device.allocate_buffer::<TilePathInfo>(&tile_path_info_buffer,
-                                                       BufferData::Uninitialized(size as usize),
-                                                       BufferTarget::Storage);
-                tile_path_info_buffer
-            });
+                                                                 BufferTarget::Storage);
         let tile_path_info_buffer = self.back_frame
                                         .path_info_storage_allocator
                                         .get(path_info_storage_id);
@@ -754,14 +740,7 @@ impl<D> Renderer<D> where D: Device {
                                                 .tile_propagate_metadata_storage_allocator
                                                 .allocate(device,
                                                           propagate_metadata.len() as u64,
-                                                          |device, size| {
-            let buffer = device.create_buffer(BufferUploadMode::Dynamic);
-            device.allocate_buffer::<PropagateMetadata>(&buffer,
-                                                        BufferData::Uninitialized(size as usize),
-                                                        BufferTarget::Storage);
-            buffer
-        });
-
+                                                          BufferTarget::Storage);
         let propagate_metadata_buffer = self.back_frame
                                             .tile_propagate_metadata_storage_allocator
                                             .get(propagate_metadata_storage_id);
@@ -805,20 +784,29 @@ impl<D> Renderer<D> where D: Device {
                      transform: Transform2F)
                      -> (D::Buffer, u32) {
         // FIXME(pcwalton): Buffer reuse
-        let indirect_compute_params_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
         let output_segments_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
-        let dice_metadata_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+
+        let dice_metadata_storage_id =
+            self.back_frame.dice_metadata_storage_allocator.allocate(&self.device,
+                                                                     dice_metadata.len() as u64,
+                                                                     DiceMetadataStorage::new);
+        let dice_metadata_storage = self.back_frame
+                                        .dice_metadata_storage_allocator
+                                        .get(dice_metadata_storage_id);
+
         let index_count = self.point_index_count;
-        self.device.allocate_buffer(&indirect_compute_params_buffer,
-                                    BufferData::Memory(&[0, 0, 0, 0, index_count, 0, 0, 0]),
-                                    BufferTarget::Storage);
+        self.device.upload_to_buffer(&dice_metadata_storage.indirect_draw_params_buffer,
+                                     0,
+                                     &[0, 0, 0, 0, index_count, 0, 0, 0],
+                                     BufferTarget::Storage);
         // FIXME(pcwalton): Better memory management!!
         self.device.allocate_buffer::<[u32; 8]>(&output_segments_buffer,
                                                 BufferData::Uninitialized(3 * 1024 * 1024),
                                                 BufferTarget::Storage);
-        self.device.allocate_buffer(&dice_metadata_buffer,
-                                    BufferData::Memory(dice_metadata),
-                                    BufferTarget::Storage);
+        self.device.upload_to_buffer(&dice_metadata_storage.metadata_buffer,
+                                     0,
+                                     dice_metadata,
+                                     BufferTarget::Storage);
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
         self.device.begin_timer_query(&timer_query);
@@ -846,13 +834,14 @@ impl<D> Renderer<D> where D: Device {
             images: &[],
             storage_buffers: &[
                 (&self.dice_compute_program.compute_indirect_params_storage_buffer,
-                 &indirect_compute_params_buffer),
+                 &dice_metadata_storage.indirect_draw_params_buffer),
                 (&self.dice_compute_program.points_storage_buffer, &self.points_buffer),
                 (&self.dice_compute_program.input_indices_storage_buffer,
                  &self.point_indices_buffer),
                 (&self.dice_compute_program.output_segments_storage_buffer,
                  &output_segments_buffer),
-                (&self.dice_compute_program.dice_metadata_storage_buffer, &dice_metadata_buffer),
+                (&self.dice_compute_program.dice_metadata_storage_buffer,
+                 &dice_metadata_storage.metadata_buffer),
             ],
         });
 
@@ -862,13 +851,10 @@ impl<D> Renderer<D> where D: Device {
         self.device.end_commands();
         self.device.begin_commands();
 
-        let indirect_compute_params = self.device.read_buffer(&indirect_compute_params_buffer,
-                                                              BufferTarget::Storage,
-                                                              0..8);
-        println!("GPU dicing: indices={} output_segments={}",
-                 index_count,
-                 indirect_compute_params[5]);
-
+        let indirect_compute_params =
+            self.device.read_buffer(&dice_metadata_storage.indirect_draw_params_buffer,
+                                    BufferTarget::Storage,
+                                    0..8);
         (output_segments_buffer, indirect_compute_params[5])
     }
 
@@ -974,24 +960,6 @@ impl<D> Renderer<D> where D: Device {
         let indirect_draw_params = self.device.read_buffer(indirect_draw_params_buffer,
                                                            BufferTarget::Storage,
                                                            0..8);
-        println!("GPU binning: segments={} vertex_count={} instance_count={} alpha_tile_count={}",
-                 segment_count,
-                 indirect_draw_params[0],
-                 indirect_draw_params[1],
-                 indirect_draw_params[4]);
-
-                                                      /*
-        let metadata_buffer = self.device.read_buffer(&self.back_frame.bin_metadata_buffer,
-                                                      BufferTarget::Storage,
-                                                      0..4);
-        println!("GPU binning: fill count={} alpha tile count={}",
-                 metadata_buffer[0],
-                 metadata_buffer[1]);
-
-        println!("binning {} segments took {} ms",
-                 segments.len(),
-                 duration.as_secs_f64() * 1000.0);
-                 */
 
         if self.gpu_features().contains(RendererGPUFeatures::FILL_IN_COMPUTE) {
             FillStorageInfo::Compute(FillComputeStorageInfo {
@@ -1127,16 +1095,11 @@ impl<D> Renderer<D> where D: Device {
         let fill_tile_count = last_fill_tile - first_fill_tile + 1;
 
         // Allocate fill tile map.
-        let fill_tile_map_storage_id =
-            self.back_frame.fill_tile_map_storage_allocator.allocate(&self.device,
-                                                                     last_fill_tile as u64,
-                                                                     |device, size| {
-                let buffer = device.create_buffer(BufferUploadMode::Dynamic);
-                device.allocate_buffer::<i32>(&buffer,
-                                              BufferData::Uninitialized(size as usize),
-                                              BufferTarget::Storage);
-                buffer
-            });
+        let fill_tile_map_storage_id = self.back_frame
+                                           .fill_tile_map_storage_allocator
+                                           .allocate(&self.device,
+                                                     last_fill_tile as u64,
+                                                     BufferTarget::Storage);
 
         buffered_fills.clear();
 
@@ -1152,7 +1115,6 @@ impl<D> Renderer<D> where D: Device {
                              fill_storage_id: StorageID,
                              tile_storage_id: Option<StorageID>,
                              fill_count: PrimitiveCount) {
-        println!("draw_fills_via_raster()");
         let fill_raster_program = match self.fill_program {
             FillProgram::Raster(ref fill_raster_program) => fill_raster_program,
             _ => unreachable!(),
@@ -1246,11 +1208,6 @@ impl<D> Renderer<D> where D: Device {
             fill_tile_count,
         } = fill_storage_info;
 
-        println!("draw_fills_via_compute(first_fill_tile={}, fill_tile_count={}, tile_storage_id={:?})",
-                 first_fill_tile,
-                 fill_tile_count,
-                 tile_storage_id);
-
         let fill_compute_program = match self.fill_program {
             FillProgram::Compute(ref fill_compute_program) => fill_compute_program,
             _ => unreachable!(),
@@ -1331,12 +1288,6 @@ impl<D> Renderer<D> where D: Device {
         let temp_texture = self.device.create_texture(TextureFormat::RGBA16F, mask_texture_size);
         let temp_framebuffer = self.device.create_framebuffer(temp_texture);
 
-        /*
-        println!("mask_texture_size={:?} mask_clipped_tile_count={}",
-                 mask_texture_size,
-                 max_clipped_tile_count);
-                 */
-
         let clip_vertex_storage =
             self.back_frame.clip_vertex_storage_allocator.get(clip_storage_id);
 
@@ -1391,7 +1342,6 @@ impl<D> Renderer<D> where D: Device {
 
     // Computes backdrops, performs clipping, and populates Z buffers.
     fn prepare_tiles(&mut self, batch: &PrepareTilesBatch) {
-        println!("prepare_tiles(segment count={})", batch.segment_count);
         // Upload tiles to GPU or initialize them as appropriate.
         self.stats.alpha_tile_count += batch.tile_count as usize;
         let tile_vertex_storage_id = self.allocate_tiles(batch.tile_count);
@@ -1663,7 +1613,6 @@ impl<D> Renderer<D> where D: Device {
                   color_texture_0: Option<TileBatchTexture>,
                   blend_mode: BlendMode,
                   filter: Filter) {
-        println!("draw_tiles(tile_count={})", tile_count);
         // TODO(pcwalton): Disable blend for solid tiles.
 
         let needs_readable_framebuffer = blend_mode.needs_readable_framebuffer();
@@ -2226,13 +2175,15 @@ impl<D> Frame<D> where D: Device {
                                                                      &quad_vertex_indices_buffer);
         let stencil_vertex_array = StencilVertexArray::new(device, &stencil_program);
 
-        let path_info_storage_allocator = StorageAllocator::new(MIN_PATH_INFO_STORAGE_CLASS);
+        let path_info_storage_allocator = BufferStorageAllocator::new(MIN_PATH_INFO_STORAGE_CLASS);
+        let dice_metadata_storage_allocator =
+            StorageAllocator::new(MIN_DICE_METADATA_STORAGE_CLASS);
         let fill_vertex_storage_allocator = StorageAllocator::new(MIN_FILL_STORAGE_CLASS);
         let fill_tile_map_storage_allocator =
-            StorageAllocator::new(MIN_FILL_TILE_MAP_STORAGE_CLASS);
+            BufferStorageAllocator::new(MIN_FILL_TILE_MAP_STORAGE_CLASS);
         let tile_vertex_storage_allocator = StorageAllocator::new(MIN_TILE_STORAGE_CLASS);
         let tile_propagate_metadata_storage_allocator =
-            StorageAllocator::new(MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS);
+            BufferStorageAllocator::new(MIN_TILE_PROPAGATE_METADATA_STORAGE_CLASS);
         let clip_vertex_storage_allocator = StorageAllocator::new(MIN_CLIP_VERTEX_STORAGE_CLASS);
 
         let texture_metadata_texture_size = vec2i(TEXTURE_METADATA_TEXTURE_WIDTH,
@@ -2266,6 +2217,7 @@ impl<D> Frame<D> where D: Device {
             blit_buffer_vertex_array,
             clear_vertex_array,
             path_info_storage_allocator,
+            dice_metadata_storage_allocator,
             tile_vertex_storage_allocator,
             fill_vertex_storage_allocator,
             fill_tile_map_storage_allocator,
@@ -2306,6 +2258,11 @@ struct StorageAllocator<D, S> where D: Device {
     buckets: Vec<StorageAllocatorBucket<S>>,
     min_size_class: usize,
     phantom: PhantomData<D>,
+}
+
+struct BufferStorageAllocator<D, T> where D: Device {
+    allocator: StorageAllocator<D, D::Buffer>,
+    phantom: PhantomData<T>,
 }
 
 struct StorageAllocatorBucket<S> {
@@ -2351,6 +2308,37 @@ impl<D, S> StorageAllocator<D, S> where D: Device {
     }
 }
 
+impl<D, T> BufferStorageAllocator<D, T> where D: Device {
+    fn new(min_size_class: usize) -> BufferStorageAllocator<D, T> {
+        BufferStorageAllocator {
+            allocator: StorageAllocator::new(min_size_class),
+            phantom: PhantomData,
+        }
+    }
+
+    fn allocate(&mut self, device: &D, size: u64, target: BufferTarget) -> StorageID
+                where D: Device {
+        self.allocator.allocate(device, size, |device, size| {
+            let buffer = device.create_buffer(BufferUploadMode::Dynamic);
+            device.allocate_buffer::<T>(&buffer, BufferData::Uninitialized(size as usize), target);
+            buffer
+        })
+    }
+
+    fn get(&self, storage_id: StorageID) -> &D::Buffer {
+        self.allocator.get(storage_id)
+    }
+
+    fn end_frame(&mut self) {
+        self.allocator.end_frame()
+    }
+}
+
+struct DiceMetadataStorage<D> where D: Device {
+    metadata_buffer: D::Buffer,
+    indirect_draw_params_buffer: D::Buffer,
+}
+
 struct FillVertexStorage<D> where D: Device {
     vertex_buffer: D::Buffer,
     // Will be `None` if we're using compute.
@@ -2368,6 +2356,20 @@ struct ClipVertexStorage<D> where D: Device {
     tile_clip_copy_vertex_array: ClipTileCopyVertexArray<D>,
     tile_clip_combine_vertex_array: ClipTileCombineVertexArray<D>,
     vertex_buffer: D::Buffer,
+}
+
+impl<D> DiceMetadataStorage<D> where D: Device {
+    fn new(device: &D, size: u64) -> DiceMetadataStorage<D> {
+        let metadata_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        let indirect_draw_params_buffer = device.create_buffer(BufferUploadMode::Dynamic);
+        device.allocate_buffer::<DiceMetadata>(&metadata_buffer,
+                                               BufferData::Uninitialized(size as usize),
+                                               BufferTarget::Storage);
+        device.allocate_buffer::<u32>(&indirect_draw_params_buffer,
+                                      BufferData::Uninitialized(8),
+                                      BufferTarget::Storage);
+        DiceMetadataStorage { metadata_buffer, indirect_draw_params_buffer }
+    }
 }
 
 impl<D> FillVertexStorage<D> where D: Device {

@@ -20,7 +20,7 @@ use pathfinder_gpu::{RenderState, RenderTarget, TextureData, TextureFormat, Unif
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::transform3d::Transform4F;
 use pathfinder_geometry::vector::{Vector2I, Vector4F};
-use pathfinder_renderer::gpu::options::{DestFramebuffer, RendererGPUFeatures, RendererOptions};
+use pathfinder_renderer::gpu::options::{DestFramebuffer, RendererOptions};
 use pathfinder_renderer::options::RenderTransform;
 use std::path::PathBuf;
 

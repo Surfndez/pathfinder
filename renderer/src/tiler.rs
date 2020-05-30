@@ -11,11 +11,10 @@
 //! Implements the fast lattice-clipping algorithm from Nehab and Hoppe, "Random-Access Rendering
 //! of General Vector Graphics" 2006.
 
-use crate::builder::{BuiltPath, BuiltPathBinCPUData, BuiltPathData, ObjectBuilder, Occluder, SceneBuilder};
+use crate::builder::{BuiltPath, BuiltPathBinCPUData, BuiltPathData, ObjectBuilder, SceneBuilder};
 use crate::gpu::options::RendererGPUFeatures;
 use crate::gpu_data::AlphaTileId;
 use crate::options::PrepareMode;
-use crate::tile_map::DenseTileMap;
 use crate::tiles::{DrawTilingPathInfo, TILE_HEIGHT, TILE_WIDTH, TilingPathInfo};
 use pathfinder_content::fill::FillRule;
 use pathfinder_content::outline::{ContourIterFlags, Outline};
@@ -32,7 +31,6 @@ pub(crate) struct Tiler<'a, 'b, 'c, 'd> {
     pub(crate) object_builder: ObjectBuilder,
     outline: &'a Outline,
     clip_path: Option<&'a BuiltPath>,
-    path_info: TilingPathInfo<'a>,
 }
 
 impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
@@ -46,10 +44,6 @@ impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
                       path_info: TilingPathInfo<'a>)
                       -> Tiler<'a, 'b, 'c, 'd> {
         let bounds = outline.bounds().intersection(view_box).unwrap_or(RectF::default());
-
-        let tiled_on_cpu = !scene_builder.sink
-                                         .gpu_features
-                                         .contains(RendererGPUFeatures::BIN_ON_GPU);
 
         let clip_path = match path_info {
             TilingPathInfo::Draw(DrawTilingPathInfo { clip_path_id: Some(clip_path_id), .. }) => {
@@ -65,7 +59,7 @@ impl<'a, 'b, 'c, 'd> Tiler<'a, 'b, 'c, 'd> {
                                                 prepare_mode,
                                                 &path_info);
 
-        Tiler { scene_builder, object_builder, outline, clip_path, path_info }
+        Tiler { scene_builder, object_builder, outline, clip_path }
     }
 
     pub(crate) fn generate_tiles(&mut self) {
@@ -346,32 +340,4 @@ fn process_line_segment(line_segment: LineSegment2F,
 enum StepDirection {
     X,
     Y,
-}
-
-fn create_segments(outline: &Outline) -> Vec<LineSegment2F> {
-    let mut segments = vec![];
-    for contour in outline.contours() {
-        for segment in contour.iter(ContourIterFlags::empty()) {
-            flatten_segment(&mut segments, &segment);
-        }
-    }
-    segments
-}
-
-fn flatten_segment(segments: &mut Vec<LineSegment2F>, segment: &Segment) {
-    // TODO(pcwalton): Stop degree elevating.
-    if segment.is_quadratic() {
-        let cubic = segment.to_cubic();
-        return flatten_segment(segments, &cubic);
-    }
-
-    if segment.is_line() || (segment.is_cubic() && segment.as_cubic_segment().is_flat(0.25)) {
-        segments.push(segment.baseline);
-        return;
-    }
-
-    // TODO(pcwalton): Use a smarter flattening algorithm.
-    let (prev, next) = segment.split(0.5);
-    flatten_segment(segments, &prev);
-    flatten_segment(segments, &next);
 }

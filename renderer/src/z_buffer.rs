@@ -12,10 +12,9 @@
 
 use crate::builder::Occluder;
 use crate::gpu_data::{AlphaTileId, TileObjectPrimitive};
-use crate::paint::{PaintId, PaintMetadata};
+use crate::paint::PaintId;
 use crate::tile_map::DenseTileMap;
 use crate::tiles;
-use pathfinder_content::effects::BlendMode;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2I;
 use vec_map::VecMap;
@@ -24,12 +23,6 @@ pub(crate) struct ZBuffer {
     buffer: DenseTileMap<u32>,
     depth_metadata: VecMap<DepthMetadata>,
 }
-
-/*
-pub(crate) struct SolidTiles {
-    pub(crate) batches: Vec<TileBatch>,
-}
-*/
 
 #[derive(Clone, Copy)]
 pub(crate) struct DepthMetadata {
@@ -59,69 +52,6 @@ impl ZBuffer {
             let tile_index = self.buffer.coords_to_index_unchecked(solid_tile.coords);
             let z_dest = &mut self.buffer.data[tile_index as usize];
             *z_dest = u32::max(*z_dest, depth);
-        }
-    }
-
-    // TODO(pcwalton): Don't create a separate buffer.
-    /*
-    pub(crate) fn build_solid_tiles(&self, paint_metadata: &[PaintMetadata]) -> SolidTiles {
-        let mut solid_tiles = SolidTiles { batches: vec![] };
-
-        for tile_index in 0..self.buffer.data.len() {
-            let depth = self.buffer.data[tile_index];
-            if depth == 0 {
-                continue;
-            }
-
-            let tile_coords = self.buffer.index_to_coords(tile_index);
-
-            let depth_metadata = self.depth_metadata[depth as usize];
-            let paint_id = depth_metadata.paint_id;
-            let paint_metadata = &paint_metadata[paint_id.0 as usize];
-
-            let tile_position = tile_coords + self.buffer.rect.origin();
-
-            // Create a batch if necessary.
-            let paint_tile_batch_texture = paint_metadata.tile_batch_texture();
-            let paint_filter = paint_metadata.filter();
-            match solid_tiles.batches.last() {
-                Some(TileBatch { color_texture: tile_batch_texture, filter: tile_filter, .. }) if
-                        *tile_batch_texture == paint_tile_batch_texture &&
-                        *tile_filter == paint_filter => {}
-                _ => {
-                    // Batch break.
-                    //
-                    // TODO(pcwalton): We could be more aggressive with batching here, since we
-                    // know there are no overlaps.
-                    solid_tiles.batches.push(TileBatch {
-                        color_texture: paint_tile_batch_texture,
-                        tiles: vec![],
-                        filter: paint_filter,
-                        blend_mode: BlendMode::default(),
-                    });
-                }
-            }
-
-            let batch = solid_tiles.batches.last_mut().unwrap();
-            batch.tiles.push(TileObjectPrimitive::new_solid_from_paint_id(tile_position,
-                                                                          paint_id));
-        }
-
-        solid_tiles
-    }*/
-}
-
-impl TileObjectPrimitive {
-    pub(crate) fn new_solid_from_paint_id(tile_origin: Vector2I, path_id: u32, paint_id: PaintId)
-                                          -> TileObjectPrimitive {
-        TileObjectPrimitive {
-            tile_x: tile_origin.x() as i16,
-            tile_y: tile_origin.y() as i16,
-            backdrop: 0,
-            alpha_tile_id: AlphaTileId(0),
-            path_id,
-            ctrl: 0,
-            color: paint_id.0,
         }
     }
 }
