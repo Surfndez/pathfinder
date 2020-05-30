@@ -103,7 +103,7 @@ kernel void main0(constant int& uTileCount [[buffer(0)]], constant int& uPathCou
         if (all(bool4(tileCoords >= nextPathTileRect.xy, tileCoords < nextPathTileRect.zw)))
         {
             int nextPathTileWidth = nextPathTileRect.z - nextPathTileRect.x;
-            nextTileIndex = nextPathInfo.z + uint(nextPathTileRect.x + (nextPathTileRect.y * nextPathTileWidth));
+            nextTileIndex = nextPathInfo.z + uint(tileCoords.x + (tileCoords.y * nextPathTileWidth));
             break;
         }
         nextTilePathIndex++;

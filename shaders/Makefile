@@ -38,6 +38,7 @@ COMPUTE_SHADERS=\
 	fill.cs.glsl \
 	init.cs.glsl \
 	propagate.cs.glsl \
+	tile_fill.cs.glsl \
 	$(EMPTY)
 
 INCLUDES=\

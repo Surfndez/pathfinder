@@ -16,7 +16,7 @@ use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, Cl
 use crate::gpu::shaders::{ClipTileCopyVertexArray, CopyTileProgram, CopyTileVertexArray};
 use crate::gpu::shaders::{DiceComputeProgram, FillProgram, FillVertexArray, InitProgram};
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PROPAGATE_WORKGROUP_SIZE, ReprojectionProgram};
-use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
+use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray, TileFillProgram};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
 use crate::gpu_data::{BackdropInfo, Clip, DiceMetadata, Fill, PrepareTilesBatch};
 use crate::gpu_data::{PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata};
@@ -124,6 +124,7 @@ pub struct Renderer<D> where D: Device {
     tile_copy_program: CopyTileProgram<D>,
     tile_clip_combine_program: ClipTileCombineProgram<D>,
     tile_clip_copy_program: ClipTileCopyProgram<D>,
+    tile_fill_program: TileFillProgram<D>,
     tile_post_programs: Option<TilePostPrograms<D>>,
     stencil_program: StencilProgram<D>,
     reprojection_program: ReprojectionProgram<D>,
@@ -212,6 +213,7 @@ impl<D> Renderer<D> where D: Device {
         let tile_copy_program = CopyTileProgram::new(&device, resources);
         let tile_clip_combine_program = ClipTileCombineProgram::new(&device, resources);
         let tile_clip_copy_program = ClipTileCopyProgram::new(&device, resources);
+        let tile_fill_program = TileFillProgram::new(&device, resources);
         let stencil_program = StencilProgram::new(&device, resources);
         let reprojection_program = ReprojectionProgram::new(&device, resources);
 
@@ -278,6 +280,7 @@ impl<D> Renderer<D> where D: Device {
             tile_copy_program,
             tile_clip_combine_program,
             tile_clip_copy_program,
+            tile_fill_program,
             tile_post_programs,
             bin_compute_program,
             dice_compute_program,
@@ -370,12 +373,14 @@ impl<D> Renderer<D> where D: Device {
             RenderCommand::PopRenderTarget => self.pop_render_target(),
             RenderCommand::PrepareTiles(ref batch) => self.prepare_tiles(batch),
             RenderCommand::DrawTiles(ref batch) => {
+                /*
                 let batch_info = self.back_frame.tile_batch_info[batch.tile_batch_id.0 as usize];
                 self.draw_tiles(batch_info.tile_count,
                                 batch_info.tile_vertex_storage_id,
                                 batch.color_texture,
                                 batch.blend_mode,
                                 batch.filter)
+                                */
             }
             RenderCommand::Finish { cpu_build_time } => {
                 self.stats.cpu_build_time = cpu_build_time;
@@ -420,6 +425,9 @@ impl<D> Renderer<D> where D: Device {
         if let DestFramebuffer::Other(_) = self.dest_framebuffer {
             needs_readable_framebuffer = false;
         }
+
+        // FIXME(pcwalton): Bogus!
+        needs_readable_framebuffer = true;
 
         if self.flags.contains(RendererFlags::USE_DEPTH) {
             self.draw_stencil(&bounding_quad);
@@ -1397,6 +1405,7 @@ impl<D> Renderer<D> where D: Device {
 
         // Propagate backdrops, bin fills, render fills, and/or perform clipping on GPU if
         // necessary.
+        let mut fill_storage_id = None;
         let propagate_metadata_storage_id = match batch.modal {
             PrepareTilesModalInfo::CPU(_) => None,
             PrepareTilesModalInfo::GPU(ref gpu_info) => {
@@ -1422,12 +1431,14 @@ impl<D> Renderer<D> where D: Device {
                     self.reallocate_alpha_tile_pages_if_necessary(true);
                     match fill_storage_info {
                         FillStorageInfo::Raster(fill_storage_info) => {
+                            fill_storage_id = Some(fill_storage_info.fill_storage_id);
                             self.draw_fills_via_raster(
                                 fill_storage_info.fill_storage_id,
                                 Some(tile_vertex_storage_id),
                                 PrimitiveCount::Direct(fill_storage_info.fill_count));
                         }
                         FillStorageInfo::Compute(fill_storage_info) => {
+                            fill_storage_id = Some(fill_storage_info.fill_storage_id);
                             self.draw_fills_via_compute(fill_storage_info,
                                                         Some(tile_vertex_storage_id));
                         }
@@ -1466,6 +1477,10 @@ impl<D> Renderer<D> where D: Device {
 
             self.clip_tiles(clip_storage_ids.vertices, clipped_path_info.max_clipped_tile_count);
         }
+
+        self.draw_and_fill_tiles(tile_vertex_storage_id,
+                                 fill_storage_id.unwrap(),
+                                 tile_link_map_storage_id);
     }
 
     fn tile_transform(&self) -> Transform4F {
@@ -1753,6 +1768,54 @@ impl<D> Renderer<D> where D: Device {
         self.current_timer.as_mut().unwrap().tile_times.push(TimerFuture::new(timer_query));
 
         self.preserve_draw_framebuffer();
+    }
+
+    fn draw_and_fill_tiles(&mut self,
+                           tile_storage_id: StorageID,
+                           fill_storage_id: StorageID,
+                           tile_link_map_storage_id: StorageID) {
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        let dest_texture = self.device.framebuffer_texture(&self.back_frame
+                                                                .intermediate_dest_framebuffer);
+
+        let fill_vertex_storage =
+            self.back_frame.fill_vertex_storage_allocator.get(fill_storage_id);
+
+        let tiles_buffer = &self.back_frame
+                                .tile_vertex_storage_allocator
+                                .get(tile_storage_id)
+                                .vertex_buffer;
+
+        let tile_link_map_buffer =
+            self.back_frame.tile_link_map_storage_allocator.get(tile_link_map_storage_id);
+
+        let framebuffer_tile_size = self.framebuffer_tile_size();
+        let compute_dimensions = ComputeDimensions {
+            x: framebuffer_tile_size.x() as u32,
+            y: framebuffer_tile_size.y() as u32,
+            z: 1,
+        };
+        self.device.dispatch_compute(compute_dimensions, &ComputeState {
+            program: &self.tile_fill_program.program,
+            textures: &[(&self.tile_fill_program.area_lut_texture, &self.area_lut_texture)],
+            uniforms: &[
+                (&self.tile_fill_program.framebuffer_tile_size_uniform,
+                 UniformData::IVec2(framebuffer_tile_size.0)),
+            ],
+            images: &[(&self.tile_fill_program.dest_image, &dest_texture, ImageAccess::Write)],
+            storage_buffers: &[
+                (&self.tile_fill_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
+                (&self.tile_fill_program.tile_link_map_storage_buffer, &tile_link_map_buffer),
+                (&self.tile_fill_program.tiles_storage_buffer, &tiles_buffer),
+                (&self.tile_fill_program.initial_tile_map_storage_buffer,
+                 &self.back_frame.initial_tile_map_buffer),
+            ],
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
     }
 
     fn copy_alpha_tiles_to_dest_blend_texture(&mut self, tile_count: u32, storage_id: StorageID) {

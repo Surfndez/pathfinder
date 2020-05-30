@@ -1031,3 +1031,42 @@ impl<D> InitProgram<D> where D: Device {
         }
     }
 }
+
+pub struct TileFillProgram<D> where D: Device {
+    pub program: D::Program,
+    pub dest_image: D::ImageParameter,
+    pub area_lut_texture: D::TextureParameter,
+    pub framebuffer_tile_size_uniform: D::Uniform,
+    pub fills_storage_buffer: D::StorageBuffer,
+    pub tile_link_map_storage_buffer: D::StorageBuffer,
+    pub tiles_storage_buffer: D::StorageBuffer,
+    pub initial_tile_map_storage_buffer: D::StorageBuffer,
+}
+
+impl<D> TileFillProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> TileFillProgram<D> {
+        let mut program = device.create_compute_program(resources, "tile_fill");
+        let local_size = ComputeDimensions { x: TILE_WIDTH, y: TILE_HEIGHT / 4, z: 1 };
+        device.set_compute_program_local_size(&mut program, local_size);
+
+        let dest_image = device.get_image_parameter(&program, "Dest");
+        let area_lut_texture = device.get_texture_parameter(&program, "AreaLUT");
+        let framebuffer_tile_size_uniform = device.get_uniform(&program, "FramebufferTileSize");
+        let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 0);
+        let tile_link_map_storage_buffer = device.get_storage_buffer(&program, "TileLinkMap", 1);
+        let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 2);
+        let initial_tile_map_storage_buffer =
+            device.get_storage_buffer(&program, "InitialTileMap", 3);
+
+        TileFillProgram {
+            program,
+            dest_image,
+            area_lut_texture,
+            framebuffer_tile_size_uniform,
+            fills_storage_buffer,
+            tile_link_map_storage_buffer,
+            tiles_storage_buffer,
+            initial_tile_map_storage_buffer,
+        }
+    }
+}

@@ -98,7 +98,7 @@ void main() {
         if (all(bvec4(greaterThanEqual(tileCoords, nextPathTileRect.xy),
                       lessThan(tileCoords, nextPathTileRect.zw)))) {
             int nextPathTileWidth = nextPathTileRect.z - nextPathTileRect.x;
-            nextTileIndex = nextPathInfo.z + uint(nextPathTileRect.x + nextPathTileRect.y *
+            nextTileIndex = nextPathInfo.z + uint(tileCoords.x + tileCoords.y *
                                                   nextPathTileWidth);
             break;
         }
