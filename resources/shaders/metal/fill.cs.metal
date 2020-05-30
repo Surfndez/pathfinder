@@ -6,9 +6,9 @@
 
 using namespace metal;
 
-struct bFillTileMap
+struct bTileLinkMap
 {
-    int iFillTileMap[1];
+    int2 iTileLinkMap[1];
 };
 
 struct bFills
@@ -37,7 +37,7 @@ float4 computeCoverage(thread const float2& from, thread const float2& to, threa
     return areaLUT.sample(areaLUTSmplr, (float2(y + 8.0, abs(d * dX)) / float2(16.0)), level(0.0)) * dX;
 }
 
-kernel void main0(constant int2& uTileRange [[buffer(0)]], constant int& uBinnedOnGPU [[buffer(3)]], const device bFillTileMap& _164 [[buffer(1)]], const device bFills& _187 [[buffer(2)]], const device bTiles& _262 [[buffer(4)]], texture2d<float> uAreaLUT [[texture(0)]], texture2d<float, access::write> uDest [[texture(1)]], sampler uAreaLUTSmplr [[sampler(0)]], uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]])
+kernel void main0(constant int2& uTileRange [[buffer(0)]], constant int& uBinnedOnGPU [[buffer(3)]], const device bTileLinkMap& _164 [[buffer(1)]], const device bFills& _187 [[buffer(2)]], const device bTiles& _262 [[buffer(4)]], texture2d<float> uAreaLUT [[texture(0)]], texture2d<float, access::write> uDest [[texture(1)]], sampler uAreaLUTSmplr [[sampler(0)]], uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]])
 {
     int2 tileSubCoord = int2(gl_LocalInvocationID.xy) * int2(1, 4);
     uint tileIndexOffset = gl_WorkGroupID.x | (gl_WorkGroupID.y << uint(16));
@@ -46,7 +46,7 @@ kernel void main0(constant int2& uTileRange [[buffer(0)]], constant int& uBinned
     {
         return;
     }
-    int fillIndex = _164.iFillTileMap[tileIndex];
+    int fillIndex = _164.iTileLinkMap[tileIndex].x;
     if (fillIndex < 0)
     {
         return;

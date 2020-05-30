@@ -31,8 +31,8 @@ layout(std430, binding = 0) buffer bFills {
     restrict readonly uint iFills[];
 };
 
-layout(std430, binding = 1) buffer bFillTileMap {
-    restrict readonly int iFillTileMap[];
+layout(std430, binding = 1) buffer bTileLinkMap {
+    restrict readonly ivec2 iTileLinkMap[];
 };
 
 layout(std430, binding = 2) buffer bTiles {
@@ -48,7 +48,7 @@ void main() {
     if (tileIndex >= uTileRange.y)
         return;
 
-    int fillIndex = iFillTileMap[tileIndex];
+    int fillIndex = iTileLinkMap[tileIndex].x;
     if (fillIndex < 0)
         return;
 

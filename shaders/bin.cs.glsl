@@ -65,8 +65,8 @@ layout(std430, binding = 4) buffer bTiles {
     restrict uint iTiles[];
 };
 
-layout(std430, binding = 5) buffer bFillTileMap {
-    restrict uint iFillTileMap[];
+layout(std430, binding = 5) buffer bTileLinkMap {
+    restrict uint iTileLinkMap[];
 };
 
 layout(std430, binding = 6) buffer bBackdrops {
@@ -118,7 +118,7 @@ void addFill(vec4 lineSegment, ivec2 tileCoords, ivec4 pathTileRect, uint pathTi
     uint fillLink;
     if (uFillInComputeEnabled != 0) {
         // Filling via compute. Build up a linked list.
-        fillLink = atomicExchange(iFillTileMap[tileIndex], fillIndex);
+        fillLink = atomicExchange(iTileLinkMap[tileIndex * 2], fillIndex);
     } else {
         // Filling via raster. The link refers to the alpha tile.
         fillLink = tileIndex;
