@@ -574,7 +574,6 @@ void calculateColor(int tileCtrl, int ctrl){
     maskAlpha = sampleMask(maskAlpha, uMaskTexture0, uMaskTextureSize0, vMaskTexCoord0, maskCtrl0);
 
 
-
     vec4 color = vBaseColor;
     int color0Combine =(ctrl >> 6)&
                                        0x3;

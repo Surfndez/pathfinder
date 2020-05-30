@@ -41,8 +41,6 @@ void main(){
     vec2 tileOrigin = vec2(aTileOrigin), tileOffset = vec2(aTileOffset);
     vec2 position =(tileOrigin + tileOffset)* uTileSize;
 
-
-
     ivec4 zValue = ivec4(texture(uZBuffer,(tileOrigin + vec2(0.5))/ vec2(uZBufferSize))* 255.0);
     if(aPathIndex <(zValue . x |(zValue . y << 8)|(zValue . z << 16)|(zValue . w << 24))){
         gl_Position = vec4(0.0);
