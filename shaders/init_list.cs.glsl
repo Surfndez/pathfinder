@@ -1,6 +1,6 @@
 #version 430
 
-// pathfinder/shaders/init.cs.glsl
+// pathfinder/shaders/init_list.cs.glsl
 //
 // Copyright © 2020 The Pathfinder Project Developers.
 //
@@ -10,7 +10,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Initializes the tile maps.
+// Initializes the linked list running through alpha tiles.
 
 #extension GL_GOOGLE_include_directive : enable
 
@@ -20,11 +20,10 @@ precision highp float;
 precision highp sampler2D;
 #endif
 
-layout(local_size_x = 64) in;
+layout(local_size_x = 2, local_size_y = 2) in;
 
 uniform ivec2 uFramebufferTileSize;
 uniform int uPathCount;
-uniform int uTileCount;
 
 layout(std430, binding = 0) buffer bTilePathInfo {
     // x: tile upper left, 16-bit packed x/y
@@ -39,11 +38,15 @@ layout(std430, binding = 1) buffer bTiles {
     // y: alpha tile ID (initialized to -1)
     // z: path ID
     // w: color/ctrl/backdrop word
-    restrict uvec4 iTiles[];
+    restrict readonly uvec4 iTiles[];
 };
 
 layout(std430, binding = 2) buffer bTileLinkMap {
     restrict uvec2 iTileLinkMap[];
+};
+
+layout(std430, binding = 3) buffer bInitialTileMap {
+    restrict uint iInitialTileMap[];
 };
 
 ivec4 unpackTileRect(uvec4 pathInfo) {
@@ -53,39 +56,26 @@ ivec4 unpackTileRect(uvec4 pathInfo) {
 }
 
 void main() {
-    uint tileCount = uint(uTileCount), pathCount = uint(uPathCount);
-
-    uint tileIndex = gl_GlobalInvocationID.x;
-    if (tileIndex >= tileCount)
+    ivec2 tileCoords = ivec2(gl_GlobalInvocationID.xy);
+    if (tileCoords.x >= uFramebufferTileSize.x || tileCoords.y >= uFramebufferTileSize.y)
         return;
 
-    uint lowPathIndex = 0, highPathIndex = pathCount;
-    int iteration = 0;
-    while (iteration < 1024 && lowPathIndex + 1 < highPathIndex) {
-        uint midPathIndex = lowPathIndex + (highPathIndex - lowPathIndex) / 2;
-        uint midTileIndex = iTilePathInfo[midPathIndex].z;
-        if (tileIndex < midTileIndex) {
-            highPathIndex = midPathIndex;
-        } else {
-            lowPathIndex = midPathIndex;
-            if (tileIndex == midTileIndex)
-                break;
+    int prevTileIndex = -1;
+    for (uint pathIndex = 0; pathIndex < uint(uPathCount); pathIndex++) {
+        uvec4 pathInfo = iTilePathInfo[pathIndex];
+        ivec4 tileRect = unpackTileRect(pathInfo);
+        if (all(bvec4(greaterThanEqual(tileCoords, tileRect.xy),
+                      lessThan(tileCoords, tileRect.zw)))) {
+            int tileWidth = tileRect.z - tileRect.x;
+            int tileIndex = int(pathInfo.z) + tileCoords.x + tileCoords.y * tileWidth;
+            if (prevTileIndex < 0)
+                iInitialTileMap[tileCoords.x + uFramebufferTileSize.x * tileCoords.y] = tileIndex;
+            else
+                iTileLinkMap[prevTileIndex].y = tileIndex;
+            prevTileIndex = tileIndex;
         }
-        iteration++;
     }
 
-    uint pathIndex = lowPathIndex;
-    uvec4 pathInfo = iTilePathInfo[pathIndex];
-
-    ivec4 tileRect = unpackTileRect(pathInfo);
-    uint tileOffset = tileIndex - pathInfo.z;
-    uint tileWidth = uint(tileRect.z - tileRect.x);
-    ivec2 tileCoords = tileRect.xy + ivec2(tileOffset % tileWidth, tileOffset / tileWidth);
-
-    iTiles[tileIndex] = uvec4((uint(tileCoords.x) & 0xffffu) | (uint(tileCoords.y) << 16),
-                              ~0u,
-                              pathIndex,
-                              pathInfo.w);
-
-    iTileLinkMap[tileIndex] = uvec2(~0, ~0);
+    if (prevTileIndex < 0)
+        iInitialTileMap[tileCoords.x + uFramebufferTileSize.x * tileCoords.y] = -1;
 }

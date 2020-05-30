@@ -37,6 +37,7 @@ COMPUTE_SHADERS=\
 	dice.cs.glsl \
 	fill.cs.glsl \
 	init.cs.glsl \
+	init_list.cs.glsl \
 	propagate.cs.glsl \
 	tile_fill.cs.glsl \
 	$(EMPTY)

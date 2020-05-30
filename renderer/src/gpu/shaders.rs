@@ -1000,7 +1000,6 @@ pub struct InitProgram<D> where D: Device {
     pub tile_path_info_storage_buffer: D::StorageBuffer,
     pub tiles_storage_buffer: D::StorageBuffer,
     pub tile_link_map_storage_buffer: D::StorageBuffer,
-    pub initial_tile_map_storage_buffer: D::StorageBuffer,
 }
 
 impl<D> InitProgram<D> where D: Device {
@@ -1016,14 +1015,48 @@ impl<D> InitProgram<D> where D: Device {
         let tile_path_info_storage_buffer = device.get_storage_buffer(&program, "TilePathInfo", 0);
         let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 1);
         let tile_link_map_storage_buffer = device.get_storage_buffer(&program, "TileLinkMap", 2);
-        let initial_tile_map_storage_buffer =
-            device.get_storage_buffer(&program, "InitialTileMap", 3);
 
         InitProgram {
             program,
             framebuffer_tile_size_uniform,
             path_count_uniform,
             tile_count_uniform,
+            tile_path_info_storage_buffer,
+            tiles_storage_buffer,
+            tile_link_map_storage_buffer,
+        }
+    }
+}
+
+pub struct InitListProgram<D> where D: Device {
+    pub program: D::Program,
+    pub framebuffer_tile_size_uniform: D::Uniform,
+    pub path_count_uniform: D::Uniform,
+    pub tile_path_info_storage_buffer: D::StorageBuffer,
+    pub tiles_storage_buffer: D::StorageBuffer,
+    pub tile_link_map_storage_buffer: D::StorageBuffer,
+    pub initial_tile_map_storage_buffer: D::StorageBuffer,
+}
+
+impl<D> InitListProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> InitListProgram<D> {
+        let mut program = device.create_compute_program(resources, "init_list");
+        let dimensions = ComputeDimensions { x: 2, y: 2, z: 1 };
+        device.set_compute_program_local_size(&mut program, dimensions);
+
+        let framebuffer_tile_size_uniform = device.get_uniform(&program, "FramebufferTileSize");
+        let path_count_uniform = device.get_uniform(&program, "PathCount");
+
+        let tile_path_info_storage_buffer = device.get_storage_buffer(&program, "TilePathInfo", 0);
+        let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 1);
+        let tile_link_map_storage_buffer = device.get_storage_buffer(&program, "TileLinkMap", 2);
+        let initial_tile_map_storage_buffer =
+            device.get_storage_buffer(&program, "InitialTileMap", 3);
+
+        InitListProgram {
+            program,
+            framebuffer_tile_size_uniform,
+            path_count_uniform,
             tile_path_info_storage_buffer,
             tiles_storage_buffer,
             tile_link_map_storage_buffer,

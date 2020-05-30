@@ -14,7 +14,7 @@ use crate::gpu::shaders::{BinComputeProgram, BlitBufferProgram, BlitBufferVertex
 use crate::gpu::shaders::{BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
 use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram};
 use crate::gpu::shaders::{ClipTileCopyVertexArray, CopyTileProgram, CopyTileVertexArray};
-use crate::gpu::shaders::{DiceComputeProgram, FillProgram, FillVertexArray, InitProgram};
+use crate::gpu::shaders::{DiceComputeProgram, FillProgram, FillVertexArray, InitListProgram, InitProgram};
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PROPAGATE_WORKGROUP_SIZE, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray, TileFillProgram};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
@@ -131,6 +131,7 @@ pub struct Renderer<D> where D: Device {
     bin_compute_program: BinComputeProgram<D>,
     dice_compute_program: DiceComputeProgram<D>,
     init_program: InitProgram<D>,
+    init_list_program: InitListProgram<D>,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
     tile_link_map: Vec<TileLinks>,
@@ -226,6 +227,7 @@ impl<D> Renderer<D> where D: Device {
         let bin_compute_program = BinComputeProgram::new(&device, resources);
         let dice_compute_program = DiceComputeProgram::new(&device, resources);
         let init_program = InitProgram::new(&device, resources);
+        let init_list_program = InitListProgram::new(&device, resources);
 
         let area_lut_texture =
             device.create_texture_from_png(resources, "area-lut", TextureFormat::RGBA8);
@@ -285,6 +287,7 @@ impl<D> Renderer<D> where D: Device {
             bin_compute_program,
             dice_compute_program,
             init_program,
+            init_list_program,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             tile_link_map: vec![],
@@ -706,7 +709,7 @@ impl<D> Renderer<D> where D: Device {
         // TODO(pcwalton): Buffer reuse!
         let framebuffer_tile_size = self.framebuffer_tile_size();
         let framebuffer_tile_count = framebuffer_tile_size.x() * framebuffer_tile_size.y();
-        let mut initial_tile_map_data: Vec<u32> = vec![!0; framebuffer_tile_count as usize];
+        let initial_tile_map_data: Vec<u32> = vec![!0; framebuffer_tile_count as usize];
         self.device.upload_to_buffer(&self.back_frame.initial_tile_map_buffer,
                                      0,
                                      &initial_tile_map_data,
@@ -734,23 +737,50 @@ impl<D> Renderer<D> where D: Device {
                  UniformData::Int(tile_path_info.len() as i32)),
                 (&self.init_program.tile_count_uniform, UniformData::Int(tile_count as i32)),
                 (&self.init_program.framebuffer_tile_size_uniform,
-                 UniformData::IVec2(self.framebuffer_tile_size().0)),
+                 UniformData::IVec2(framebuffer_tile_size.0)),
             ],
             images: &[],
             storage_buffers: &[
                 (&self.init_program.tiles_storage_buffer, tiles_buffer),
                 (&self.init_program.tile_path_info_storage_buffer, &tile_path_info_buffer),
                 (&self.init_program.tile_link_map_storage_buffer, &tile_link_map_buffer),
-                (&self.init_program.initial_tile_map_storage_buffer,
-                 &self.back_frame.initial_tile_map_buffer),
             ],
         });
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
 
-        self.device.end_commands();
-        self.device.begin_commands();
+        // Initialize list.
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        let compute_dimensions = ComputeDimensions {
+            x: (framebuffer_tile_size.x() as u32 + 1) / 2,
+            y: (framebuffer_tile_size.y() as u32 + 1) / 2,
+            z: 1,
+        };
+        self.device.dispatch_compute(compute_dimensions, &ComputeState {
+            program: &self.init_list_program.program,
+            textures: &[],
+            uniforms: &[
+                (&self.init_list_program.path_count_uniform,
+                 UniformData::Int(tile_path_info.len() as i32)),
+                (&self.init_list_program.framebuffer_tile_size_uniform,
+                 UniformData::IVec2(framebuffer_tile_size.0)),
+            ],
+            images: &[],
+            storage_buffers: &[
+                (&self.init_list_program.tiles_storage_buffer, tiles_buffer),
+                (&self.init_list_program.tile_path_info_storage_buffer, &tile_path_info_buffer),
+                (&self.init_list_program.tile_link_map_storage_buffer, &tile_link_map_buffer),
+                (&self.init_list_program.initial_tile_map_storage_buffer,
+                 &self.back_frame.initial_tile_map_buffer),
+            ],
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
     }
 
     fn upload_propagate_data(&mut self,

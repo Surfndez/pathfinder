@@ -48,10 +48,6 @@ layout(std430, binding = 2)buffer bTileLinkMap {
     restrict uvec2 iTileLinkMap[];
 };
 
-layout(std430, binding = 3)buffer bInitialTileMap {
-    restrict uint iInitialTileMap[];
-};
-
 ivec4 unpackTileRect(uvec4 pathInfo){
     ivec2 packedTileRect = ivec2(pathInfo . xy);
     return ivec4((packedTileRect . x << 16)>> 16, packedTileRect . x >> 16,
@@ -88,30 +84,11 @@ void main(){
     uint tileWidth = uint(tileRect . z - tileRect . x);
     ivec2 tileCoords = tileRect . xy + ivec2(tileOffset % tileWidth, tileOffset / tileWidth);
 
-
-    atomicMin(iInitialTileMap[tileCoords . x + tileCoords . y * uFramebufferTileSize . x], tileIndex);
-
-
-    uint nextTilePathIndex = pathIndex + 1;
-    uint nextTileIndex = ~ 0;
-    while(nextTilePathIndex < pathCount){
-        uvec4 nextPathInfo = iTilePathInfo[nextTilePathIndex];
-        ivec4 nextPathTileRect = unpackTileRect(nextPathInfo);
-        if(all(bvec4(greaterThanEqual(tileCoords, nextPathTileRect . xy),
-                      lessThan(tileCoords, nextPathTileRect . zw)))){
-            int nextPathTileWidth = nextPathTileRect . z - nextPathTileRect . x;
-            nextTileIndex = nextPathInfo . z + uint(tileCoords . x + tileCoords . y *
-                                                  nextPathTileWidth);
-            break;
-        }
-        nextTilePathIndex ++;
-    }
-
     iTiles[tileIndex]= uvec4((uint(tileCoords . x)& 0xffffu)|(uint(tileCoords . y)<< 16),
                               ~ 0u,
                               pathIndex,
                               pathInfo . w);
 
-    iTileLinkMap[tileIndex]= uvec2(~ 0, nextTileIndex);
+    iTileLinkMap[tileIndex]= uvec2(~ 0, ~ 0);
 }
 
