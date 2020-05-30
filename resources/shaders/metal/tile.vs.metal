@@ -29,31 +29,28 @@ vertex main0_out main0(main0_in in [[stage_in]], constant int2& uZBufferSize [[b
     float2 tileOrigin = float2(in.aTileOrigin);
     float2 tileOffset = float2(in.aTileOffset);
     float2 position = (tileOrigin + tileOffset) * uTileSize;
-    bool cull = false;
     int4 zValue = int4(uZBuffer.sample(uZBufferSmplr, ((tileOrigin + float2(0.5)) / float2(uZBufferSize)), level(0.0)) * 255.0);
     if (in.aPathIndex < (((zValue.x | (zValue.y << 8)) | (zValue.z << 16)) | (zValue.w << 24)))
     {
-        cull = true;
+        out.gl_Position = float4(0.0);
+        return out;
     }
     uint2 maskTileCoord = uint2(in.aMaskTexCoord0.x, in.aMaskTexCoord0.y + (256u * in.aMaskTexCoord0.z));
     float2 maskTexCoord0 = (float2(maskTileCoord) + tileOffset) * uTileSize;
-    bool _113 = in.aCtrlBackdrop.y == 0;
-    bool _119;
-    if (_113)
+    bool _117 = in.aCtrlBackdrop.y == 0;
+    bool _123;
+    if (_117)
     {
-        _119 = in.aMaskTexCoord0.w != 0u;
+        _123 = in.aMaskTexCoord0.w != 0u;
     }
     else
     {
-        _119 = _113;
+        _123 = _117;
     }
-    if (_119)
+    if (_123)
     {
-        cull = true;
-    }
-    if (cull)
-    {
-        position = float2(0.0);
+        out.gl_Position = float4(0.0);
+        return out;
     }
     float2 textureMetadataScale = float2(1.0) / float2(uTextureMetadataSize);
     float2 metadataEntryCoord = float2(float((in.aColor % 128) * 4), float(in.aColor / 128));

@@ -39,19 +39,20 @@ void main() {
     vec2 tileOrigin = vec2(aTileOrigin), tileOffset = vec2(aTileOffset);
     vec2 position = (tileOrigin + tileOffset) * uTileSize;
 
-    bool cull = false;
+    //bool cull = false;
 
     ivec4 zValue = ivec4(texture(uZBuffer, (tileOrigin + vec2(0.5)) / vec2(uZBufferSize)) * 255.0);
-    if (aPathIndex < (zValue.x | (zValue.y << 8) | (zValue.z << 16) | (zValue.w << 24)))
-        cull = true;
+    if (aPathIndex < (zValue.x | (zValue.y << 8) | (zValue.z << 16) | (zValue.w << 24))) {
+        gl_Position = vec4(0.0);
+        return;
+    }
 
     uvec2 maskTileCoord = uvec2(aMaskTexCoord0.x, aMaskTexCoord0.y + 256u * aMaskTexCoord0.z);
     vec2 maskTexCoord0 = (vec2(maskTileCoord) + tileOffset) * uTileSize;
-    if (aCtrlBackdrop.y == 0 && aMaskTexCoord0.w != 0u)
-        cull = true;
-
-    if (cull)
-        position = vec2(0.0);
+    if (aCtrlBackdrop.y == 0 && aMaskTexCoord0.w != 0u) {
+        gl_Position = vec4(0.0);
+        return;
+    }
 
     vec2 textureMetadataScale = vec2(1.0) / vec2(uTextureMetadataSize);
     vec2 metadataEntryCoord = vec2(aColor % 128 * 4, aColor / 128);

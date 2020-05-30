@@ -10,20 +10,23 @@
 
 use crate::gpu::debug::DebugUIPresenter;
 use crate::gpu::options::{DestFramebuffer, RendererGPUFeatures, RendererOptions};
-use crate::gpu::shaders::{BinComputeProgram, BlitBufferProgram, BlitBufferVertexArray, BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
-use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram, ClipTileCopyVertexArray};
-use crate::gpu::shaders::{CopyTileProgram, CopyTileVertexArray, DiceComputeProgram, FillProgram, FillVertexArray};
-use crate::gpu::shaders::{InitProgram, MAX_FILLS_PER_BATCH, PROPAGATE_WORKGROUP_SIZE, PropagateProgram, ReprojectionProgram};
+use crate::gpu::shaders::{BinComputeProgram, BlitBufferProgram, BlitBufferVertexArray};
+use crate::gpu::shaders::{BlitProgram, BlitVertexArray, ClearProgram, ClearVertexArray};
+use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, ClipTileCopyProgram};
+use crate::gpu::shaders::{ClipTileCopyVertexArray, CopyTileProgram, CopyTileVertexArray};
+use crate::gpu::shaders::{DiceComputeProgram, FillProgram, FillVertexArray, InitProgram};
+use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PROPAGATE_WORKGROUP_SIZE, ReprojectionProgram};
 use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
-use crate::gpu_data::{BackdropInfo, BinSegment, Clip, ClipBatchKey, ClipBatchKind, DiceMetadata, Fill, PathIndex, PrepareTilesBatch, PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata, RenderCommand};
-use crate::gpu_data::{SegmentIndices, Segments, TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
-use crate::gpu_data::{TileBatchId, TileBatchTexture, TileObjectPrimitive, TilePathInfo};
+use crate::gpu_data::{BackdropInfo, Clip, DiceMetadata, Fill, PrepareTilesBatch};
+use crate::gpu_data::{PrepareTilesCPUInfo, PrepareTilesGPUInfo, PrepareTilesGPUModalInfo};
+use crate::gpu_data::{PrepareTilesModalInfo, PropagateMetadata, RenderCommand, Segments};
+use crate::gpu_data::{TextureLocation, TextureMetadataEntry, TexturePageDescriptor, TexturePageId};
+use crate::gpu_data::{TileBatchTexture, TileObjectPrimitive, TilePathInfo};
 use crate::options::BoundingQuad;
 use crate::paint::PaintCompositeOp;
 use crate::tile_map::DenseTileMap;
 use crate::tiles::{TILE_HEIGHT, TILE_WIDTH};
-use fxhash::FxHashMap;
 use half::f16;
 use pathfinder_color::{self as color, ColorF, ColorU};
 use pathfinder_content::effects::{BlendMode, BlurDirection, DefringingKernel};
@@ -210,7 +213,6 @@ impl<D> Renderer<D> where D: Device {
         let tile_clip_copy_program = ClipTileCopyProgram::new(&device, resources);
         let stencil_program = StencilProgram::new(&device, resources);
         let reprojection_program = ReprojectionProgram::new(&device, resources);
-        let propagate_program = PropagateProgram::new(&device, resources);
 
         let postprocess_tiles_on_gpu =
             options.gpu_features.contains(RendererGPUFeatures::PREPARE_TILES_ON_GPU);
@@ -1670,6 +1672,7 @@ impl<D> Renderer<D> where D: Device {
                   color_texture_0: Option<TileBatchTexture>,
                   blend_mode: BlendMode,
                   filter: Filter) {
+        println!("draw_tiles(tile_count={})", tile_count);
         // TODO(pcwalton): Disable blend for solid tiles.
 
         let needs_readable_framebuffer = blend_mode.needs_readable_framebuffer();
