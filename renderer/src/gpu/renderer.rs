@@ -16,7 +16,7 @@ use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, Cl
 use crate::gpu::shaders::{ClipTileCopyVertexArray, CopyTileProgram, CopyTileVertexArray};
 use crate::gpu::shaders::{DiceComputeProgram, FillProgram, FillVertexArray, InitProgram};
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PROPAGATE_WORKGROUP_SIZE, ReprojectionProgram};
-use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray};
+use crate::gpu::shaders::{ReprojectionVertexArray, ResolveProgram, ResolveVertexArray, StencilProgram, StencilVertexArray};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
 use crate::gpu_data::{BackdropInfo, Clip, DiceMetadata, Fill, PrepareTilesBatch};
 use crate::gpu_data::{PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata};
@@ -125,6 +125,7 @@ pub struct Renderer<D> where D: Device {
     tile_clip_combine_program: ClipTileCombineProgram<D>,
     tile_clip_copy_program: ClipTileCopyProgram<D>,
     tile_post_programs: Option<TilePostPrograms<D>>,
+    resolve_program: ResolveProgram<D>,
     stencil_program: StencilProgram<D>,
     reprojection_program: ReprojectionProgram<D>,
     bin_compute_program: BinComputeProgram<D>,
@@ -187,6 +188,7 @@ struct Frame<D> where D: Device {
     max_alpha_tile_index: u32,
     allocated_alpha_tile_page_count: u32,
     mask_framebuffer: Option<D::Framebuffer>,
+    resolve_vertex_array: ResolveVertexArray<D>,
     stencil_vertex_array: StencilVertexArray<D>,
     reprojection_vertex_array: ReprojectionVertexArray<D>,
     dest_blend_framebuffer: D::Framebuffer,
@@ -223,6 +225,7 @@ impl<D> Renderer<D> where D: Device {
         let bin_compute_program = BinComputeProgram::new(&device, resources);
         let dice_compute_program = DiceComputeProgram::new(&device, resources);
         let init_program = InitProgram::new(&device, resources);
+        let resolve_program = ResolveProgram::new(&device, resources);
 
         let area_lut_texture =
             device.create_texture_from_png(resources, "area-lut", TextureFormat::RGBA8);
@@ -250,6 +253,7 @@ impl<D> Renderer<D> where D: Device {
                                      &blit_program,
                                      &blit_buffer_program,
                                      &clear_program,
+                                     &resolve_program,
                                      &reprojection_program,
                                      &stencil_program,
                                      &quad_vertex_positions_buffer,
@@ -259,6 +263,7 @@ impl<D> Renderer<D> where D: Device {
                                     &blit_program,
                                     &blit_buffer_program,
                                     &clear_program,
+                                    &resolve_program,
                                     &reprojection_program,
                                     &stencil_program,
                                     &quad_vertex_positions_buffer,
@@ -281,6 +286,7 @@ impl<D> Renderer<D> where D: Device {
             bin_compute_program,
             dice_compute_program,
             init_program,
+            resolve_program,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             fill_tile_map: vec![],
@@ -369,12 +375,14 @@ impl<D> Renderer<D> where D: Device {
             RenderCommand::PopRenderTarget => self.pop_render_target(),
             RenderCommand::PrepareTiles(ref batch) => self.prepare_tiles(batch),
             RenderCommand::DrawTiles(ref batch) => {
+                /*
                 let batch_info = self.back_frame.tile_batch_info[batch.tile_batch_id.0 as usize];
                 self.draw_tiles(batch_info.tile_count,
                                 batch_info.tile_vertex_storage_id,
                                 batch.color_texture,
                                 batch.blend_mode,
                                 batch.filter)
+                                */
             }
             RenderCommand::Finish { cpu_build_time } => {
                 self.stats.cpu_build_time = cpu_build_time;
@@ -1213,6 +1221,26 @@ impl<D> Renderer<D> where D: Device {
             _ => unreachable!(),
         };
 
+        let draw_viewport = self.draw_viewport();
+        let framebuffer_size = draw_viewport.size();
+        let framebuffer_length = draw_viewport.area();
+
+        // FIXME(pcwalton): Buffer reuse! Hook this buffer up to the rest of the pipeline!
+        // FIXME(pcwalton): Dynamically sized tail buffer!
+        let dest_buffer_metadata_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        let dest_buffer_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        let dest_buffer_tail_buffer = self.device.create_buffer(BufferUploadMode::Dynamic);
+        self.device.allocate_buffer::<u32>(&dest_buffer_metadata_buffer,
+                                           BufferData::Memory(&[0; 8]),
+                                           BufferTarget::Storage);
+        let dest_buffer = vec![!0; framebuffer_length as usize];
+        self.device.allocate_buffer::<u32>(&dest_buffer_buffer,
+                                           BufferData::Memory(&dest_buffer),
+                                           BufferTarget::Storage);
+        self.device.allocate_buffer::<[u32; 4]>(&dest_buffer_tail_buffer,
+                                                BufferData::Uninitialized(20 * 1024 * 1024),
+                                                BufferTarget::Storage);
+
         let fill_vertex_storage = self.back_frame   
                                       .fill_vertex_storage_allocator
                                       .get(fill_storage_id);
@@ -1232,6 +1260,10 @@ impl<D> Renderer<D> where D: Device {
         let mut storage_buffers = vec![
             (&fill_compute_program.fills_storage_buffer, &fill_vertex_storage.vertex_buffer),
             (&fill_compute_program.fill_tile_map_storage_buffer, fill_map_buffer),
+            (&fill_compute_program.dest_buffer_metadata_storage_buffer,
+             &dest_buffer_metadata_buffer),
+            (&fill_compute_program.dest_buffer_storage_buffer, &dest_buffer_buffer),
+            (&fill_compute_program.dest_buffer_tail_storage_buffer, &dest_buffer_tail_buffer),
         ];
 
         match tile_storage_id {
@@ -1262,11 +1294,14 @@ impl<D> Renderer<D> where D: Device {
         self.device.dispatch_compute(dimensions, &ComputeState {
             program: &fill_compute_program.program,
             textures: &[(&fill_compute_program.area_lut_texture, &self.area_lut_texture)],
-            images: &[(&fill_compute_program.dest_image, image_texture, ImageAccess::Write)],
+            //images: &[(&fill_compute_program.dest_image, image_texture, ImageAccess::Write)],
+            images: &[],
             uniforms: &[
                 (&fill_compute_program.tile_range_uniform, UniformData::IVec2(fill_tile_range)),
                 (&fill_compute_program.binned_on_gpu_uniform,
                  UniformData::Int(tile_storage_id.is_some() as i32)),
+                (&fill_compute_program.framebuffer_size_uniform,
+                 UniformData::IVec2(framebuffer_size.0)),
             ],
             storage_buffers: &storage_buffers,
         });
@@ -1275,6 +1310,9 @@ impl<D> Renderer<D> where D: Device {
         self.current_timer.as_mut().unwrap().fill_times.push(TimerFuture::new(timer_query));
 
         self.back_frame.framebuffer_flags.insert(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY);
+
+        // FIXME(pcwalton): This is the wrong place to do this!!!
+        self.resolve_dest_buffer(&dest_buffer_buffer, &dest_buffer_tail_buffer);
     }
 
     fn clip_tiles(&mut self, clip_storage_id: StorageID, max_clipped_tile_count: u32) {
@@ -1741,6 +1779,43 @@ impl<D> Renderer<D> where D: Device {
         self.preserve_draw_framebuffer();
     }
 
+    fn resolve_dest_buffer(&mut self,
+                           dest_buffer_buffer: &D::Buffer,
+                           dest_buffer_tail_buffer: &D::Buffer) {
+        let clear_color = self.clear_color_for_draw_operation();
+        let draw_viewport = self.draw_viewport();
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        self.device.draw_elements(6, &RenderState {
+            target: &self.draw_render_target(),
+            program: &self.resolve_program.program,
+            vertex_array: &self.back_frame.resolve_vertex_array.vertex_array,
+            primitive: Primitive::Triangles,
+            textures: &[],
+            images: &[],
+            storage_buffers: &[
+                (&self.resolve_program.dest_buffer_storage_buffer, &dest_buffer_buffer),
+                (&self.resolve_program.dest_buffer_tail_storage_buffer, &dest_buffer_tail_buffer),
+            ],
+            uniforms: &[
+                (&self.resolve_program.framebuffer_size_uniform,
+                 UniformData::IVec2(draw_viewport.size().0)),
+            ],
+            viewport: draw_viewport,
+            options: RenderOptions {
+                clear_ops: ClearOps { color: clear_color, ..ClearOps::default() },
+                ..RenderOptions::default()
+            },
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().tile_times.push(TimerFuture::new(timer_query));
+
+        self.preserve_draw_framebuffer();
+    }
+
     fn copy_alpha_tiles_to_dest_blend_texture(&mut self, tile_count: u32, storage_id: StorageID) {
         let draw_viewport = self.draw_viewport();
 
@@ -2149,6 +2224,7 @@ impl<D> Frame<D> where D: Device {
            blit_program: &BlitProgram<D>,
            blit_buffer_program: &BlitBufferProgram<D>,
            clear_program: &ClearProgram<D>,
+           resolve_program: &ResolveProgram<D>,
            reprojection_program: &ReprojectionProgram<D>,
            stencil_program: &StencilProgram<D>,
            quad_vertex_positions_buffer: &D::Buffer,
@@ -2169,6 +2245,10 @@ impl<D> Frame<D> where D: Device {
                                                        &clear_program,
                                                        &quad_vertex_positions_buffer,
                                                        &quad_vertex_indices_buffer);
+        let resolve_vertex_array = ResolveVertexArray::new(device,
+                                                           &resolve_program,
+                                                           &quad_vertex_positions_buffer,
+                                                           &quad_vertex_indices_buffer);
         let reprojection_vertex_array = ReprojectionVertexArray::new(device,
                                                                      &reprojection_program,
                                                                      &quad_vertex_positions_buffer,
@@ -2223,6 +2303,7 @@ impl<D> Frame<D> where D: Device {
             fill_tile_map_storage_allocator,
             tile_propagate_metadata_storage_allocator,
             clip_vertex_storage_allocator,
+            resolve_vertex_array,
             reprojection_vertex_array,
             stencil_vertex_array,
             quads_vertex_indices_buffer,

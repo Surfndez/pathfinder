@@ -20,6 +20,8 @@ SHADERS=\
 	fill_gpu_binned.vs.glsl \
 	reproject.fs.glsl \
 	reproject.vs.glsl \
+	resolve.fs.glsl \
+	resolve.vs.glsl \
 	stencil.fs.glsl \
 	stencil.vs.glsl \
 	tile.fs.glsl \

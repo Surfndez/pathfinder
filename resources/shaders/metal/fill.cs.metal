@@ -1,8 +1,10 @@
 // Automatically generated from files in pathfinder/shaders/. Do not edit!
 #pragma clang diagnostic ignored "-Wmissing-prototypes"
+#pragma clang diagnostic ignored "-Wunused-variable"
 
 #include <metal_stdlib>
 #include <simd/simd.h>
+#include <metal_atomic>
 
 using namespace metal;
 
@@ -21,6 +23,21 @@ struct bTiles
     int iTiles[1];
 };
 
+struct bDestBufferMetadata
+{
+    uint iDestBufferMetadata[1];
+};
+
+struct bDestBufferTail
+{
+    uint4 iDestBufferTail[1];
+};
+
+struct bDestBuffer
+{
+    uint iDestBuffer[1];
+};
+
 constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(16u, 4u, 1u);
 
 static inline __attribute__((always_inline))
@@ -37,7 +54,7 @@ float4 computeCoverage(thread const float2& from, thread const float2& to, threa
     return areaLUT.sample(areaLUTSmplr, (float2(y + 8.0, abs(d * dX)) / float2(16.0)), level(0.0)) * dX;
 }
 
-kernel void main0(constant int2& uTileRange [[buffer(0)]], constant int& uBinnedOnGPU [[buffer(3)]], const device bFillTileMap& _164 [[buffer(1)]], const device bFills& _187 [[buffer(2)]], const device bTiles& _262 [[buffer(4)]], texture2d<float> uAreaLUT [[texture(0)]], texture2d<float, access::write> uDest [[texture(1)]], sampler uAreaLUTSmplr [[sampler(0)]], uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]])
+kernel void main0(constant int2& uTileRange [[buffer(0)]], constant int& uBinnedOnGPU [[buffer(3)]], constant int2& uFramebufferSize [[buffer(5)]], const device bFillTileMap& _164 [[buffer(1)]], const device bFills& _187 [[buffer(2)]], const device bTiles& _269 [[buffer(4)]], device bDestBufferMetadata& _315 [[buffer(6)]], device bDestBufferTail& _322 [[buffer(7)]], device bDestBuffer& _341 [[buffer(8)]], texture2d<float> uAreaLUT [[texture(0)]], sampler uAreaLUTSmplr [[sampler(0)]], uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]])
 {
     int2 tileSubCoord = int2(gl_LocalInvocationID.xy) * int2(1, 4);
     uint tileIndexOffset = gl_WorkGroupID.x | (gl_WorkGroupID.y << uint(16));
@@ -64,17 +81,28 @@ kernel void main0(constant int2& uTileRange [[buffer(0)]], constant int& uBinned
         fillIndex = int(_187.iFills[(fillIndex * 3) + 2]);
         iteration++;
     } while ((fillIndex >= 0) && (iteration < 1024));
+    if (all(coverages == float4(0.0)))
+    {
+        return;
+    }
     uint alphaTileIndex;
     if (uBinnedOnGPU != 0)
     {
-        alphaTileIndex = uint(_262.iTiles[(tileIndex * 4u) + 1u]);
+        alphaTileIndex = uint(_269.iTiles[(tileIndex * 4u) + 1u]);
     }
     else
     {
         alphaTileIndex = tileIndex;
     }
-    int2 tileOrigin = int2(16, 4) * int2(int(alphaTileIndex & 255u), int((alphaTileIndex >> 8u) & (255u + (((alphaTileIndex >> 16u) & 255u) << 8u))));
-    int2 destCoord = tileOrigin + int2(gl_LocalInvocationID.xy);
-    uDest.write(coverages, uint2(destCoord));
+    int packedTileCoord = _269.iTiles[(tileIndex * 4u) + 0u];
+    int2 tileCoord = int2((packedTileCoord << 16) >> 16, packedTileCoord >> 16);
+    int2 pixelCoord = (tileCoord * int2(16, 4)) + int2(gl_LocalInvocationID.xy);
+    uint destBufferOffset = uint(pixelCoord.x + (pixelCoord.y * uFramebufferSize.x));
+    uint _317 = atomic_fetch_add_explicit((device atomic_uint*)&_315.iDestBufferMetadata[0], 1u, memory_order_relaxed);
+    uint tailOffset = _317;
+    _322.iDestBufferTail[tailOffset].x = uint(coverages.x);
+    _322.iDestBufferTail[tailOffset].y = uint(_269.iTiles[(tileIndex * 4u) + 2u]);
+    uint _345 = atomic_exchange_explicit((device atomic_uint*)&_341.iDestBuffer[destBufferOffset], tailOffset, memory_order_relaxed);
+    _322.iDestBufferTail[tailOffset].w = _345;
 }
 

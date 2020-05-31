@@ -537,13 +537,17 @@ impl<D> FillRasterProgram<D> where D: Device {
 
 pub struct FillComputeProgram<D> where D: Device {
     pub program: D::Program,
+    pub framebuffer_size_uniform: D::Uniform,
     pub binned_on_gpu_uniform: D::Uniform,
-    pub dest_image: D::ImageParameter,
+    //pub dest_image: D::ImageParameter,
     pub area_lut_texture: D::TextureParameter,
     pub tile_range_uniform: D::Uniform,
     pub fills_storage_buffer: D::StorageBuffer,
     pub fill_tile_map_storage_buffer: D::StorageBuffer,
     pub tiles_storage_buffer: D::StorageBuffer,
+    pub dest_buffer_metadata_storage_buffer: D::StorageBuffer,
+    pub dest_buffer_storage_buffer: D::StorageBuffer,
+    pub dest_buffer_tail_storage_buffer: D::StorageBuffer,
 }
 
 impl<D> FillComputeProgram<D> where D: Device {
@@ -552,23 +556,33 @@ impl<D> FillComputeProgram<D> where D: Device {
         let local_size = ComputeDimensions { x: TILE_WIDTH, y: TILE_HEIGHT / 4, z: 1 };
         device.set_compute_program_local_size(&mut program, local_size);
 
+        let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
         let binned_on_gpu_uniform = device.get_uniform(&program, "BinnedOnGPU");
-        let dest_image = device.get_image_parameter(&program, "Dest");
+        //let dest_image = device.get_image_parameter(&program, "Dest");
         let area_lut_texture = device.get_texture_parameter(&program, "AreaLUT");
         let tile_range_uniform = device.get_uniform(&program, "TileRange");
         let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 0);
         let fill_tile_map_storage_buffer = device.get_storage_buffer(&program, "FillTileMap", 1);
         let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 2);
+        let dest_buffer_metadata_storage_buffer =
+            device.get_storage_buffer(&program, "DestBufferMetadata", 3);
+        let dest_buffer_storage_buffer = device.get_storage_buffer(&program, "DestBuffer", 3);
+        let dest_buffer_tail_storage_buffer =
+            device.get_storage_buffer(&program, "DestBufferTail", 4);
 
         FillComputeProgram {
             program,
+            framebuffer_size_uniform,
             binned_on_gpu_uniform,
-            dest_image,
+            //dest_image,
             area_lut_texture,
             tile_range_uniform,
             fills_storage_buffer,
             fill_tile_map_storage_buffer,
             tiles_storage_buffer,
+            dest_buffer_metadata_storage_buffer,
+            dest_buffer_storage_buffer,
+            dest_buffer_tail_storage_buffer
         }
     }
 }
@@ -793,6 +807,58 @@ impl<D> GenerateClipProgram<D> where D: Device {
     }
 }
 */
+
+pub struct ResolveProgram<D> where D: Device {
+    pub program: D::Program,
+    pub framebuffer_size_uniform: D::Uniform,
+    pub dest_buffer_storage_buffer: D::StorageBuffer,
+    pub dest_buffer_tail_storage_buffer: D::StorageBuffer,
+}
+
+impl<D> ResolveProgram<D> where D: Device {
+    pub fn new(device: &D, resources: &dyn ResourceLoader) -> ResolveProgram<D> {
+        let program = device.create_raster_program(resources, "resolve");
+        let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
+        let dest_buffer_storage_buffer = device.get_storage_buffer(&program, "DestBuffer", 3);
+        let dest_buffer_tail_storage_buffer =
+            device.get_storage_buffer(&program, "DestBufferTail", 1);
+        ResolveProgram {
+            program,
+            framebuffer_size_uniform,
+            dest_buffer_storage_buffer,
+            dest_buffer_tail_storage_buffer,
+        }
+    }
+}
+
+pub struct ResolveVertexArray<D> where D: Device {
+    pub vertex_array: D::VertexArray,
+}
+
+impl<D> ResolveVertexArray<D> where D: Device {
+    pub fn new(device: &D,
+               resolve_program: &ResolveProgram<D>,
+               quad_vertex_positions_buffer: &D::Buffer,
+               quad_vertex_indices_buffer: &D::Buffer)
+               -> ResolveVertexArray<D> {
+        let vertex_array = device.create_vertex_array();
+        let position_attr = device.get_vertex_attr(&resolve_program.program, "Position").unwrap();
+
+        device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, BufferTarget::Vertex);
+        device.configure_vertex_attr(&vertex_array, &position_attr, &VertexAttrDescriptor {
+            size: 2,
+            class: VertexAttrClass::Int,
+            attr_type: VertexAttrType::I16,
+            stride: 4,
+            offset: 0,
+            divisor: 0,
+            buffer_index: 0,
+        });
+        device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, BufferTarget::Index);
+
+        ResolveVertexArray { vertex_array }
+    }
+}
 
 pub struct StencilProgram<D>
 where

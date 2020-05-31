@@ -22,7 +22,8 @@ precision highp sampler2D;
 
 layout(local_size_x = 16, local_size_y = 4) in;
 
-uniform writeonly image2D uDest;
+//uniform writeonly image2D uDest;
+uniform ivec2 uFramebufferSize;
 uniform sampler2D uAreaLUT;
 uniform ivec2 uTileRange;
 uniform int uBinnedOnGPU;
@@ -36,7 +37,23 @@ layout(std430, binding = 1) buffer bFillTileMap {
 };
 
 layout(std430, binding = 2) buffer bTiles {
+    // [0]: tile coords, 16-bit packed x/y
+    // [1]: alpha tile ID
+    // [2]: path ID
+    // [3]: color/ctrl/backdrop word
     restrict readonly int iTiles[];
+};
+
+layout(std430, binding = 3) buffer bDestBufferMetadata {
+    restrict uint iDestBufferMetadata[];
+};
+
+layout(std430, binding = 4) buffer bDestBuffer {
+    restrict uint iDestBuffer[];
+};
+
+layout(std430, binding = 5) buffer bDestBufferTail {
+    restrict uvec4 iDestBufferTail[];
 };
 
 void main() {
@@ -67,6 +84,10 @@ void main() {
         iteration++;
     } while (fillIndex >= 0 && iteration < 1024);
 
+    // TODO(pcwalton): Take backdrop into account!
+    if (all(equal(coverages, vec4(0.0))))
+        return;
+
     // If we binned on GPU, then `tileIndex` refers to a *global* tile index, and we have to
     // convert that to an alpha tile index. If we binned on CPU, though, `tileIndex` is an alpha
     // tile index.
@@ -79,9 +100,21 @@ void main() {
     else
         alphaTileIndex = tileIndex;
 
+    int packedTileCoord = int(iTiles[tileIndex * 4 + 0]);
+    ivec2 tileCoord = ivec2((packedTileCoord << 16) >> 16, packedTileCoord >> 16);
+    ivec2 pixelCoord = tileCoord * ivec2(16, 4) + ivec2(gl_LocalInvocationID.xy);
+    uint destBufferOffset = pixelCoord.x + pixelCoord.y * uFramebufferSize.x;
+
+    uint tailOffset = atomicAdd(iDestBufferMetadata[0], 1);
+    iDestBufferTail[tailOffset].x = uint(coverages.x);  // FIXME(pcwalton)
+    iDestBufferTail[tailOffset].y = iTiles[tileIndex * 4 + 2];
+    iDestBufferTail[tailOffset].w = atomicExchange(iDestBuffer[destBufferOffset], tailOffset);
+
+    /*
     ivec2 tileOrigin = ivec2(16, 4) *
         ivec2(alphaTileIndex & 0xff,
               (alphaTileIndex >> 8u) & 0xff + (((alphaTileIndex >> 16u) & 0xff) << 8u));
     ivec2 destCoord = tileOrigin + ivec2(gl_LocalInvocationID.xy);
     imageStore(uDest, destCoord, coverages);
+    */
 }
