@@ -67,6 +67,18 @@ layout(std430, binding = 6) buffer bZBuffer {
     restrict int iZBuffer[];
 };
 
+layout(std430, binding = 7) buffer bDestBufferMetadata {
+    restrict int iDestBufferMetadata[];
+};
+
+layout(std430, binding = 8) buffer bDestBuffer {
+    restrict int iDestBuffer[];
+};
+
+layout(std430, binding = 9) buffer bDestBufferTail {
+    restrict uvec4 iDestBufferTail[];
+};
+
 uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord) {
     return bufferOffset + tileCoord.y * (tileRect.z - tileRect.x) + tileCoord.x;
 }
@@ -159,6 +171,18 @@ void main() {
             ivec2 tileCoord = ivec2(tileX, tileY) + ivec2(drawTileRect.xy);
             int zBufferIndex = tileCoord.y * uFramebufferTileSize.x + tileCoord.x;
             atomicMax(iZBuffer[zBufferIndex], int(drawPathIndex));
+        }
+
+        // Add to PPLL if necessary.
+        if (drawTileBackdrop != 0 && drawAlphaTileIndex < 0) {
+            ivec2 tileCoord = ivec2(tileX, tileY) + ivec2(drawTileRect.xy);
+            int destBufferOffset = tileCoord.y * uFramebufferTileSize.x + tileCoord.x;
+            uint destBufferIndex = atomicAdd(iDestBufferMetadata[0], 1);
+            iDestBufferTail[destBufferIndex].x = ~0;
+            iDestBufferTail[destBufferIndex].y = drawPathIndex;
+            iDestBufferTail[destBufferIndex].z = drawTileWord;
+            iDestBufferTail[destBufferIndex].w =
+                atomicExchange(iDestBuffer[destBufferOffset], int(destBufferIndex));
         }
 
         currentBackdrop += delta;

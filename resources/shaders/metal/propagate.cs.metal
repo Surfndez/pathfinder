@@ -43,6 +43,21 @@ struct bZBuffer
     int iZBuffer[1];
 };
 
+struct bDestBufferMetadata
+{
+    int iDestBufferMetadata[1];
+};
+
+struct bDestBufferTail
+{
+    uint4 iDestBufferTail[1];
+};
+
+struct bDestBuffer
+{
+    int iDestBuffer[1];
+};
+
 constant uint3 gl_WorkGroupSize [[maybe_unused]] = uint3(64u, 1u, 1u);
 
 static inline __attribute__((always_inline))
@@ -51,7 +66,7 @@ uint calculateTileIndex(thread const uint& bufferOffset, thread const uint4& til
     return (bufferOffset + (tileCoord.y * (tileRect.z - tileRect.x))) + tileCoord.x;
 }
 
-kernel void main0(constant int& uColumnCount [[buffer(0)]], constant int2& uFramebufferTileSize [[buffer(7)]], const device bBackdrops& _59 [[buffer(1)]], const device bDrawMetadata& _85 [[buffer(2)]], const device bClipMetadata& _126 [[buffer(3)]], device bDrawTiles& _172 [[buffer(4)]], device bClipTiles& _243 [[buffer(5)]], device bClipVertexBuffer& _299 [[buffer(6)]], device bZBuffer& _357 [[buffer(8)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
+kernel void main0(constant int& uColumnCount [[buffer(0)]], constant int2& uFramebufferTileSize [[buffer(7)]], const device bBackdrops& _59 [[buffer(1)]], const device bDrawMetadata& _85 [[buffer(2)]], const device bClipMetadata& _126 [[buffer(3)]], device bDrawTiles& _172 [[buffer(4)]], device bClipTiles& _243 [[buffer(5)]], device bClipVertexBuffer& _299 [[buffer(6)]], device bZBuffer& _357 [[buffer(8)]], device bDestBufferMetadata& _392 [[buffer(9)]], device bDestBufferTail& _399 [[buffer(10)]], device bDestBuffer& _413 [[buffer(11)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
 {
     uint columnIndex = gl_GlobalInvocationID.x;
     if (int(columnIndex) >= uColumnCount)
@@ -137,6 +152,18 @@ kernel void main0(constant int& uColumnCount [[buffer(0)]], constant int2& uFram
             int2 tileCoord_1 = int2(tileX, int(tileY)) + int2(drawTileRect.xy);
             int zBufferIndex = (tileCoord_1.y * uFramebufferTileSize.x) + tileCoord_1.x;
             int _362 = atomic_fetch_max_explicit((device atomic_int*)&_357.iZBuffer[zBufferIndex], int(drawPathIndex), memory_order_relaxed);
+        }
+        if ((drawTileBackdrop != 0) && (drawAlphaTileIndex < 0))
+        {
+            int2 tileCoord_2 = int2(tileX, int(tileY)) + int2(drawTileRect.xy);
+            int destBufferOffset = (tileCoord_2.y * uFramebufferTileSize.x) + tileCoord_2.x;
+            int _394 = atomic_fetch_add_explicit((device atomic_int*)&_392.iDestBufferMetadata[0], 1, memory_order_relaxed);
+            uint destBufferIndex = uint(_394);
+            _399.iDestBufferTail[destBufferIndex].x = 4294967295u;
+            _399.iDestBufferTail[destBufferIndex].y = drawPathIndex;
+            _399.iDestBufferTail[destBufferIndex].z = drawTileWord;
+            int _418 = atomic_exchange_explicit((device atomic_int*)&_413.iDestBuffer[destBufferOffset], int(destBufferIndex), memory_order_relaxed);
+            _399.iDestBufferTail[destBufferIndex].w = uint(_418);
         }
         currentBackdrop += delta;
     }

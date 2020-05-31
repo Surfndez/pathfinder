@@ -1468,7 +1468,8 @@ impl<D> Renderer<D> where D: Device {
                 self.propagate_tiles(gpu_info.backdrops.len() as u32,
                                      tile_vertex_storage_id,
                                      propagate_metadata_storage_id,
-                                     clip_storage_ids.as_ref());
+                                     clip_storage_ids.as_ref(),
+                                     draw_fills_buffers.as_ref().unwrap());
 
                 // FIXME(pcwalton): This is the wrong place to do this!!!
                 if let Some(draw_fills_buffers) = draw_fills_buffers {
@@ -1516,7 +1517,8 @@ impl<D> Renderer<D> where D: Device {
                        column_count: u32,
                        tile_storage_id: StorageID,
                        propagate_metadata_storage_id: StorageID,
-                       clip_storage_ids: Option<&ClipStorageIDs>) {
+                       clip_storage_ids: Option<&ClipStorageIDs>,
+                       draw_fills_buffers: &DrawFillsBuffers<D>) {
         let propagate_program = &self.tile_post_programs
                                      .as_ref()
                                      .expect("GPU tile postprocessing is disabled!")
@@ -1535,6 +1537,12 @@ impl<D> Renderer<D> where D: Device {
             (&propagate_program.backdrops_storage_buffer, &self.back_frame.backdrops_buffer),
             (&propagate_program.draw_tiles_storage_buffer, alpha_tile_buffer),
             (&propagate_program.z_buffer_storage_buffer, &self.back_frame.z_buffer),
+            (&propagate_program.dest_buffer_metadata_storage_buffer,
+             &draw_fills_buffers.dest_buffer_metadata_buffer),
+            (&propagate_program.dest_buffer_storage_buffer,
+             &draw_fills_buffers.dest_buffer_buffer),
+            (&propagate_program.dest_buffer_tail_storage_buffer,
+             &draw_fills_buffers.dest_buffer_tail_buffer),
         ];
 
         if let Some(clip_storage_ids) = clip_storage_ids {

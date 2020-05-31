@@ -80,12 +80,9 @@ void main() {
     }
 
     vec4 destColor = vec4(vec3(0.0), 1.0);
-    for (int pixelListIndex = 0; pixelListIndex < pixelListLength; pixelListIndex++) {
+    for (int pixelListIndex = pixelListLength - 1; pixelListIndex >= 0; pixelListIndex--) {
         vec4 srcColor = sortedColors[pixelListIndex];
-        destColor = vec4(destColor.a * srcColor.a * srcColor.rgb + destColor.rgb,
-                         (1.0 - srcColor.a) * destColor.a);
-        if (srcColor.a >= 1.0)
-            break;
+        destColor = mix(destColor, srcColor, srcColor.a);
     }
 
     oFragColor = destColor;

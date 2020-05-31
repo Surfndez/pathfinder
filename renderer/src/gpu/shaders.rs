@@ -734,6 +734,9 @@ pub struct PropagateProgram<D> where D: Device {
     pub clip_tiles_storage_buffer: D::StorageBuffer,
     pub clip_vertex_storage_buffer: D::StorageBuffer,
     pub z_buffer_storage_buffer: D::StorageBuffer,
+    pub dest_buffer_metadata_storage_buffer: D::StorageBuffer,
+    pub dest_buffer_storage_buffer: D::StorageBuffer,
+    pub dest_buffer_tail_storage_buffer: D::StorageBuffer,
 }
 
 impl<D> PropagateProgram<D> where D: Device {
@@ -752,6 +755,12 @@ impl<D> PropagateProgram<D> where D: Device {
         let clip_vertex_storage_buffer =
             device.get_storage_buffer(&program, "ClipVertexBuffer", 5);
         let z_buffer_storage_buffer = device.get_storage_buffer(&program, "ZBuffer", 6);
+        let dest_buffer_metadata_storage_buffer =   
+            device.get_storage_buffer(&program, "DestBufferMetadata", 7);
+        let dest_buffer_storage_buffer = device.get_storage_buffer(&program, "DestBuffer", 8);
+        let dest_buffer_tail_storage_buffer =
+            device.get_storage_buffer(&program, "DestBufferTail", 9);
+
         PropagateProgram {
             program,
             framebuffer_tile_size_uniform,
@@ -763,6 +772,9 @@ impl<D> PropagateProgram<D> where D: Device {
             clip_tiles_storage_buffer,
             clip_vertex_storage_buffer,
             z_buffer_storage_buffer,
+            dest_buffer_metadata_storage_buffer,
+            dest_buffer_storage_buffer,
+            dest_buffer_tail_storage_buffer,
         }
     }
 }
