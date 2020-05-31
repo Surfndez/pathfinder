@@ -811,6 +811,8 @@ impl<D> GenerateClipProgram<D> where D: Device {
 pub struct ResolveProgram<D> where D: Device {
     pub program: D::Program,
     pub framebuffer_size_uniform: D::Uniform,
+    pub texture_metadata_texture: D::TextureParameter,
+    pub texture_metadata_size_uniform: D::Uniform,
     pub dest_buffer_storage_buffer: D::StorageBuffer,
     pub dest_buffer_tail_storage_buffer: D::StorageBuffer,
 }
@@ -819,12 +821,16 @@ impl<D> ResolveProgram<D> where D: Device {
     pub fn new(device: &D, resources: &dyn ResourceLoader) -> ResolveProgram<D> {
         let program = device.create_raster_program(resources, "resolve");
         let framebuffer_size_uniform = device.get_uniform(&program, "FramebufferSize");
-        let dest_buffer_storage_buffer = device.get_storage_buffer(&program, "DestBuffer", 3);
+        let texture_metadata_texture = device.get_texture_parameter(&program, "TextureMetadata");
+        let texture_metadata_size_uniform = device.get_uniform(&program, "TextureMetadataSize");
+        let dest_buffer_storage_buffer = device.get_storage_buffer(&program, "DestBuffer", 0);
         let dest_buffer_tail_storage_buffer =
             device.get_storage_buffer(&program, "DestBufferTail", 1);
         ResolveProgram {
             program,
             framebuffer_size_uniform,
+            texture_metadata_texture,
+            texture_metadata_size_uniform,
             dest_buffer_storage_buffer,
             dest_buffer_tail_storage_buffer,
         }

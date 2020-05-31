@@ -1208,7 +1208,8 @@ impl<D> Renderer<D> where D: Device {
 
     fn draw_fills_via_compute(&mut self,
                               fill_storage_info: FillComputeStorageInfo,
-                              tile_storage_id: Option<StorageID>) {
+                              tile_storage_id: Option<StorageID>)
+                              -> DrawFillsBuffers<D> {
         let FillComputeStorageInfo {
             fill_storage_id,
             fill_tile_map_storage_id,
@@ -1311,8 +1312,11 @@ impl<D> Renderer<D> where D: Device {
 
         self.back_frame.framebuffer_flags.insert(FramebufferFlags::MASK_FRAMEBUFFER_IS_DIRTY);
 
-        // FIXME(pcwalton): This is the wrong place to do this!!!
-        self.resolve_dest_buffer(&dest_buffer_buffer, &dest_buffer_tail_buffer);
+        DrawFillsBuffers {
+            dest_buffer_metadata_buffer,
+            dest_buffer_buffer,
+            dest_buffer_tail_buffer,
+        }
     }
 
     fn clip_tiles(&mut self, clip_storage_id: StorageID, max_clipped_tile_count: u32) {
@@ -1427,6 +1431,8 @@ impl<D> Renderer<D> where D: Device {
                 let propagate_metadata_storage_id =
                     self.upload_propagate_data(&gpu_info.propagate_metadata, &gpu_info.backdrops);
 
+                let mut draw_fills_buffers = None;
+
                 // Bin and render fills if requested.
                 if let PrepareTilesGPUModalInfo::GPUBinning {
                     ref dice_metadata,
@@ -1452,16 +1458,24 @@ impl<D> Renderer<D> where D: Device {
                                 PrimitiveCount::Direct(fill_storage_info.fill_count));
                         }
                         FillStorageInfo::Compute(fill_storage_info) => {
-                            self.draw_fills_via_compute(fill_storage_info,
-                                                        Some(tile_vertex_storage_id));
+                            draw_fills_buffers =
+                                Some(self.draw_fills_via_compute(fill_storage_info,
+                                                                 Some(tile_vertex_storage_id)))
                         }
-                    }
+                    };
                 }
 
                 self.propagate_tiles(gpu_info.backdrops.len() as u32,
                                      tile_vertex_storage_id,
                                      propagate_metadata_storage_id,
                                      clip_storage_ids.as_ref());
+
+                // FIXME(pcwalton): This is the wrong place to do this!!!
+                if let Some(draw_fills_buffers) = draw_fills_buffers {
+                    self.resolve_dest_buffer(&draw_fills_buffers.dest_buffer_buffer,
+                                             &draw_fills_buffers.dest_buffer_tail_buffer);
+                }
+
                 Some(propagate_metadata_storage_id)
             }
         };
@@ -1793,7 +1807,10 @@ impl<D> Renderer<D> where D: Device {
             program: &self.resolve_program.program,
             vertex_array: &self.back_frame.resolve_vertex_array.vertex_array,
             primitive: Primitive::Triangles,
-            textures: &[],
+            textures: &[
+                (&self.resolve_program.texture_metadata_texture,
+                 &self.back_frame.texture_metadata_texture),
+            ],
             images: &[],
             storage_buffers: &[
                 (&self.resolve_program.dest_buffer_storage_buffer, &dest_buffer_buffer),
@@ -1802,6 +1819,9 @@ impl<D> Renderer<D> where D: Device {
             uniforms: &[
                 (&self.resolve_program.framebuffer_size_uniform,
                  UniformData::IVec2(draw_viewport.size().0)),
+                (&self.resolve_program.texture_metadata_size_uniform,
+                 UniformData::IVec2(I32x2::new(TEXTURE_METADATA_TEXTURE_WIDTH,
+                                               TEXTURE_METADATA_TEXTURE_HEIGHT))),
             ],
             viewport: draw_viewport,
             options: RenderOptions {
@@ -3046,4 +3066,10 @@ enum FillStorageInfo {
 enum PrimitiveCount {
     Direct(u32),
     Indirect,
+}
+
+struct DrawFillsBuffers<D> where D: Device {
+    dest_buffer_metadata_buffer: D::Buffer,
+    dest_buffer_buffer: D::Buffer,
+    dest_buffer_tail_buffer: D::Buffer,
 }

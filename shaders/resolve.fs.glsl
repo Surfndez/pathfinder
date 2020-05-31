@@ -17,9 +17,11 @@ precision highp sampler2D;
 #endif
 
 uniform ivec2 uFramebufferSize;
+uniform sampler2D uTextureMetadata;
+uniform ivec2 uTextureMetadataSize;
 
 layout(std430, binding = 0) buffer bDestBuffer {
-    restrict readonly uvec4 iDestBuffer[];
+    restrict readonly int iDestBuffer[];
 };
 
 layout(std430, binding = 1) buffer bDestBufferTail {
@@ -28,6 +30,20 @@ layout(std430, binding = 1) buffer bDestBufferTail {
 
 out vec4 oFragColor;
 
+void getMetadata(int color,
+                 out vec4 outBaseColor,
+                 out vec4 outColorTexMatrix0,
+                 out vec4 outColorTexOffsets) {
+    vec2 textureMetadataScale = vec2(1.0) / vec2(uTextureMetadataSize);
+    vec2 metadataEntryCoord = vec2(color % 128 * 4, color / 128);
+    vec2 colorTexMatrix0Coord = (metadataEntryCoord + vec2(0.5, 0.5)) * textureMetadataScale;
+    vec2 colorTexOffsetsCoord = (metadataEntryCoord + vec2(1.5, 0.5)) * textureMetadataScale;
+    vec2 baseColorCoord = (metadataEntryCoord + vec2(2.5, 0.5)) * textureMetadataScale;
+    outColorTexMatrix0 = texture(uTextureMetadata, colorTexMatrix0Coord);
+    outColorTexOffsets = texture(uTextureMetadata, colorTexOffsetsCoord);
+    outBaseColor = texture(uTextureMetadata, baseColorCoord);
+}
+
 void main() {
     ivec2 pixelGroupCoord = ivec2(int(gl_FragCoord.x), int(gl_FragCoord.y) / 4);
     int pixelSubCoord = int(gl_FragCoord.y) % 4;
@@ -35,16 +51,42 @@ void main() {
     int pixelGroupIndex =
         int(iDestBuffer[pixelGroupCoord.x + pixelGroupCoord.y * uFramebufferSize.x]);
 
-    vec4 fragColor = vec4(vec3(0.0), 1.0);
-    int iteration = 0;
-    while (iteration < 1024 && pixelGroupIndex >= 0) {
+    vec4 sortedColors[32];
+    uint sortedPathIDs[32];
+    int pixelListLength = 0;
+    while (pixelListLength < 32 && pixelGroupIndex >= 0) {
         uvec4 pixelRecord = iDestBufferTail[pixelGroupIndex];
-        //uint color = //(pixelRecord.x >> (pixelSubCoord * 8)) & 0xff;
-        //fragColor += float(color) / 255.0;
-        fragColor.rgb += vec3(0.1);
+        int pathID = int(pixelRecord.y);
+        int colorIndex = int(pixelRecord.z & 0xffffu);
+        float backdrop = float(int(pixelRecord.z) >> 24);
+        float alpha = float((pixelRecord.x >> (pixelSubCoord * 8)) & 0xff) / 255.0 + backdrop;
+
+        vec4 baseColor, colorTexMatrix0, colorTexOffsets;
+        getMetadata(colorIndex, baseColor, colorTexMatrix0, colorTexOffsets);
+
+        vec4 color = vec4(baseColor.rgb, baseColor.a * alpha);
+
+        int pixelListIndex = pixelListLength - 1;
+        while (pixelListIndex >= 0 && sortedPathIDs[pixelListIndex] < pathID) {
+            sortedColors[pixelListIndex + 1] = sortedColors[pixelListIndex];
+            sortedPathIDs[pixelListIndex + 1] = sortedPathIDs[pixelListIndex];
+            pixelListIndex--;
+        }
+        sortedColors[pixelListIndex + 1] = color;
+        sortedPathIDs[pixelListIndex + 1] = pathID;
+        pixelListLength++;
+
         pixelGroupIndex = int(pixelRecord.w);
-        iteration++;
     }
 
-    oFragColor = fragColor;
+    vec4 destColor = vec4(vec3(0.0), 1.0);
+    for (int pixelListIndex = 0; pixelListIndex < pixelListLength; pixelListIndex++) {
+        vec4 srcColor = sortedColors[pixelListIndex];
+        destColor = vec4(destColor.a * srcColor.a * srcColor.rgb + destColor.rgb,
+                         (1.0 - srcColor.a) * destColor.a);
+        if (srcColor.a >= 1.0)
+            break;
+    }
+
+    oFragColor = destColor;
 }

@@ -54,7 +54,7 @@ float4 computeCoverage(thread const float2& from, thread const float2& to, threa
     return areaLUT.sample(areaLUTSmplr, (float2(y + 8.0, abs(d * dX)) / float2(16.0)), level(0.0)) * dX;
 }
 
-kernel void main0(constant int2& uTileRange [[buffer(0)]], constant int& uBinnedOnGPU [[buffer(3)]], constant int2& uFramebufferSize [[buffer(5)]], const device bFillTileMap& _164 [[buffer(1)]], const device bFills& _187 [[buffer(2)]], const device bTiles& _269 [[buffer(4)]], device bDestBufferMetadata& _315 [[buffer(6)]], device bDestBufferTail& _322 [[buffer(7)]], device bDestBuffer& _341 [[buffer(8)]], texture2d<float> uAreaLUT [[texture(0)]], sampler uAreaLUTSmplr [[sampler(0)]], uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]])
+kernel void main0(constant int2& uTileRange [[buffer(0)]], constant int& uBinnedOnGPU [[buffer(3)]], constant int2& uFramebufferSize [[buffer(5)]], const device bFillTileMap& _164 [[buffer(1)]], const device bFills& _187 [[buffer(2)]], const device bTiles& _269 [[buffer(4)]], device bDestBufferMetadata& _347 [[buffer(6)]], device bDestBufferTail& _353 [[buffer(7)]], device bDestBuffer& _377 [[buffer(8)]], texture2d<float> uAreaLUT [[texture(0)]], sampler uAreaLUTSmplr [[sampler(0)]], uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]], uint3 gl_WorkGroupID [[threadgroup_position_in_grid]])
 {
     int2 tileSubCoord = int2(gl_LocalInvocationID.xy) * int2(1, 4);
     uint tileIndexOffset = gl_WorkGroupID.x | (gl_WorkGroupID.y << uint(16));
@@ -98,11 +98,14 @@ kernel void main0(constant int2& uTileRange [[buffer(0)]], constant int& uBinned
     int2 tileCoord = int2((packedTileCoord << 16) >> 16, packedTileCoord >> 16);
     int2 pixelCoord = (tileCoord * int2(16, 4)) + int2(gl_LocalInvocationID.xy);
     uint destBufferOffset = uint(pixelCoord.x + (pixelCoord.y * uFramebufferSize.x));
-    uint _317 = atomic_fetch_add_explicit((device atomic_uint*)&_315.iDestBufferMetadata[0], 1u, memory_order_relaxed);
-    uint tailOffset = _317;
-    _322.iDestBufferTail[tailOffset].x = uint(coverages.x);
-    _322.iDestBufferTail[tailOffset].y = uint(_269.iTiles[(tileIndex * 4u) + 2u]);
-    uint _345 = atomic_exchange_explicit((device atomic_uint*)&_341.iDestBuffer[destBufferOffset], tailOffset, memory_order_relaxed);
-    _322.iDestBufferTail[tailOffset].w = _345;
+    uint4 scaledCoverages = uint4(round(fast::min(abs(coverages), float4(1.0)) * float4(255.0)));
+    uint packedCoverages = ((scaledCoverages.x | (scaledCoverages.y << uint(8))) | (scaledCoverages.z << uint(16))) | (scaledCoverages.w << uint(24));
+    uint _349 = atomic_fetch_add_explicit((device atomic_uint*)&_347.iDestBufferMetadata[0], 1u, memory_order_relaxed);
+    uint tailOffset = _349;
+    _353.iDestBufferTail[tailOffset].x = packedCoverages;
+    _353.iDestBufferTail[tailOffset].y = uint(_269.iTiles[(tileIndex * 4u) + 2u]);
+    _353.iDestBufferTail[tailOffset].z = uint(_269.iTiles[(tileIndex * 4u) + 3u]);
+    uint _381 = atomic_exchange_explicit((device atomic_uint*)&_377.iDestBuffer[destBufferOffset], tailOffset, memory_order_relaxed);
+    _353.iDestBufferTail[tailOffset].w = _381;
 }
 

@@ -135,17 +135,16 @@ void main(){
     ivec2 pixelCoord = tileCoord * ivec2(16, 4)+ ivec2(gl_LocalInvocationID . xy);
     uint destBufferOffset = pixelCoord . x + pixelCoord . y * uFramebufferSize . x;
 
+    uvec4 scaledCoverages = uvec4(round(min(abs(coverages), vec4(1.0))* vec4(255.0)));
+    uint packedCoverages = scaledCoverages . x |
+                           (scaledCoverages . y << 8)|
+                           (scaledCoverages . z << 16)|
+                           (scaledCoverages . w << 24);
+
     uint tailOffset = atomicAdd(iDestBufferMetadata[0], 1);
-    iDestBufferTail[tailOffset]. x = uint(coverages . x);
+    iDestBufferTail[tailOffset]. x = packedCoverages;
     iDestBufferTail[tailOffset]. y = iTiles[tileIndex * 4 + 2];
+    iDestBufferTail[tailOffset]. z = iTiles[tileIndex * 4 + 3];
     iDestBufferTail[tailOffset]. w = atomicExchange(iDestBuffer[destBufferOffset], tailOffset);
-
-
-
-
-
-
-
-
 }
 

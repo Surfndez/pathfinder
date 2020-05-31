@@ -105,16 +105,15 @@ void main() {
     ivec2 pixelCoord = tileCoord * ivec2(16, 4) + ivec2(gl_LocalInvocationID.xy);
     uint destBufferOffset = pixelCoord.x + pixelCoord.y * uFramebufferSize.x;
 
-    uint tailOffset = atomicAdd(iDestBufferMetadata[0], 1);
-    iDestBufferTail[tailOffset].x = uint(coverages.x);  // FIXME(pcwalton)
-    iDestBufferTail[tailOffset].y = iTiles[tileIndex * 4 + 2];
-    iDestBufferTail[tailOffset].w = atomicExchange(iDestBuffer[destBufferOffset], tailOffset);
+    uvec4 scaledCoverages = uvec4(round(min(abs(coverages), vec4(1.0)) * vec4(255.0)));
+    uint packedCoverages = scaledCoverages.x |
+                           (scaledCoverages.y << 8) |
+                           (scaledCoverages.z << 16) |
+                           (scaledCoverages.w << 24);
 
-    /*
-    ivec2 tileOrigin = ivec2(16, 4) *
-        ivec2(alphaTileIndex & 0xff,
-              (alphaTileIndex >> 8u) & 0xff + (((alphaTileIndex >> 16u) & 0xff) << 8u));
-    ivec2 destCoord = tileOrigin + ivec2(gl_LocalInvocationID.xy);
-    imageStore(uDest, destCoord, coverages);
-    */
+    uint tailOffset = atomicAdd(iDestBufferMetadata[0], 1);
+    iDestBufferTail[tailOffset].x = packedCoverages;
+    iDestBufferTail[tailOffset].y = iTiles[tileIndex * 4 + 2];
+    iDestBufferTail[tailOffset].z = iTiles[tileIndex * 4 + 3];
+    iDestBufferTail[tailOffset].w = atomicExchange(iDestBuffer[destBufferOffset], tailOffset);
 }
