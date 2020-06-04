@@ -16,7 +16,7 @@ use crate::gpu::shaders::{ClipTileCombineProgram, ClipTileCombineVertexArray, Cl
 use crate::gpu::shaders::{ClipTileCopyVertexArray, CopyTileProgram, CopyTileVertexArray};
 use crate::gpu::shaders::{DiceComputeProgram, FillProgram, FillVertexArray, InitListProgram, InitProgram};
 use crate::gpu::shaders::{MAX_FILLS_PER_BATCH, PROPAGATE_WORKGROUP_SIZE, ReprojectionProgram};
-use crate::gpu::shaders::{ReprojectionVertexArray, StencilProgram, StencilVertexArray, TileFillProgram};
+use crate::gpu::shaders::{ReprojectionVertexArray, SortProgram, StencilProgram, StencilVertexArray, TileFillProgram};
 use crate::gpu::shaders::{TilePostPrograms, TileProgram, TileVertexArray};
 use crate::gpu_data::{BackdropInfo, Clip, DiceMetadata, Fill, PrepareTilesBatch};
 use crate::gpu_data::{PrepareTilesGPUModalInfo, PrepareTilesModalInfo, PropagateMetadata};
@@ -132,6 +132,7 @@ pub struct Renderer<D> where D: Device {
     dice_compute_program: DiceComputeProgram<D>,
     init_program: InitProgram<D>,
     init_list_program: InitListProgram<D>,
+    sort_program: SortProgram<D>,
     quad_vertex_positions_buffer: D::Buffer,
     quad_vertex_indices_buffer: D::Buffer,
     tile_link_map: Vec<TileLinks>,
@@ -228,6 +229,7 @@ impl<D> Renderer<D> where D: Device {
         let dice_compute_program = DiceComputeProgram::new(&device, resources);
         let init_program = InitProgram::new(&device, resources);
         let init_list_program = InitListProgram::new(&device, resources);
+        let sort_program = SortProgram::new(&device, resources);
 
         let area_lut_texture =
             device.create_texture_from_png(resources, "area-lut", TextureFormat::RGBA8);
@@ -288,6 +290,7 @@ impl<D> Renderer<D> where D: Device {
             dice_compute_program,
             init_program,
             init_list_program,
+            sort_program,
             quad_vertex_positions_buffer,
             quad_vertex_indices_buffer,
             tile_link_map: vec![],
@@ -750,6 +753,7 @@ impl<D> Renderer<D> where D: Device {
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
 
+        /*
         // Initialize list.
 
         let timer_query = self.timer_query_cache.alloc(&self.device);
@@ -781,6 +785,7 @@ impl<D> Renderer<D> where D: Device {
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
+        */
     }
 
     fn upload_propagate_data(&mut self,
@@ -1477,8 +1482,12 @@ impl<D> Renderer<D> where D: Device {
 
                 self.propagate_tiles(gpu_info.backdrops.len() as u32,
                                      tile_vertex_storage_id,
+                                     tile_link_map_storage_id,
                                      propagate_metadata_storage_id,
                                      clip_storage_ids.as_ref());
+
+                self.sort_lists(tile_link_map_storage_id);
+
                 Some(propagate_metadata_storage_id)
             }
         };
@@ -1522,6 +1531,7 @@ impl<D> Renderer<D> where D: Device {
     fn propagate_tiles(&mut self,
                        column_count: u32,
                        tile_storage_id: StorageID,
+                       tile_link_map_storage_id: StorageID,
                        propagate_metadata_storage_id: StorageID,
                        clip_storage_ids: Option<&ClipStorageIDs>) {
         let propagate_program = &self.tile_post_programs
@@ -1536,12 +1546,18 @@ impl<D> Renderer<D> where D: Device {
         let propagate_metadata_storage_buffer = self.back_frame
                                                     .tile_propagate_metadata_storage_allocator
                                                     .get(propagate_metadata_storage_id);
+        let tile_link_map_buffer = self.back_frame
+                                       .tile_link_map_storage_allocator
+                                       .get(tile_link_map_storage_id);
 
         let mut storage_buffers = vec![
             (&propagate_program.draw_metadata_storage_buffer, propagate_metadata_storage_buffer),
             (&propagate_program.backdrops_storage_buffer, &self.back_frame.backdrops_buffer),
             (&propagate_program.draw_tiles_storage_buffer, alpha_tile_buffer),
             (&propagate_program.z_buffer_storage_buffer, &self.back_frame.z_buffer),
+            (&propagate_program.tile_link_map_storage_buffer, &tile_link_map_buffer),
+            (&propagate_program.initial_tile_map_storage_buffer,
+             &self.back_frame.initial_tile_map_buffer),
         ];
 
         if let Some(clip_storage_ids) = clip_storage_ids {
@@ -1587,6 +1603,40 @@ impl<D> Renderer<D> where D: Device {
 
         self.device.end_timer_query(&timer_query);
         self.current_timer.as_mut().unwrap().propagate_times.push(TimerFuture::new(timer_query));
+    }
+
+    fn sort_lists(&mut self, tile_link_map_storage_id: StorageID) {
+        let framebuffer_tile_size = self.framebuffer_tile_size();
+
+        let tile_link_map_buffer = self.back_frame
+                                       .tile_link_map_storage_allocator
+                                       .get(tile_link_map_storage_id);
+
+        let timer_query = self.timer_query_cache.alloc(&self.device);
+        self.device.begin_timer_query(&timer_query);
+
+        let compute_dimensions = ComputeDimensions {
+            x: (framebuffer_tile_size.x() as u32 + 15) / 16,
+            y: (framebuffer_tile_size.y() as u32 + 15) / 16,
+            z: 1,
+        };
+        self.device.dispatch_compute(compute_dimensions, &ComputeState {
+            program: &self.sort_program.program,
+            textures: &[],
+            uniforms: &[
+                (&self.init_list_program.framebuffer_tile_size_uniform,
+                 UniformData::IVec2(framebuffer_tile_size.0)),
+            ],
+            images: &[],
+            storage_buffers: &[
+                (&self.sort_program.tile_link_map_storage_buffer, &tile_link_map_buffer),
+                (&self.sort_program.initial_tile_map_storage_buffer,
+                 &self.back_frame.initial_tile_map_buffer),
+            ],
+        });
+
+        self.device.end_timer_query(&timer_query);
+        self.current_timer.as_mut().unwrap().bin_times.push(TimerFuture::new(timer_query));
     }
 
     fn prepare_z_buffer(&mut self) {

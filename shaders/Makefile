@@ -39,6 +39,7 @@ COMPUTE_SHADERS=\
 	init.cs.glsl \
 	init_list.cs.glsl \
 	propagate.cs.glsl \
+	sort.cs.glsl \
 	tile_fill.cs.glsl \
 	$(EMPTY)
 

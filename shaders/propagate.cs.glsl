@@ -67,6 +67,14 @@ layout(std430, binding = 6) buffer bZBuffer {
     restrict int iZBuffer[];
 };
 
+layout(std430, binding = 7) buffer bTileLinkMap {
+    restrict uvec2 iTileLinkMap[];
+};
+
+layout(std430, binding = 8) buffer bInitialTileMap {
+    restrict uint iInitialTileMap[];
+};
+
 uint calculateTileIndex(uint bufferOffset, uvec4 tileRect, uvec2 tileCoord) {
     return bufferOffset + tileCoord.y * (tileRect.z - tileRect.x) + tileCoord.x;
 }
@@ -159,6 +167,15 @@ void main() {
             ivec2 tileCoord = ivec2(tileX, tileY) + ivec2(drawTileRect.xy);
             int zBufferIndex = tileCoord.y * uFramebufferTileSize.x + tileCoord.x;
             atomicMax(iZBuffer[zBufferIndex], int(drawPathIndex));
+        }
+
+        // Stitch tile into linked list if necessary.
+        if (drawTileBackdrop != 0 || drawAlphaTileIndex >= 0) {
+            ivec2 tileCoord = ivec2(tileX, tileY) + ivec2(drawTileRect.xy);
+            uint initialTileMapIndex = tileCoord.x + uFramebufferTileSize.x * tileCoord.y;
+            uint nextTileIndex = atomicExchange(iInitialTileMap[initialTileMapIndex],
+                                                drawTileIndex);
+            iTileLinkMap[drawTileIndex].y = nextTileIndex;
         }
 
         currentBackdrop += delta;
