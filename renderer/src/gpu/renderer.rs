@@ -1879,10 +1879,17 @@ impl<D> Renderer<D> where D: Device {
         };
         self.device.dispatch_compute(compute_dimensions, &ComputeState {
             program: &self.tile_fill_program.program,
-            textures: &[(&self.tile_fill_program.area_lut_texture, &self.area_lut_texture)],
+            textures: &[
+                (&self.tile_fill_program.area_lut_texture, &self.area_lut_texture),
+                (&self.tile_fill_program.texture_metadata_texture,
+                 &self.back_frame.texture_metadata_texture),
+            ],
             uniforms: &[
                 (&self.tile_fill_program.framebuffer_tile_size_uniform,
                  UniformData::IVec2(framebuffer_tile_size.0)),
+                (&self.tile_fill_program.texture_metadata_size_uniform,
+                 UniformData::IVec2(I32x2::new(TEXTURE_METADATA_TEXTURE_WIDTH,
+                                               TEXTURE_METADATA_TEXTURE_HEIGHT))),
             ],
             images: &[(&self.tile_fill_program.dest_image, &dest_texture, ImageAccess::Write)],
             storage_buffers: &[

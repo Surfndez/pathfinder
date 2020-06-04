@@ -25,6 +25,8 @@ layout(local_size_x = 16, local_size_y = 4)in;
 uniform writeonly image2D uDest;
 uniform sampler2D uAreaLUT;
 uniform ivec2 uFramebufferTileSize;
+uniform sampler2D uTextureMetadata;
+uniform ivec2 uTextureMetadataSize;
 
 
 
@@ -111,8 +113,10 @@ void main(){
 
     while(tileIndex >= 0){
         uint pathIndex = uint(iTiles[tileIndex * 4 + 2]);
+        uint colorIndex = uint(iTiles[tileIndex * 4 + 3])& 0xffff;
+        int backdrop = iTiles[tileIndex * 4 + 3]>> 24;
 
-        vec4 coverages = vec4(0.0);
+        vec4 coverages = vec4(backdrop);
         int fillIndex = iTileLinkMap[tileIndex]. x;
         while(fillIndex >= 0){
             uint fillFrom = iFills[fillIndex * 3 + 0], fillTo = iFills[fillIndex * 3 + 1];
@@ -126,19 +130,21 @@ void main(){
             fillIndex = int(iFills[fillIndex * 3 + 2]);
 
             iteration ++;
-            if(iteration >= 1024)
+            if(iteration >= 16384)
                 return;
         }
 
-        vec4 baseColor;
-        switch(pathIndex % 3){
-        case 0 : baseColor = vec4(1.0, 0.0, 0.0, 1.0);break;
-        case 1 : baseColor = vec4(0.0, 1.0, 0.0, 1.0);break;
-        case 2 : baseColor = vec4(0.0, 0.0, 1.0, 1.0);break;
-        }
+        vec2 textureMetadataScale = vec2(1.0)/ vec2(uTextureMetadataSize);
+        vec2 metadataEntryCoord = vec2(colorIndex % 128 * 4, colorIndex / 128);
+        vec2 colorTexMatrix0Coord =(metadataEntryCoord + vec2(0.5, 0.5))* textureMetadataScale;
+        vec2 colorTexOffsetsCoord =(metadataEntryCoord + vec2(1.5, 0.5))* textureMetadataScale;
+        vec2 baseColorCoord =(metadataEntryCoord + vec2(2.5, 0.5))* textureMetadataScale;
+        vec4 colorTexMatrix0 = texture(uTextureMetadata, colorTexMatrix0Coord);
+        vec4 colorTexOffsets = texture(uTextureMetadata, colorTexOffsetsCoord);
+        vec4 baseColor = texture(uTextureMetadata, baseColorCoord);
 
         for(uint y = 0;y < 4;y ++){
-            vec4 thisColor = vec4(baseColor . rgb, baseColor . a * coverages[y]);
+            vec4 thisColor = vec4(baseColor . rgb, baseColor . a * clamp(abs(coverages[y]), 0.0, 1.0));
             colors[y]= mix(colors[y], thisColor, thisColor . a);
         }
 

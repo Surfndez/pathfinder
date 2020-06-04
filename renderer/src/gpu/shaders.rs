@@ -1105,7 +1105,9 @@ pub struct TileFillProgram<D> where D: Device {
     pub program: D::Program,
     pub dest_image: D::ImageParameter,
     pub area_lut_texture: D::TextureParameter,
+    pub texture_metadata_texture: D::TextureParameter,
     pub framebuffer_tile_size_uniform: D::Uniform,
+    pub texture_metadata_size_uniform: D::Uniform,
     pub fills_storage_buffer: D::StorageBuffer,
     pub tile_link_map_storage_buffer: D::StorageBuffer,
     pub tiles_storage_buffer: D::StorageBuffer,
@@ -1120,7 +1122,9 @@ impl<D> TileFillProgram<D> where D: Device {
 
         let dest_image = device.get_image_parameter(&program, "Dest");
         let area_lut_texture = device.get_texture_parameter(&program, "AreaLUT");
+        let texture_metadata_texture = device.get_texture_parameter(&program, "TextureMetadata");
         let framebuffer_tile_size_uniform = device.get_uniform(&program, "FramebufferTileSize");
+        let texture_metadata_size_uniform = device.get_uniform(&program, "TextureMetadataSize");
         let fills_storage_buffer = device.get_storage_buffer(&program, "Fills", 0);
         let tile_link_map_storage_buffer = device.get_storage_buffer(&program, "TileLinkMap", 1);
         let tiles_storage_buffer = device.get_storage_buffer(&program, "Tiles", 2);
@@ -1131,7 +1135,9 @@ impl<D> TileFillProgram<D> where D: Device {
             program,
             dest_image,
             area_lut_texture,
+            texture_metadata_texture,
             framebuffer_tile_size_uniform,
+            texture_metadata_size_uniform,
             fills_storage_buffer,
             tile_link_map_storage_buffer,
             tiles_storage_buffer,
