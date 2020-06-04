@@ -1474,8 +1474,8 @@ impl<D> Renderer<D> where D: Device {
                         }
                         FillStorageInfo::Compute(fill_storage_info) => {
                             fill_storage_id = Some(fill_storage_info.fill_storage_id);
-                            self.draw_fills_via_compute(fill_storage_info,
-                                                        Some(tile_vertex_storage_id));
+                            /*self.draw_fills_via_compute(fill_storage_info,
+                                                        Some(tile_vertex_storage_id));*/
                         }
                     }
                 }
