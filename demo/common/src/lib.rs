@@ -266,10 +266,6 @@ impl<W> DemoApp<W> where W: Window {
         };
 
         self.scene_proxy.build(build_options);
-        /*
-        self.render_command_stream =    
-            Some(self.scene_proxy.build_with_stream(build_options, self.renderer.gpu_features()));
-            */
     }
 
     fn handle_events(&mut self, events: Vec<Event>) -> Vec<UIEvent> {
